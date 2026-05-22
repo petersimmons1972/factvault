@@ -1,0 +1,6 @@
+[
+  ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"],
+  ["com,example)/article-1", "20260101120000", "https://example.com/article-1", "text/html", "200", "SHA1:AAAA", "12345"],
+  ["com,example)/article-1", "20260315080000", "https://example.com/article-1", "text/html", "200", "SHA1:BBBB", "13000"],
+  ["com,example)/article-2", "20260410090000", "https://example.com/article-2", "text/html", "200", "SHA1:CCCC", "9800"]
+]

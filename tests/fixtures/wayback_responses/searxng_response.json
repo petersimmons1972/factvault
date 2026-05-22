@@ -1,0 +1,22 @@
+{
+  "query": "AI startup funding 2026",
+  "number_of_results": 2,
+  "results": [
+    {
+      "url": "https://techcrunch.com/2026/05/01/ai-funding-round",
+      "title": "AI Startup Raises $50M Series B",
+      "content": "A leading AI startup announced a $50M Series B funding round...",
+      "engine": "google",
+      "score": 0.9,
+      "category": "general"
+    },
+    {
+      "url": "https://venturebeat.com/2026/05/02/another-ai-deal",
+      "title": "VentureBeat: Another AI Deal Closes",
+      "content": "Another AI company closed a significant funding deal this week...",
+      "engine": "duckduckgo",
+      "score": 0.85,
+      "category": "general"
+    }
+  ]
+}

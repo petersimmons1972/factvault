@@ -32,7 +32,7 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Run pytest
-        run: pytest tests/db/ -v
+        run: pytest tests/ -v --tb=short
         env:
           # testcontainers-python spins up the container using the published pgvector image.
           # The FACTVAULT_TEST_POSTGRES_IMAGE env var allows overriding the default image.

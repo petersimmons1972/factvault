@@ -1,0 +1,66 @@
+# deploy/k8s/verify-worker-cronjob.yaml
+# Runs the verify worker once daily at 03:00 UTC.
+# Chainguard wolfi-base + tini, nonroot UID 65532.
+# Secrets from factvault-db-credentials Secret.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: factvault-verify-worker
+  namespace: factvault
+  labels:
+    app.kubernetes.io/name: factvault
+    app.kubernetes.io/component: verify-worker
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: factvault
+            app.kubernetes.io/component: verify-worker
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            runAsNonRoot: true
+          containers:
+            - name: verify-worker
+              image: cgr.dev/chainguard/wolfi-base:latest
+              command:
+                - /sbin/tini
+                - "--"
+                - factvault-worker
+                - run
+                - verify
+                - "--once"
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: factvault-db-credentials
+                      key: database-url
+                - name: FACTVAULT_TENANT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: factvault-db-credentials
+                      key: tenant-id
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+                readOnlyRootFilesystem: true
