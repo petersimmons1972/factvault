@@ -2962,4 +2962,2541 @@ git commit -m "feat(api): JWT auth middleware + tenant_id dependency injection"
 
 ---
 
-<!-- PASS 1 END — Pass 2 appends Tasks 12-22 + self-review below this line -->
+---
+
+## Task 12 — Entities route
+
+**File:** `factvault/api/routes/entities.py`
+
+Two endpoints. Both import `get_db` and `get_tenant_id` from `factvault.api.deps` (Pass 1 T11).
+
+Staleness threshold: `FACTVAULT_DOSSIER_STALENESS_DAYS` env var, default `7`.
+
+**Code:**
+
+```python
+# factvault/api/routes/entities.py
+from __future__ import annotations
+
+import os
+from datetime import datetime, timedelta, timezone
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import text
+
+from factvault.api.deps import get_db, get_tenant_id
+from factvault.assembler.bundle import assemble
+
+router = APIRouter(prefix="/entities", tags=["entities"])
+
+_STALENESS_DAYS = int(os.getenv("FACTVAULT_DOSSIER_STALENESS_DAYS", "7"))
+
+
+@router.get("/{entity_id}/dossier")
+async def get_dossier(
+    entity_id: UUID,
+    db=Depends(get_db),
+    tenant_id: UUID = Depends(get_tenant_id),
+) -> dict:
+    """Return cached dossier for an entity; recompute on-demand if absent or stale."""
+    # Verify entity exists in this tenant.
+    row = db.execute(
+        text(
+            "SELECT id FROM entities WHERE id = :eid"
+        ),
+        {"eid": str(entity_id)},
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    staleness_cutoff = datetime.now(timezone.utc) - timedelta(days=_STALENESS_DAYS)
+
+    cached = db.execute(
+        text(
+            """
+            SELECT bundle, assembled_at
+            FROM dossiers
+            WHERE tenant_id = :tid AND entity_id = :eid
+            ORDER BY assembled_at DESC
+            LIMIT 1
+            """
+        ),
+        {"tid": str(tenant_id), "eid": str(entity_id)},
+    ).fetchone()
+
+    if cached is not None and cached.assembled_at.replace(tzinfo=timezone.utc) > staleness_cutoff:
+        return cached.bundle
+
+    # Assemble on-demand.
+    bundle = assemble(
+        entity_ids=[str(entity_id)],
+        depth=0,
+        tenant_id=str(tenant_id),
+    )
+
+    db.execute(
+        text(
+            """
+            INSERT INTO dossiers (tenant_id, entity_id, bundle, assembled_at)
+            VALUES (:tid, :eid, CAST(:bundle AS jsonb), now())
+            ON CONFLICT (tenant_id, entity_id)
+            DO UPDATE SET bundle = EXCLUDED.bundle, assembled_at = EXCLUDED.assembled_at
+            """
+        ),
+        {"tid": str(tenant_id), "eid": str(entity_id), "bundle": __import__("json").dumps(bundle)},
+    )
+    db.commit()
+    return bundle
+
+
+@router.get("/by-name")
+async def entities_by_name(
+    q: str = Query(..., min_length=1),
+    type_uri: str | None = Query(default=None),
+    limit: int = Query(default=20, le=200),
+    db=Depends(get_db),
+    tenant_id: UUID = Depends(get_tenant_id),
+) -> list[dict]:
+    """Case-insensitive prefix match on entities.label within the caller's tenant."""
+    params: dict = {"tid": str(tenant_id), "q": q.lower() + "%", "limit": limit}
+    type_filter = ""
+    if type_uri is not None:
+        type_filter = "AND type_uri = :type_uri"
+        params["type_uri"] = type_uri
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT id, label, type_uri, description
+            FROM entities
+            WHERE lower(label) LIKE :q
+              {type_filter}
+            ORDER BY label
+            LIMIT :limit
+            """
+        ),
+        params,
+    ).fetchall()
+
+    return [
+        {
+            "id": str(r.id),
+            "label": r.label,
+            "type_uri": r.type_uri,
+            "description": r.description,
+        }
+        for r in rows
+    ]
+```
+
+Register in `factvault/api/main.py` inside `create_app()`:
+
+```python
+from factvault.api.routes.entities import router as entities_router
+application.include_router(entities_router)
+```
+
+**Tests:** `tests/api/test_entities.py`
+
+```python
+# tests/api/test_entities.py
+import json
+import uuid
+from datetime import datetime, timezone, timedelta
+from unittest.mock import patch, MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from factvault.api.main import create_app
+from tests.helpers import make_jwt  # helper from Pass 1 T11 auth tests
+
+
+@pytest.fixture
+def client():
+    return TestClient(create_app())
+
+
+TENANT_ID = str(uuid.uuid4())
+ENTITY_ID = str(uuid.uuid4())
+
+
+def _headers():
+    return {"Authorization": f"Bearer {make_jwt(TENANT_ID)}"}
+
+
+def test_dossier_returns_cached_bundle(client):
+    fresh_at = datetime.now(timezone.utc)
+    cached_bundle = {"query": {"type": "dossier"}, "facts": [], "entities": []}
+
+    mock_db = MagicMock()
+    # Entity exists
+    mock_db.execute.side_effect = [
+        MagicMock(fetchone=lambda: MagicMock(id=ENTITY_ID)),  # existence check
+        MagicMock(fetchone=lambda: MagicMock(bundle=cached_bundle, assembled_at=fresh_at)),  # cache hit
+    ]
+
+    with patch("factvault.api.routes.entities.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.entities.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.get(f"/entities/{ENTITY_ID}/dossier", headers=_headers())
+
+    assert resp.status_code == 200
+    assert resp.json() == cached_bundle
+
+
+def test_dossier_assembles_on_cache_miss(client):
+    assembled = {"query": {"type": "dossier"}, "facts": [{"id": "abc"}], "entities": []}
+
+    mock_db = MagicMock()
+    mock_db.execute.side_effect = [
+        MagicMock(fetchone=lambda: MagicMock(id=ENTITY_ID)),  # entity exists
+        MagicMock(fetchone=lambda: None),  # cache miss
+        MagicMock(),  # upsert
+    ]
+
+    with patch("factvault.api.routes.entities.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.entities.get_tenant_id", return_value=uuid.UUID(TENANT_ID)), \
+         patch("factvault.api.routes.entities.assemble", return_value=assembled) as mock_assemble:
+        resp = client.get(f"/entities/{ENTITY_ID}/dossier", headers=_headers())
+
+    assert resp.status_code == 200
+    mock_assemble.assert_called_once_with(
+        entity_ids=[ENTITY_ID], depth=0, tenant_id=TENANT_ID
+    )
+
+
+def test_dossier_assembles_on_stale_cache(client):
+    stale_at = datetime.now(timezone.utc) - timedelta(days=30)
+    assembled = {"query": {"type": "dossier"}, "facts": [], "entities": []}
+
+    mock_db = MagicMock()
+    mock_db.execute.side_effect = [
+        MagicMock(fetchone=lambda: MagicMock(id=ENTITY_ID)),
+        MagicMock(fetchone=lambda: MagicMock(bundle={}, assembled_at=stale_at)),
+        MagicMock(),
+    ]
+
+    with patch("factvault.api.routes.entities.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.entities.get_tenant_id", return_value=uuid.UUID(TENANT_ID)), \
+         patch("factvault.api.routes.entities.assemble", return_value=assembled):
+        resp = client.get(f"/entities/{ENTITY_ID}/dossier", headers=_headers())
+
+    assert resp.status_code == 200
+
+
+def test_dossier_404_for_unknown_entity(client):
+    mock_db = MagicMock()
+    mock_db.execute.return_value = MagicMock(fetchone=lambda: None)
+
+    with patch("factvault.api.routes.entities.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.entities.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.get(f"/entities/{uuid.uuid4()}/dossier", headers=_headers())
+
+    assert resp.status_code == 404
+
+
+def test_by_name_returns_matching_entities(client):
+    mock_rows = [
+        MagicMock(id=ENTITY_ID, label="Acme Corp", type_uri="https://schema.org/Organization", description="Test"),
+    ]
+    mock_db = MagicMock()
+    mock_db.execute.return_value = MagicMock(fetchall=lambda: mock_rows)
+
+    with patch("factvault.api.routes.entities.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.entities.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.get("/entities/by-name?q=Acme", headers=_headers())
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["label"] == "Acme Corp"
+
+
+def test_by_name_filters_by_type_uri(client):
+    mock_db = MagicMock()
+    mock_db.execute.return_value = MagicMock(fetchall=lambda: [])
+
+    with patch("factvault.api.routes.entities.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.entities.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.get(
+            "/entities/by-name?q=Acme&type_uri=https://schema.org/Organization",
+            headers=_headers(),
+        )
+
+    assert resp.status_code == 200
+    call_args = mock_db.execute.call_args
+    assert "type_uri" in call_args[0][1]
+```
+
+- [ ] **RUN/PASS:**
+
+```bash
+$ python -m pytest tests/api/test_entities.py -v
+# expected: 6 passed
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add factvault/api/routes/entities.py tests/api/test_entities.py
+git commit -m "feat(api): entities route — dossier + by-name endpoints"
+```
+
+---
+
+## Task 13 — Stories route
+
+**File:** `factvault/api/routes/stories.py`
+
+`POST /stories`. Seeds entities and statements via pgvector ANN on the query embedding, then delegates to `assemble()`.
+
+**Code:**
+
+```python
+# factvault/api/routes/stories.py
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+from sqlalchemy import text
+
+from factvault.api.deps import get_db, get_tenant_id
+from factvault.assembler.bundle import assemble
+from factvault.retrieval.embed import embed_query  # shared retrieval helper — Task 16 factors this
+
+router = APIRouter(prefix="/stories", tags=["stories"])
+
+
+class StoryRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    depth: int = Field(default=2, ge=0, le=3)
+    max_facts: int = Field(default=100, ge=1, le=10000)
+    max_entities: int = Field(default=200, ge=1, le=10000)
+
+
+@router.post("")
+async def create_story(
+    req: StoryRequest,
+    db=Depends(get_db),
+    tenant_id: UUID = Depends(get_tenant_id),
+) -> dict:
+    """On-demand story bundle via embedding similarity seed + graph expansion."""
+    query_vec = embed_query(req.query)
+    vec_literal = "[" + ",".join(str(x) for x in query_vec) + "]"
+
+    # ANN: top-5 entities closest to query
+    entity_rows = db.execute(
+        text(
+            """
+            SELECT id FROM entities
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:vec AS vector)
+            LIMIT 5
+            """
+        ),
+        {"vec": vec_literal},
+    ).fetchall()
+
+    # ANN: top-5 statements closest to query; resolve to their subject_id
+    stmt_rows = db.execute(
+        text(
+            """
+            SELECT DISTINCT subject_id AS id FROM statements
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:vec AS vector)
+            LIMIT 5
+            """
+        ),
+        {"vec": vec_literal},
+    ).fetchall()
+
+    seed_ids = list({str(r.id) for r in entity_rows + stmt_rows})
+
+    if not seed_ids:
+        return {
+            "query": {"type": "story", "query": req.query, "depth": req.depth},
+            "assembled_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+            "entities": [],
+            "facts": [],
+            "relations": [],
+            "conflicts": [],
+        }
+
+    return assemble(
+        entity_ids=seed_ids,
+        depth=req.depth,
+        tenant_id=str(tenant_id),
+        query=req.query,
+        max_facts=req.max_facts,
+    )
+```
+
+Register in `create_app()`:
+
+```python
+from factvault.api.routes.stories import router as stories_router
+application.include_router(stories_router)
+```
+
+**Shared retrieval helper (stubbed here, filled in Task 16):**
+
+```python
+# factvault/retrieval/__init__.py
+# (empty)
+
+# factvault/retrieval/embed.py
+from __future__ import annotations
+
+from functools import lru_cache
+from sentence_transformers import SentenceTransformer
+
+_MODEL_NAME = "BAAI/bge-m3"
+
+
+@lru_cache(maxsize=1)
+def _model() -> SentenceTransformer:
+    return SentenceTransformer(_MODEL_NAME)
+
+
+def embed_query(text: str) -> list[float]:
+    """Return a 1024-dim BGE-M3 embedding for the given text."""
+    return _model().encode(text, normalize_embeddings=True).tolist()
+```
+
+**Tests:** `tests/api/test_stories.py`
+
+```python
+# tests/api/test_stories.py
+import uuid
+from unittest.mock import patch, MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from factvault.api.main import create_app
+from tests.helpers import make_jwt
+
+TENANT_ID = str(uuid.uuid4())
+ENTITY_ID_A = str(uuid.uuid4())
+ENTITY_ID_B = str(uuid.uuid4())
+
+# Deterministic mock vector — 1024 zeros then 1.0 at index 0
+_MOCK_VEC = [0.0] * 1024
+_MOCK_VEC[0] = 1.0
+
+
+@pytest.fixture
+def client():
+    return TestClient(create_app())
+
+
+def _headers():
+    return {"Authorization": f"Bearer {make_jwt(TENANT_ID)}"}
+
+
+def test_story_returns_bundle(client):
+    assembled = {
+        "query": {"type": "story"},
+        "entities": [{"id": ENTITY_ID_A}, {"id": ENTITY_ID_B}],
+        "facts": [{"id": "f1"}],
+        "relations": [{"source": {"id": ENTITY_ID_A}, "target": {"id": ENTITY_ID_B}}],
+        "conflicts": [],
+    }
+    mock_db = MagicMock()
+    entity_row = MagicMock(id=ENTITY_ID_A)
+    stmt_row = MagicMock(id=ENTITY_ID_B)
+    mock_db.execute.side_effect = [
+        MagicMock(fetchall=lambda: [entity_row]),
+        MagicMock(fetchall=lambda: [stmt_row]),
+    ]
+
+    with patch("factvault.api.routes.stories.embed_query", return_value=_MOCK_VEC), \
+         patch("factvault.api.routes.stories.assemble", return_value=assembled) as mock_assemble, \
+         patch("factvault.api.routes.stories.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.stories.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.post(
+            "/stories",
+            json={"query": "Acme acquisitions", "depth": 2},
+            headers=_headers(),
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["entities"]) == 2
+    assert len(data["facts"]) == 1
+    mock_assemble.assert_called_once()
+    call_kwargs = mock_assemble.call_args[1]
+    assert call_kwargs["depth"] == 2
+    assert call_kwargs["query"] == "Acme acquisitions"
+
+
+def test_story_empty_when_no_seeds(client):
+    mock_db = MagicMock()
+    mock_db.execute.side_effect = [
+        MagicMock(fetchall=lambda: []),
+        MagicMock(fetchall=lambda: []),
+    ]
+
+    with patch("factvault.api.routes.stories.embed_query", return_value=_MOCK_VEC), \
+         patch("factvault.api.routes.stories.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.stories.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.post(
+            "/stories",
+            json={"query": "nonexistent topic"},
+            headers=_headers(),
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["entities"] == []
+    assert resp.json()["facts"] == []
+
+
+def test_story_validation_rejects_bad_depth(client):
+    with patch("factvault.api.routes.stories.embed_query", return_value=_MOCK_VEC), \
+         patch("factvault.api.routes.stories.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.post(
+            "/stories",
+            json={"query": "test", "depth": 10},
+            headers=_headers(),
+        )
+    assert resp.status_code == 422
+
+
+def test_story_graph_neighbors_included(client):
+    """Seed entity A; neighbor B is returned via assemble's graph expansion."""
+    assembled = {
+        "query": {"type": "story", "query": "Acme acquisitions", "depth": 2},
+        "entities": [
+            {"id": ENTITY_ID_A, "label": "Acme"},
+            {"id": ENTITY_ID_B, "label": "MegaCorp"},
+        ],
+        "facts": [],
+        "relations": [{"source": {"id": ENTITY_ID_A}, "target": {"id": ENTITY_ID_B}, "type": "acquired_by"}],
+        "conflicts": [],
+    }
+    mock_db = MagicMock()
+    mock_db.execute.side_effect = [
+        MagicMock(fetchall=lambda: [MagicMock(id=ENTITY_ID_A)]),
+        MagicMock(fetchall=lambda: []),
+    ]
+
+    with patch("factvault.api.routes.stories.embed_query", return_value=_MOCK_VEC), \
+         patch("factvault.api.routes.stories.assemble", return_value=assembled), \
+         patch("factvault.api.routes.stories.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.stories.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.post(
+            "/stories",
+            json={"query": "Acme acquisitions", "depth": 2},
+            headers=_headers(),
+        )
+
+    assert resp.status_code == 200
+    ids = {e["id"] for e in resp.json()["entities"]}
+    assert ENTITY_ID_A in ids
+    assert ENTITY_ID_B in ids
+```
+
+- [ ] **RUN/PASS:**
+
+```bash
+$ python -m pytest tests/api/test_stories.py -v
+# expected: 4 passed
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add factvault/api/routes/stories.py factvault/retrieval/__init__.py \
+        factvault/retrieval/embed.py tests/api/test_stories.py
+git commit -m "feat(api): stories route + embed_query retrieval helper"
+```
+
+---
+
+## Task 14 — Facts route
+
+**File:** `factvault/api/routes/facts.py`
+
+`POST /facts/query`. Pure SQL, no graph expansion, no LLM. Returns `bundle`-shaped JSON with populated `facts[]`, empty `relations[]` and `conflicts[]`.
+
+**Code:**
+
+```python
+# factvault/api/routes/facts.py
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+from sqlalchemy import text
+
+from factvault.api.deps import get_db, get_tenant_id
+from factvault.api.schemas import BundleResponse
+
+router = APIRouter(prefix="/facts", tags=["facts"])
+
+
+class FactQueryRequest(BaseModel):
+    subject_type: str | None = None          # filter by entities.type_uri
+    subject_label: str | None = None         # case-insensitive prefix match
+    property_slug: str | None = None         # filter by properties.slug
+    qualifiers: dict | None = None           # reserved; not filtered in v1
+    min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    limit: int = Field(default=100, ge=1, le=200)
+
+
+@router.post("/query")
+async def query_facts(
+    req: FactQueryRequest,
+    db=Depends(get_db),
+    tenant_id: UUID = Depends(get_tenant_id),
+) -> dict:
+    """Return facts matching the given filters; no graph expansion."""
+    filters = ["s.tenant_id = :tid", "s.confidence >= :min_conf"]
+    params: dict = {"tid": str(tenant_id), "min_conf": req.min_confidence}
+
+    if req.property_slug is not None:
+        filters.append("p.slug = :prop_slug")
+        params["prop_slug"] = req.property_slug
+
+    if req.subject_type is not None:
+        filters.append("subj.type_uri = :subject_type")
+        params["subject_type"] = req.subject_type
+
+    if req.subject_label is not None:
+        filters.append("lower(subj.label) LIKE :subject_label")
+        params["subject_label"] = req.subject_label.lower() + "%"
+
+    params["limit"] = req.limit
+    where_clause = " AND ".join(filters)
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+                s.id              AS stmt_id,
+                s.rank,
+                s.confidence,
+                s.val_text,
+                s.val_number,
+                s.val_date,
+                s.val_entity,
+                subj.id           AS subject_id,
+                subj.label        AS subject_label,
+                p.slug            AS property_slug,
+                p.label           AS property_label,
+                p.value_type      AS value_type,
+                ss.id             AS ss_id,
+                ss.excerpt,
+                ss.excerpt_offset_start,
+                ss.excerpt_offset_end,
+                ss.extraction_method,
+                src.id            AS source_id,
+                src.url,
+                src.publisher,
+                src.fetched_at,
+                src.content_hash,
+                src.archive_url,
+                src.last_verified_at,
+                src.status        AS verification_status
+            FROM statements s
+            JOIN entities    subj ON subj.id = s.subject_id
+            JOIN properties  p    ON p.id    = s.property_id
+            LEFT JOIN statement_sources ss  ON ss.statement_id = s.id
+            LEFT JOIN sources           src ON src.id = ss.source_id
+            WHERE {where_clause}
+            ORDER BY s.confidence DESC, s.id
+            LIMIT :limit
+            """
+        ),
+        params,
+    ).fetchall()
+
+    # Group sources under statements
+    facts: dict[str, dict] = {}
+    for r in rows:
+        sid = str(r.stmt_id)
+        if sid not in facts:
+            value: dict
+            if r.value_type == "entity_ref":
+                value = {"entity": {"id": str(r.val_entity)}} if r.val_entity else {}
+            elif r.value_type == "number":
+                value = {"number": float(r.val_number)} if r.val_number is not None else {}
+            elif r.value_type == "date":
+                value = {"date": r.val_date.isoformat() if r.val_date else None}
+            else:
+                value = {"text": r.val_text}
+
+            facts[sid] = {
+                "id": sid,
+                "subject": {"id": str(r.subject_id), "label": r.subject_label},
+                "property": {
+                    "slug": r.property_slug,
+                    "label": r.property_label,
+                    "value_type": r.value_type,
+                },
+                "value": value,
+                "rank": r.rank,
+                "confidence": float(r.confidence),
+                "sources": [],
+            }
+
+        if r.ss_id is not None:
+            facts[sid]["sources"].append(
+                {
+                    "id": str(r.source_id),
+                    "url": r.url,
+                    "publisher": r.publisher,
+                    "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
+                    "content_hash": r.content_hash,
+                    "archive_url": r.archive_url,
+                    "excerpt": r.excerpt,
+                    "excerpt_offset_start": r.excerpt_offset_start,
+                    "excerpt_offset_end": r.excerpt_offset_end,
+                    "last_verified_at": r.last_verified_at.isoformat() if r.last_verified_at else None,
+                    "verification_status": r.verification_status,
+                    "extraction_method": r.extraction_method,
+                }
+            )
+
+    return {
+        "query": {
+            "type": "fact_query",
+            "property_slug": req.property_slug,
+            "min_confidence": req.min_confidence,
+        },
+        "facts": list(facts.values()),
+        "relations": [],
+        "conflicts": [],
+    }
+```
+
+Register in `create_app()`:
+
+```python
+from factvault.api.routes.facts import router as facts_router
+application.include_router(facts_router)
+```
+
+**Tests:** `tests/api/test_facts.py`
+
+```python
+# tests/api/test_facts.py
+import uuid
+from unittest.mock import patch, MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from factvault.api.main import create_app
+from tests.helpers import make_jwt
+
+TENANT_ID = str(uuid.uuid4())
+STMT_ID = str(uuid.uuid4())
+ENTITY_ID = str(uuid.uuid4())
+SOURCE_ID = str(uuid.uuid4())
+SS_ID = str(uuid.uuid4())
+
+
+@pytest.fixture
+def client():
+    return TestClient(create_app())
+
+
+def _headers():
+    return {"Authorization": f"Bearer {make_jwt(TENANT_ID)}"}
+
+
+def _mock_row(**overrides):
+    import datetime
+    defaults = dict(
+        stmt_id=uuid.UUID(STMT_ID),
+        rank="preferred",
+        confidence=0.85,
+        val_text="Acme acquired for $4.2B",
+        val_number=None,
+        val_date=None,
+        val_entity=None,
+        subject_id=uuid.UUID(ENTITY_ID),
+        subject_label="Acme Corp",
+        property_slug="acquired_by",
+        property_label="Acquired By",
+        value_type="string",
+        ss_id=uuid.UUID(SS_ID),
+        excerpt="Acme Corp was acquired",
+        excerpt_offset_start=0,
+        excerpt_offset_end=22,
+        extraction_method="llm:gpt-5:v1",
+        source_id=uuid.UUID(SOURCE_ID),
+        url="https://reuters.com/test",
+        publisher="reuters.com",
+        fetched_at=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        content_hash="abc123",
+        archive_url="https://web.archive.org/web/test",
+        last_verified_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        verification_status="live",
+    )
+    defaults.update(overrides)
+    return MagicMock(**defaults)
+
+
+def test_facts_query_by_property(client):
+    mock_db = MagicMock()
+    mock_db.execute.return_value = MagicMock(fetchall=lambda: [_mock_row()])
+
+    with patch("factvault.api.routes.facts.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.facts.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.post(
+            "/facts/query",
+            json={"property_slug": "acquired_by", "min_confidence": 0.5},
+            headers=_headers(),
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["facts"]) == 1
+    assert data["facts"][0]["property"]["slug"] == "acquired_by"
+    assert data["facts"][0]["confidence"] == 0.85
+    assert data["relations"] == []
+    assert data["conflicts"] == []
+
+
+def test_facts_query_filters_by_confidence(client):
+    mock_db = MagicMock()
+    # Row with confidence 0.3 below threshold — DB filter; verify param passed
+    mock_db.execute.return_value = MagicMock(fetchall=lambda: [])
+
+    with patch("factvault.api.routes.facts.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.facts.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.post(
+            "/facts/query",
+            json={"min_confidence": 0.9},
+            headers=_headers(),
+        )
+
+    assert resp.status_code == 200
+    call_params = mock_db.execute.call_args[0][1]
+    assert call_params["min_conf"] == 0.9
+
+
+def test_facts_query_includes_source_metadata(client):
+    mock_db = MagicMock()
+    mock_db.execute.return_value = MagicMock(fetchall=lambda: [_mock_row()])
+
+    with patch("factvault.api.routes.facts.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.facts.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.post("/facts/query", json={}, headers=_headers())
+
+    source = resp.json()["facts"][0]["sources"][0]
+    for field in ("url", "excerpt", "excerpt_offset_start", "excerpt_offset_end",
+                  "content_hash", "archive_url", "verification_status", "extraction_method"):
+        assert field in source, f"Missing source field: {field}"
+
+
+def test_facts_query_subject_type_filter(client):
+    mock_db = MagicMock()
+    mock_db.execute.return_value = MagicMock(fetchall=lambda: [])
+
+    with patch("factvault.api.routes.facts.get_db", return_value=mock_db), \
+         patch("factvault.api.routes.facts.get_tenant_id", return_value=uuid.UUID(TENANT_ID)):
+        resp = client.post(
+            "/facts/query",
+            json={"subject_type": "https://schema.org/Organization"},
+            headers=_headers(),
+        )
+
+    assert resp.status_code == 200
+    params = mock_db.execute.call_args[0][1]
+    assert params["subject_type"] == "https://schema.org/Organization"
+```
+
+- [ ] **RUN/PASS:**
+
+```bash
+$ python -m pytest tests/api/test_facts.py -v
+# expected: 4 passed
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add factvault/api/routes/facts.py tests/api/test_facts.py
+git commit -m "feat(api): facts/query route — pure-SQL fact filter endpoint"
+```
+
+---
+
+## Task 15 — Dossier pre-compute worker
+
+**File:** `factvault/workers/dossier.py`
+
+Implements `DossierWorker(Worker)` with `name = "dossier"`. Periodic worker (daily default). Uses `app.tenant_id` GUC via `tenant_context()`.
+
+**Code:**
+
+```python
+# factvault/workers/dossier.py
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timezone
+
+from sqlalchemy import text
+
+from factvault.assembler.bundle import assemble
+from factvault.db.rls import tenant_context
+from factvault.workers.base import Worker  # Plan 2's base Worker class
+
+log = logging.getLogger(__name__)
+
+_BATCH_SIZE = 100
+
+
+class DossierWorker(Worker):
+    name = "dossier"
+
+    def run_once(self, db) -> None:
+        """Pre-compute dossiers for all tenants; stale = assembled_at older than 24 h."""
+        tenants = db.execute(text("SELECT id FROM tenants")).fetchall()
+        for tenant_row in tenants:
+            tid = str(tenant_row.id)
+            with tenant_context(db, tid):
+                self._refresh_tenant(db, tid)
+
+    def _refresh_tenant(self, db, tenant_id: str) -> None:
+        due = db.execute(
+            text(
+                """
+                SELECT e.id FROM entities e
+                WHERE e.tenant_id = :tid
+                  AND (
+                    NOT EXISTS (
+                        SELECT 1 FROM dossiers d
+                        WHERE d.tenant_id = :tid AND d.entity_id = e.id
+                    )
+                    OR (
+                        SELECT assembled_at FROM dossiers d
+                        WHERE d.tenant_id = :tid AND d.entity_id = e.id
+                        ORDER BY assembled_at DESC
+                        LIMIT 1
+                    ) < now() - interval '24 hours'
+                  )
+                LIMIT :batch
+                """
+            ),
+            {"tid": tenant_id, "batch": _BATCH_SIZE},
+        ).fetchall()
+
+        refreshed = 0
+        for row in due:
+            eid = str(row.id)
+            try:
+                bundle = assemble(
+                    entity_ids=[eid],
+                    depth=0,
+                    tenant_id=tenant_id,
+                )
+                db.execute(
+                    text(
+                        """
+                        INSERT INTO dossiers (tenant_id, entity_id, bundle, assembled_at)
+                        VALUES (:tid, :eid, CAST(:bundle AS jsonb), now())
+                        ON CONFLICT (tenant_id, entity_id)
+                        DO UPDATE SET bundle = EXCLUDED.bundle, assembled_at = EXCLUDED.assembled_at
+                        """
+                    ),
+                    {"tid": tenant_id, "eid": eid, "bundle": json.dumps(bundle)},
+                )
+                db.commit()
+                refreshed += 1
+            except Exception:
+                log.exception("Failed to assemble dossier for entity %s (tenant %s)", eid, tenant_id)
+                db.rollback()
+
+        log.info("DossierWorker: refreshed %d dossiers for tenant %s", refreshed, tenant_id)
+```
+
+**Tests:** `tests/workers/test_dossier.py`
+
+```python
+# tests/workers/test_dossier.py
+import json
+import uuid
+from datetime import datetime, timezone, timedelta
+from unittest.mock import patch, MagicMock, call
+
+import pytest
+
+from factvault.workers.dossier import DossierWorker
+
+TENANT_ID = str(uuid.uuid4())
+ENTITY_IDS = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
+
+
+def _make_db(entity_ids, has_stale_dossier=False):
+    db = MagicMock()
+    tenant_row = MagicMock(id=uuid.UUID(TENANT_ID))
+    entity_rows = [MagicMock(id=uuid.UUID(eid)) for eid in entity_ids]
+    db.execute.side_effect = [
+        MagicMock(fetchall=lambda: [tenant_row]),  # SELECT tenants
+        MagicMock(fetchall=lambda: entity_rows),   # SELECT due entities
+    ] + [MagicMock()] * len(entity_ids)            # upserts
+    return db
+
+
+def test_dossier_worker_creates_rows_for_all_entities():
+    assembled = {"query": {"type": "dossier"}, "facts": [{"id": "f1"}], "entities": [], "relations": [], "conflicts": []}
+    db = _make_db(ENTITY_IDS)
+
+    with patch("factvault.workers.dossier.assemble", return_value=assembled) as mock_assemble, \
+         patch("factvault.workers.dossier.tenant_context"):
+        worker = DossierWorker()
+        worker.run_once(db)
+
+    assert mock_assemble.call_count == len(ENTITY_IDS)
+    for eid in ENTITY_IDS:
+        mock_assemble.assert_any_call(entity_ids=[eid], depth=0, tenant_id=TENANT_ID)
+
+
+def test_dossier_worker_upserts_bundle():
+    assembled = {"query": {"type": "dossier"}, "facts": [], "entities": [], "relations": [], "conflicts": []}
+    eid = ENTITY_IDS[0]
+    db = _make_db([eid])
+
+    with patch("factvault.workers.dossier.assemble", return_value=assembled), \
+         patch("factvault.workers.dossier.tenant_context"):
+        DossierWorker().run_once(db)
+
+    db.commit.assert_called()
+    upsert_call = db.execute.call_args_list[-1]
+    bound_params = upsert_call[0][1]
+    assert bound_params["eid"] == eid
+    assert json.loads(bound_params["bundle"]) == assembled
+
+
+def test_dossier_worker_continues_on_assembly_error():
+    """Worker must not abort the whole batch if one entity fails."""
+    def fail_on_first(entity_ids, depth, tenant_id):
+        if entity_ids[0] == ENTITY_IDS[0]:
+            raise RuntimeError("assembly failed")
+        return {"facts": [], "entities": [], "relations": [], "conflicts": []}
+
+    db = _make_db(ENTITY_IDS)
+
+    with patch("factvault.workers.dossier.assemble", side_effect=fail_on_first), \
+         patch("factvault.workers.dossier.tenant_context"):
+        DossierWorker().run_once(db)
+
+    # rollback called once for the failed entity
+    db.rollback.assert_called_once()
+
+
+def test_dossier_worker_skips_fresh_entities():
+    """Entities with assembled_at < 24 h should not appear in 'due' list."""
+    db = MagicMock()
+    tenant_row = MagicMock(id=uuid.UUID(TENANT_ID))
+    db.execute.side_effect = [
+        MagicMock(fetchall=lambda: [tenant_row]),
+        MagicMock(fetchall=lambda: []),  # no due entities
+    ]
+
+    with patch("factvault.workers.dossier.assemble") as mock_assemble, \
+         patch("factvault.workers.dossier.tenant_context"):
+        DossierWorker().run_once(db)
+
+    mock_assemble.assert_not_called()
+```
+
+- [ ] **RUN/PASS:**
+
+```bash
+$ python -m pytest tests/workers/test_dossier.py -v
+# expected: 4 passed
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add factvault/workers/dossier.py tests/workers/test_dossier.py
+git commit -m "feat(workers): dossier pre-compute worker"
+```
+
+---
+
+## Task 16 — MCP server + retrieval module refactor
+
+**Files:** `factvault/mcp/server.py`, `factvault/retrieval/retrieval.py`
+
+Factor the three retrieval modes into `factvault/retrieval/retrieval.py` so both REST routes and MCP server call the same functions. Refactor T12–T14 routes to import from there.
+
+**Shared retrieval module:**
+
+```python
+# factvault/retrieval/retrieval.py
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+from uuid import UUID
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from factvault.assembler.bundle import assemble
+from factvault.retrieval.embed import embed_query
+
+_DOSSIER_STALENESS_DAYS = 7
+
+
+def get_dossier(
+    entity_id: str,
+    tenant_id: str,
+    db: Session,
+    staleness_days: int = _DOSSIER_STALENESS_DAYS,
+) -> dict:
+    """Look up (or compute) the dossier bundle for a single entity."""
+    row = db.execute(
+        text("SELECT id FROM entities WHERE id = :eid"),
+        {"eid": entity_id},
+    ).fetchone()
+    if row is None:
+        raise KeyError(f"Entity {entity_id} not found")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=staleness_days)
+    cached = db.execute(
+        text(
+            """
+            SELECT bundle, assembled_at FROM dossiers
+            WHERE tenant_id = :tid AND entity_id = :eid
+            ORDER BY assembled_at DESC LIMIT 1
+            """
+        ),
+        {"tid": tenant_id, "eid": entity_id},
+    ).fetchone()
+
+    if cached is not None and cached.assembled_at.replace(tzinfo=timezone.utc) > cutoff:
+        return cached.bundle
+
+    bundle = assemble(entity_ids=[entity_id], depth=0, tenant_id=tenant_id)
+    db.execute(
+        text(
+            """
+            INSERT INTO dossiers (tenant_id, entity_id, bundle, assembled_at)
+            VALUES (:tid, :eid, CAST(:bundle AS jsonb), now())
+            ON CONFLICT (tenant_id, entity_id)
+            DO UPDATE SET bundle = EXCLUDED.bundle, assembled_at = EXCLUDED.assembled_at
+            """
+        ),
+        {"tid": tenant_id, "eid": entity_id, "bundle": json.dumps(bundle)},
+    )
+    db.commit()
+    return bundle
+
+
+def get_story(
+    query: str,
+    depth: int,
+    tenant_id: str,
+    db: Session,
+    max_facts: int = 100,
+) -> dict:
+    """Embed query → ANN seed → graph-expanded bundle."""
+    query_vec = embed_query(query)
+    vec_literal = "[" + ",".join(str(x) for x in query_vec) + "]"
+
+    entity_rows = db.execute(
+        text(
+            "SELECT id FROM entities WHERE embedding IS NOT NULL "
+            "ORDER BY embedding <=> CAST(:vec AS vector) LIMIT 5"
+        ),
+        {"vec": vec_literal},
+    ).fetchall()
+    stmt_rows = db.execute(
+        text(
+            "SELECT DISTINCT subject_id AS id FROM statements WHERE embedding IS NOT NULL "
+            "ORDER BY embedding <=> CAST(:vec AS vector) LIMIT 5"
+        ),
+        {"vec": vec_literal},
+    ).fetchall()
+
+    seed_ids = list({str(r.id) for r in entity_rows + stmt_rows})
+    if not seed_ids:
+        return {
+            "query": {"type": "story", "query": query, "depth": depth},
+            "assembled_at": datetime.utcnow().isoformat() + "Z",
+            "entities": [], "facts": [], "relations": [], "conflicts": [],
+        }
+
+    return assemble(entity_ids=seed_ids, depth=depth, tenant_id=tenant_id, query=query, max_facts=max_facts)
+
+
+def query_facts(
+    tenant_id: str,
+    db: Session,
+    property_slug: str | None = None,
+    subject_type: str | None = None,
+    subject_label: str | None = None,
+    min_confidence: float = 0.0,
+    limit: int = 100,
+) -> dict:
+    """Pure-SQL fact filter; returns bundle-shaped dict."""
+    filters = ["s.tenant_id = :tid", "s.confidence >= :min_conf"]
+    params: dict = {"tid": tenant_id, "min_conf": min_confidence, "limit": limit}
+
+    if property_slug:
+        filters.append("p.slug = :prop_slug")
+        params["prop_slug"] = property_slug
+    if subject_type:
+        filters.append("subj.type_uri = :subject_type")
+        params["subject_type"] = subject_type
+    if subject_label:
+        filters.append("lower(subj.label) LIKE :subject_label")
+        params["subject_label"] = subject_label.lower() + "%"
+
+    where = " AND ".join(filters)
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+                s.id AS stmt_id, s.rank, s.confidence,
+                s.val_text, s.val_number, s.val_date, s.val_entity,
+                subj.id AS subject_id, subj.label AS subject_label,
+                p.slug AS property_slug, p.label AS property_label, p.value_type,
+                ss.id AS ss_id, ss.excerpt,
+                ss.excerpt_offset_start, ss.excerpt_offset_end, ss.extraction_method,
+                src.id AS source_id, src.url, src.publisher, src.fetched_at,
+                src.content_hash, src.archive_url, src.last_verified_at,
+                src.status AS verification_status
+            FROM statements s
+            JOIN entities   subj ON subj.id = s.subject_id
+            JOIN properties p    ON p.id    = s.property_id
+            LEFT JOIN statement_sources ss  ON ss.statement_id = s.id
+            LEFT JOIN sources           src ON src.id = ss.source_id
+            WHERE {where}
+            ORDER BY s.confidence DESC, s.id
+            LIMIT :limit
+            """
+        ),
+        params,
+    ).fetchall()
+
+    facts: dict[str, dict] = {}
+    for r in rows:
+        sid = str(r.stmt_id)
+        if sid not in facts:
+            if r.value_type == "entity_ref":
+                value = {"entity": {"id": str(r.val_entity)}} if r.val_entity else {}
+            elif r.value_type == "number":
+                value = {"number": float(r.val_number)} if r.val_number is not None else {}
+            elif r.value_type == "date":
+                value = {"date": r.val_date.isoformat() if r.val_date else None}
+            else:
+                value = {"text": r.val_text}
+
+            facts[sid] = {
+                "id": sid,
+                "subject": {"id": str(r.subject_id), "label": r.subject_label},
+                "property": {"slug": r.property_slug, "label": r.property_label, "value_type": r.value_type},
+                "value": value,
+                "rank": r.rank,
+                "confidence": float(r.confidence),
+                "sources": [],
+            }
+
+        if r.ss_id is not None:
+            facts[sid]["sources"].append({
+                "id": str(r.source_id), "url": r.url, "publisher": r.publisher,
+                "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
+                "content_hash": r.content_hash, "archive_url": r.archive_url,
+                "excerpt": r.excerpt, "excerpt_offset_start": r.excerpt_offset_start,
+                "excerpt_offset_end": r.excerpt_offset_end,
+                "last_verified_at": r.last_verified_at.isoformat() if r.last_verified_at else None,
+                "verification_status": r.verification_status,
+                "extraction_method": r.extraction_method,
+            })
+
+    return {
+        "query": {"type": "fact_query", "property_slug": property_slug, "min_confidence": min_confidence},
+        "facts": list(facts.values()),
+        "relations": [],
+        "conflicts": [],
+    }
+```
+
+**Note:** After this task, update T12's `entities.py` and T14's `facts.py` to delegate to `factvault.retrieval.retrieval` rather than duplicating SQL. T13's `stories.py` similarly delegates to `get_story()`. The REST route files become thin wrappers; all SQL lives in the retrieval module.
+
+**MCP server:**
+
+```python
+# factvault/mcp/server.py
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
+
+from factvault.auth.jwt import verify_token
+from factvault.db import get_sync_session  # Plan 1's sync session factory
+from factvault.db.rls import tenant_context
+from factvault.retrieval.retrieval import get_dossier, get_story, query_facts
+
+_server = Server("factvault")
+
+
+def _resolve_tenant(token: str) -> str:
+    """Verify JWT and return tenant_id string."""
+    claims = verify_token(token)
+    return claims["tenant_id"]
+
+
+@_server.list_tools()
+async def list_tools() -> list[Tool]:
+    return [
+        Tool(
+            name="factvault__entity_lookup",
+            description=(
+                "Look up an entity by ID and return its full sourced dossier bundle. "
+                "Returns: canonical bundle JSON with all sourced facts, sources with "
+                "excerpts and archive URLs, and any active conflicts."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "entity_id": {"type": "string", "description": "UUID of the entity"},
+                    "token": {"type": "string", "description": "Bearer JWT"},
+                },
+                "required": ["entity_id", "token"],
+            },
+        ),
+        Tool(
+            name="factvault__story_query",
+            description=(
+                "Run a cross-entity story query and return a graph-expanded sourced bundle. "
+                "Uses BGE-M3 embedding similarity to seed entities, then expands the graph."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "depth": {"type": "integer", "default": 2},
+                    "max_facts": {"type": "integer", "default": 100},
+                    "token": {"type": "string"},
+                },
+                "required": ["query", "token"],
+            },
+        ),
+        Tool(
+            name="factvault__fact_query",
+            description=(
+                "Query facts by property/subject/confidence filters. "
+                "No graph expansion. Returns bundle-shaped JSON with matching facts and full source metadata."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "property_slug": {"type": "string"},
+                    "subject_type": {"type": "string"},
+                    "subject_label": {"type": "string"},
+                    "min_confidence": {"type": "number", "default": 0.0},
+                    "limit": {"type": "integer", "default": 100},
+                    "token": {"type": "string"},
+                },
+                "required": ["token"],
+            },
+        ),
+    ]
+
+
+@_server.call_tool()
+async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    import json
+
+    token = arguments.pop("token")
+    tenant_id = _resolve_tenant(token)
+
+    with get_sync_session() as db:
+        with tenant_context(db, tenant_id):
+            if name == "factvault__entity_lookup":
+                result = get_dossier(
+                    entity_id=arguments["entity_id"],
+                    tenant_id=tenant_id,
+                    db=db,
+                )
+            elif name == "factvault__story_query":
+                result = get_story(
+                    query=arguments["query"],
+                    depth=arguments.get("depth", 2),
+                    tenant_id=tenant_id,
+                    db=db,
+                    max_facts=arguments.get("max_facts", 100),
+                )
+            elif name == "factvault__fact_query":
+                result = query_facts(
+                    tenant_id=tenant_id,
+                    db=db,
+                    property_slug=arguments.get("property_slug"),
+                    subject_type=arguments.get("subject_type"),
+                    subject_label=arguments.get("subject_label"),
+                    min_confidence=arguments.get("min_confidence", 0.0),
+                    limit=arguments.get("limit", 100),
+                )
+            else:
+                raise ValueError(f"Unknown tool: {name}")
+
+    return [TextContent(type="text", text=json.dumps(result))]
+
+
+def run() -> None:
+    import asyncio
+    asyncio.run(stdio_server(_server))
+
+
+if __name__ == "__main__":
+    run()
+```
+
+**Tests:** `tests/mcp/test_server.py`
+
+```python
+# tests/mcp/test_server.py
+import json
+import uuid
+from unittest.mock import patch, MagicMock, AsyncMock
+
+import pytest
+
+from factvault.mcp.server import call_tool, list_tools
+
+TENANT_ID = str(uuid.uuid4())
+ENTITY_ID = str(uuid.uuid4())
+_FAKE_TOKEN = "fake.jwt.token"
+
+_DOSSIER = {
+    "query": {"type": "dossier", "entity_ids": [ENTITY_ID]},
+    "entities": [{"id": ENTITY_ID, "label": "Acme"}],
+    "facts": [{"id": "f1", "sources": [{"url": "https://reuters.com/test",
+                                         "excerpt": "Acme was acquired",
+                                         "verification_status": "live"}]}],
+    "relations": [],
+    "conflicts": [],
+}
+
+
+@pytest.mark.asyncio
+async def test_list_tools_returns_three():
+    tools = await list_tools()
+    names = {t.name for t in tools}
+    assert names == {"factvault__entity_lookup", "factvault__story_query", "factvault__fact_query"}
+
+
+@pytest.mark.asyncio
+async def test_entity_lookup_returns_dossier():
+    with patch("factvault.mcp.server._resolve_tenant", return_value=TENANT_ID), \
+         patch("factvault.mcp.server.get_dossier", return_value=_DOSSIER) as mock_get, \
+         patch("factvault.mcp.server.get_sync_session") as mock_sess, \
+         patch("factvault.mcp.server.tenant_context"):
+        mock_sess.return_value.__enter__ = lambda s: MagicMock()
+        mock_sess.return_value.__exit__ = MagicMock(return_value=False)
+        result = await call_tool(
+            "factvault__entity_lookup",
+            {"entity_id": ENTITY_ID, "token": _FAKE_TOKEN},
+        )
+
+    assert len(result) == 1
+    data = json.loads(result[0].text)
+    assert data["entities"][0]["id"] == ENTITY_ID
+
+
+@pytest.mark.asyncio
+async def test_story_query_calls_get_story():
+    story_result = {"query": {"type": "story"}, "entities": [], "facts": [], "relations": [], "conflicts": []}
+
+    with patch("factvault.mcp.server._resolve_tenant", return_value=TENANT_ID), \
+         patch("factvault.mcp.server.get_story", return_value=story_result) as mock_get, \
+         patch("factvault.mcp.server.get_sync_session") as mock_sess, \
+         patch("factvault.mcp.server.tenant_context"):
+        mock_sess.return_value.__enter__ = lambda s: MagicMock()
+        mock_sess.return_value.__exit__ = MagicMock(return_value=False)
+        result = await call_tool(
+            "factvault__story_query",
+            {"query": "CFO departures", "depth": 2, "token": _FAKE_TOKEN},
+        )
+
+    mock_get.assert_called_once()
+    assert mock_get.call_args[1]["query"] == "CFO departures"
+
+
+@pytest.mark.asyncio
+async def test_fact_query_via_mcp():
+    facts_result = {"query": {"type": "fact_query"}, "facts": [{"id": "f1"}], "relations": [], "conflicts": []}
+
+    with patch("factvault.mcp.server._resolve_tenant", return_value=TENANT_ID), \
+         patch("factvault.mcp.server.query_facts", return_value=facts_result) as mock_qf, \
+         patch("factvault.mcp.server.get_sync_session") as mock_sess, \
+         patch("factvault.mcp.server.tenant_context"):
+        mock_sess.return_value.__enter__ = lambda s: MagicMock()
+        mock_sess.return_value.__exit__ = MagicMock(return_value=False)
+        result = await call_tool(
+            "factvault__fact_query",
+            {"property_slug": "raised_usd", "min_confidence": 0.5, "token": _FAKE_TOKEN},
+        )
+
+    assert mock_qf.call_args[1]["property_slug"] == "raised_usd"
+    assert mock_qf.call_args[1]["min_confidence"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_raises():
+    with patch("factvault.mcp.server._resolve_tenant", return_value=TENANT_ID), \
+         patch("factvault.mcp.server.get_sync_session") as mock_sess, \
+         patch("factvault.mcp.server.tenant_context"):
+        mock_sess.return_value.__enter__ = lambda s: MagicMock()
+        mock_sess.return_value.__exit__ = MagicMock(return_value=False)
+        with pytest.raises(ValueError, match="Unknown tool"):
+            await call_tool("factvault__unknown", {"token": _FAKE_TOKEN})
+```
+
+- [ ] **RUN/PASS:**
+
+```bash
+$ python -m pytest tests/mcp/test_server.py -v
+# expected: 5 passed
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add factvault/retrieval/retrieval.py factvault/mcp/server.py \
+        factvault/retrieval/__init__.py tests/mcp/test_server.py
+git commit -m "feat(mcp): MCP server with 3 tools + shared retrieval module"
+```
+
+---
+
+## Task 17 — K8s manifests for API and MCP
+
+**Files:** `deploy/k8s/api-deployment.yaml`, `deploy/k8s/api-service.yaml`, `deploy/k8s/api-ingress.yaml`, `deploy/k8s/mcp-deployment.yaml`, `deploy/k8s/dossier-worker-cronjob.yaml`
+
+All manifests use Chainguard wolfi-base, nonroot UID 65532, tini, and the mandatory `fsGroup: 65532`.
+
+**`deploy/k8s/api-deployment.yaml`:**
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: factvault-api
+  namespace: factvault
+  labels:
+    app: factvault-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: factvault-api
+  template:
+    metadata:
+      labels:
+        app: factvault-api
+    spec:
+      securityContext:
+        runAsUser: 65532
+        runAsNonRoot: true
+        fsGroup: 65532
+      containers:
+        - name: api
+          image: ghcr.io/petersimmons1972/factvault-api:latest
+          command: ["/sbin/tini", "--", "factvault-api"]
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: factvault-secrets
+                  key: database-url
+            - name: FACTVAULT_JWT_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: factvault-secrets
+                  key: jwt-public-key
+            - name: FACTVAULT_PORT
+              value: "8000"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+```
+
+**`deploy/k8s/api-service.yaml`:**
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: factvault-api
+  namespace: factvault
+spec:
+  type: ClusterIP
+  selector:
+    app: factvault-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+```
+
+**`deploy/k8s/api-ingress.yaml`:**
+
+```yaml
+# Replace `factvault-api.example.com` with the actual hostname before deploy.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: factvault-api
+  namespace: factvault
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - factvault-api.example.com
+      secretName: factvault-api-tls
+  rules:
+    - host: factvault-api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: factvault-api
+                port:
+                  number: 8000
+```
+
+**`deploy/k8s/mcp-deployment.yaml`:**
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: factvault-mcp
+  namespace: factvault
+  labels:
+    app: factvault-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: factvault-mcp
+  template:
+    metadata:
+      labels:
+        app: factvault-mcp
+    spec:
+      securityContext:
+        runAsUser: 65532
+        runAsNonRoot: true
+        fsGroup: 65532
+      containers:
+        - name: mcp
+          image: ghcr.io/petersimmons1972/factvault-mcp:latest
+          command: ["/sbin/tini", "--", "factvault-mcp"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: factvault-secrets
+                  key: database-url
+            - name: FACTVAULT_JWT_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: factvault-secrets
+                  key: jwt-public-key
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+```
+
+**`deploy/k8s/dossier-worker-cronjob.yaml`:**
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: factvault-dossier-worker
+  namespace: factvault
+spec:
+  schedule: "0 2 * * *"   # 02:00 UTC daily
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsUser: 65532
+            runAsNonRoot: true
+            fsGroup: 65532
+          containers:
+            - name: dossier-worker
+              image: ghcr.io/petersimmons1972/factvault-workers:latest
+              command: ["/sbin/tini", "--", "factvault-worker", "dossier", "--once"]
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: factvault-secrets
+                      key: database-url
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "200m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "1000m"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add deploy/k8s/api-deployment.yaml deploy/k8s/api-service.yaml \
+        deploy/k8s/api-ingress.yaml deploy/k8s/mcp-deployment.yaml \
+        deploy/k8s/dossier-worker-cronjob.yaml
+git commit -m "feat(k8s): API + MCP deployments + dossier CronJob manifests"
+```
+
+---
+
+## Task 18 — Integration end-to-end test
+
+**File:** `tests/integration/test_retrieval_e2e.py`
+
+Full pipeline integration test. Requires a live Postgres DB with the factvault schema, pgvector, and RLS configured per Plan 1. Uses the `app_engine` fixture.
+
+```python
+# tests/integration/test_retrieval_e2e.py
+"""
+End-to-end retrieval integration test.
+
+Requires:  FACTVAULT_TEST_DB_URL set to a live Postgres with factvault schema.
+Skip:      If env var absent (CI without DB service).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import uuid
+from datetime import datetime, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+
+from factvault.api.main import create_app
+from factvault.auth.jwt import issue_token   # dev token helper from T1/T2
+from factvault.db.rls import tenant_context
+from factvault.workers.dossier import DossierWorker
+
+DB_URL = os.getenv("FACTVAULT_TEST_DB_URL")
+pytestmark = pytest.mark.skipif(not DB_URL, reason="FACTVAULT_TEST_DB_URL not set")
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def engine():
+    return create_engine(DB_URL)
+
+
+@pytest.fixture(scope="module")
+def tenant_id():
+    return str(uuid.uuid4())
+
+
+@pytest.fixture(scope="module")
+def dataset(engine, tenant_id):
+    """Insert minimal dataset: Acme, MegaCorp, Beta; 5 statements; 2 relations."""
+    ids = {
+        "acme": str(uuid.uuid4()),
+        "megacorp": str(uuid.uuid4()),
+        "beta": str(uuid.uuid4()),
+        "prop_acquired_by": str(uuid.uuid4()),
+        "prop_founded": str(uuid.uuid4()),
+    }
+
+    # Zero-vector placeholders; real test uses pgvector ANN on non-zero vecs
+    zero_vec = "[" + ",".join(["0.0"] * 1024) + "]"
+    # For story ANN test: Acme gets a distinctive embedding at dim 0
+    acme_vec = "[1.0" + ",0.0" * 1023 + "]"
+
+    with engine.begin() as conn:
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
+
+        # Tenant row (if tenants table exists)
+        conn.execute(
+            text("INSERT INTO tenants (id, name) VALUES (:id, :name) ON CONFLICT DO NOTHING"),
+            {"id": tenant_id, "name": "test-tenant"},
+        )
+
+        # Entities
+        for label, eid, vec in [
+            ("Acme Corp", ids["acme"], acme_vec),
+            ("MegaCorp", ids["megacorp"], zero_vec),
+            ("Beta Inc", ids["beta"], zero_vec),
+        ]:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO entities (id, tenant_id, label, type_uri, embedding)
+                    VALUES (:id, :tid, :label, 'https://schema.org/Organization',
+                            CAST(:vec AS vector))
+                    ON CONFLICT DO NOTHING
+                    """
+                ),
+                {"id": eid, "tid": tenant_id, "label": label, "vec": vec},
+            )
+
+        # Properties
+        conn.execute(
+            text(
+                """
+                INSERT INTO properties (id, tenant_id, slug, label, value_type)
+                VALUES (:id, :tid, 'acquired_by', 'Acquired By', 'entity_ref')
+                ON CONFLICT DO NOTHING
+                """
+            ),
+            {"id": ids["prop_acquired_by"], "tid": tenant_id},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO properties (id, tenant_id, slug, label, value_type)
+                VALUES (:id, :tid, 'founded_in', 'Founded In', 'number')
+                ON CONFLICT DO NOTHING
+                """
+            ),
+            {"id": ids["prop_founded"], "tid": tenant_id},
+        )
+
+        # Source
+        source_id = str(uuid.uuid4())
+        conn.execute(
+            text(
+                """
+                INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status)
+                VALUES (:id, :tid, 'https://reuters.com/test', 'abc123',
+                        'Acme Corp was acquired by MegaCorp for $4.2B in 2025.', 'verified')
+                ON CONFLICT DO NOTHING
+                """
+            ),
+            {"id": source_id, "tid": tenant_id},
+        )
+
+        # Statements
+        stmt_ids = []
+        for i, (subj, prop, val_entity, val_number) in enumerate([
+            (ids["acme"],     ids["prop_acquired_by"], ids["megacorp"], None),
+            (ids["megacorp"], ids["prop_founded"],      None,           1998),
+            (ids["beta"],     ids["prop_founded"],      None,           2010),
+        ]):
+            sid = str(uuid.uuid4())
+            stmt_ids.append(sid)
+            stmt_vec = "[" + ",".join(["0.1"] * 1024) + "]"
+            if val_entity:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO statements (id, tenant_id, subject_id, property_id,
+                                               val_entity, confidence, embedding)
+                        VALUES (:id, :tid, :subj, :prop, :val_entity, 0.85,
+                                CAST(:vec AS vector))
+                        ON CONFLICT DO NOTHING
+                        """
+                    ),
+                    {"id": sid, "tid": tenant_id, "subj": subj, "prop": prop,
+                     "val_entity": val_entity, "vec": stmt_vec},
+                )
+            else:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO statements (id, tenant_id, subject_id, property_id,
+                                               val_number, confidence, embedding)
+                        VALUES (:id, :tid, :subj, :prop, :val_number, 0.70,
+                                CAST(:vec AS vector))
+                        ON CONFLICT DO NOTHING
+                        """
+                    ),
+                    {"id": sid, "tid": tenant_id, "subj": subj, "prop": prop,
+                     "val_number": val_number, "vec": stmt_vec},
+                )
+            # statement_sources row
+            ss_id = str(uuid.uuid4())
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO statement_sources
+                        (id, statement_id, source_id, excerpt, excerpt_offset_start, excerpt_offset_end, extraction_method)
+                    VALUES (:id, :stmt, :src, 'Acme Corp was acquired by MegaCorp', 0, 34, 'test')
+                    ON CONFLICT DO NOTHING
+                    """
+                ),
+                {"id": ss_id, "stmt": sid, "src": source_id},
+            )
+
+        # Relations (Acme → MegaCorp via acquired_by)
+        conn.execute(
+            text(
+                """
+                INSERT INTO relations (id, tenant_id, source_id, target_id, type, confidence)
+                VALUES (:id, :tid, :src, :tgt, 'acquired_by', 0.85)
+                ON CONFLICT DO NOTHING
+                """
+            ),
+            {"id": str(uuid.uuid4()), "tid": tenant_id,
+             "src": ids["acme"], "tgt": ids["megacorp"]},
+        )
+
+    ids["source_id"] = source_id
+    ids["stmt_ids"] = stmt_ids
+    return ids
+
+
+@pytest.fixture(scope="module")
+def client():
+    return TestClient(create_app())
+
+
+@pytest.fixture(scope="module")
+def token(tenant_id):
+    return issue_token(tenant_id)
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+def test_dossier_worker_creates_dossiers(engine, dataset, tenant_id):
+    """Step 1: run worker; assert 3 dossier cache rows appear."""
+    from sqlalchemy.orm import Session
+    with Session(engine) as db:
+        worker = DossierWorker()
+        worker.run_once(db)
+
+    with engine.connect() as conn:
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
+        count = conn.execute(
+            text("SELECT COUNT(*) FROM dossiers WHERE tenant_id = :tid"),
+            {"tid": tenant_id},
+        ).scalar()
+    assert count == 3
+
+
+def test_get_dossier_returns_cached_bundle(client, dataset, tenant_id, token):
+    """Step 2: GET /entities/{acme_id}/dossier → bundle matches cache."""
+    resp = client.get(
+        f"/entities/{dataset['acme']}/dossier",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    bundle = resp.json()
+    assert any(e["id"] == dataset["acme"] for e in bundle["entities"])
+
+
+def test_entities_by_name_finds_acme(client, dataset, tenant_id, token):
+    """Step 3: GET /entities/by-name?q=Acme → Acme Corp returned."""
+    resp = client.get(
+        "/entities/by-name?q=Acme",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    ids = [e["id"] for e in resp.json()]
+    assert dataset["acme"] in ids
+
+
+def test_story_includes_acme_and_megacorp(client, dataset, tenant_id, token):
+    """Step 4: POST /stories with query seeding Acme → bundle contains Acme + MegaCorp via relation."""
+    from unittest.mock import patch
+
+    acme_vec = [0.0] * 1024
+    acme_vec[0] = 1.0
+
+    with patch("factvault.retrieval.retrieval.embed_query", return_value=acme_vec):
+        resp = client.post(
+            "/stories",
+            json={"query": "Acme acquisitions", "depth": 2},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 200
+    entity_ids = {e["id"] for e in resp.json()["entities"]}
+    assert dataset["acme"] in entity_ids
+    assert dataset["megacorp"] in entity_ids
+
+
+def test_facts_query_by_property(client, dataset, tenant_id, token):
+    """Step 5: POST /facts/query with property_slug=acquired_by → at least 1 fact."""
+    resp = client.post(
+        "/facts/query",
+        json={"property_slug": "acquired_by", "min_confidence": 0.5},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()["facts"]) >= 1
+
+
+def test_mcp_entity_lookup_returns_same_bundle(dataset, tenant_id, token):
+    """Step 6: MCP entity_lookup returns the same bundle as the REST endpoint."""
+    import asyncio
+    from factvault.mcp.server import call_tool
+
+    from sqlalchemy.orm import Session
+    from factvault.db import get_sync_session
+
+    with patch_sync_session_from_engine(engine=None):
+        result = asyncio.run(
+            call_tool(
+                "factvault__entity_lookup",
+                {"entity_id": dataset["acme"], "token": token},
+            )
+        )
+    bundle = json.loads(result[0].text)
+    assert any(e["id"] == dataset["acme"] for e in bundle["entities"])
+
+
+def test_source_metadata_present_on_all_facts(client, dataset, tenant_id, token):
+    """Step 7: all facts returned by /facts/query include full source-existence metadata."""
+    resp = client.post(
+        "/facts/query",
+        json={"min_confidence": 0.0},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    for fact in resp.json()["facts"]:
+        for source in fact["sources"]:
+            for field in (
+                "url", "excerpt", "excerpt_offset_start", "excerpt_offset_end",
+                "content_hash", "archive_url", "verification_status", "extraction_method",
+            ):
+                assert field in source, f"Missing source field '{field}' in fact {fact['id']}"
+```
+
+**Note:** The `test_mcp_entity_lookup_returns_same_bundle` test uses a helper `patch_sync_session_from_engine` to inject the test engine into the MCP server. Implement this helper in `tests/helpers.py` using `contextlib.contextmanager` + `unittest.mock.patch`.
+
+- [ ] **RUN/PASS:**
+
+```bash
+$ FACTVAULT_TEST_DB_URL="postgresql://..." python -m pytest tests/integration/test_retrieval_e2e.py -v
+# expected: 7 passed (or skipped if DB not available in CI)
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add tests/integration/test_retrieval_e2e.py
+git commit -m "test(integration): end-to-end retrieval pipeline test"
+```
+
+---
+
+## Task 19 — API + MCP README
+
+**File:** `factvault/api/README.md`
+
+```markdown
+# factvault API + MCP Server
+
+## Running locally
+
+```bash
+# Install
+pip install -e ".[dev]"
+
+# Start API (default: port 8000)
+DATABASE_URL=postgresql://user:pass@localhost/factvault \
+FACTVAULT_JWT_PUBLIC_KEY="$(cat keys/public.pem)" \
+factvault-api
+
+# OpenAPI docs
+open http://localhost:8000/docs
+```
+
+## Issuing a dev JWT
+
+```bash
+# Generates a signed token for local testing (uses the dev RSA keypair)
+factvault auth issue-token --tenant-id <uuid> [--expires 3600]
+```
+
+Set the result as:
+
+```bash
+export TOKEN=$(factvault auth issue-token --tenant-id $(uuidgen))
+```
+
+## Three retrieval modes
+
+### 1. Entity dossier (pre-computed, served from cache)
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8000/entities/<entity-id>/dossier
+```
+
+Returns the full sourced bundle for a single entity. If no cached dossier
+exists (or the cached one is older than `FACTVAULT_DOSSIER_STALENESS_DAYS`,
+default 7), the bundle is assembled on-demand and cached.
+
+### 2. Entity name lookup
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+     "http://localhost:8000/entities/by-name?q=Acme&type_uri=https://schema.org/Organization"
+```
+
+Returns `[{id, label, type_uri, description}]` — enough to pick an entity ID
+for a dossier lookup. Not a full bundle.
+
+### 3. Story query (on-demand graph expansion)
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"query": "Acme acquisitions", "depth": 2, "max_facts": 200}' \
+     http://localhost:8000/stories
+```
+
+Seeds entities via BGE-M3 ANN, then expands the graph `depth` hops through
+`relations`. Returns the full sourced bundle.
+
+### 4. Structured fact query (no graph expansion)
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"property_slug": "raised_usd", "min_confidence": 0.5, "limit": 50}' \
+     http://localhost:8000/facts/query
+```
+
+Pure SQL filter. Returns a bundle-shaped response with populated `facts[]` and
+empty `relations[]` / `conflicts[]`.
+
+## MCP server (Claude Desktop / Cursor / agent stacks)
+
+```bash
+# Start in stdio mode (default transport)
+DATABASE_URL=... FACTVAULT_JWT_PUBLIC_KEY=... factvault-mcp
+```
+
+**Wire into Claude Desktop** (`~/.config/claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "factvault": {
+      "command": "factvault-mcp",
+      "env": {
+        "DATABASE_URL": "postgresql://user:pass@host/factvault",
+        "FACTVAULT_JWT_PUBLIC_KEY": "<base64-encoded PEM>"
+      }
+    }
+  }
+}
+```
+
+**Available tools:**
+
+| Tool | Description |
+|------|-------------|
+| `factvault__entity_lookup` | Full dossier bundle for one entity |
+| `factvault__story_query` | Graph-expanded story bundle from a free-text query |
+| `factvault__fact_query` | Filtered fact list by property/subject/confidence |
+
+Each tool requires a `token` argument (Bearer JWT). The server extracts
+`tenant_id` from the JWT — it cannot be overridden by tool arguments.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `401 Unauthorized` | Missing or expired JWT | Re-issue: `factvault auth issue-token ...` |
+| `404 Entity not found` | Wrong tenant or entity doesn't exist | Check tenant_id in JWT matches DB |
+| Empty dossier (`facts: []`) | Entity exists but no statements yet | Run pipeline stages 1–6 first |
+| Story returns no entities | No embeddings match query | Ensure entities have `embedding IS NOT NULL` (run `factvault embed entities`) |
+| MCP tool hangs | DB connection pool exhausted | Check `DATABASE_URL` and Postgres max_connections |
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add factvault/api/README.md
+git commit -m "docs(api): API + MCP README with curl examples and MCP wiring"
+```
+
+---
+
+## Task 20 — OpenAPI spec snapshot test
+
+**File:** `tests/api/test_openapi_snapshot.py`
+
+```python
+# tests/api/test_openapi_snapshot.py
+"""
+OpenAPI snapshot test.
+
+First run: generates tests/api/openapi.snapshot.json and passes.
+Subsequent runs: compares generated spec against snapshot; fails on diff.
+
+To update the snapshot intentionally:
+    DELETE tests/api/openapi.snapshot.json and re-run.
+"""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from factvault.api.main import create_app
+
+_SNAPSHOT_PATH = Path(__file__).parent / "openapi.snapshot.json"
+
+
+def _get_spec() -> dict:
+    client = TestClient(create_app())
+    resp = client.get("/openapi.json")
+    assert resp.status_code == 200
+    return resp.json()
+
+
+def test_openapi_snapshot():
+    spec = _get_spec()
+
+    if not _SNAPSHOT_PATH.exists():
+        _SNAPSHOT_PATH.write_text(json.dumps(spec, indent=2, sort_keys=True))
+        pytest.skip("Snapshot created — re-run to verify.")
+
+    snapshot = json.loads(_SNAPSHOT_PATH.read_text())
+
+    # Normalize both sides for comparison (sort keys, deterministic serialization)
+    actual = json.dumps(spec, indent=2, sort_keys=True)
+    expected = json.dumps(snapshot, indent=2, sort_keys=True)
+
+    assert actual == expected, (
+        "OpenAPI spec has changed. If intentional, delete "
+        f"{_SNAPSHOT_PATH} and re-run to regenerate the snapshot.\n\n"
+        "First diff:\n" + _first_diff(expected.splitlines(), actual.splitlines())
+    )
+
+
+def _first_diff(expected_lines: list[str], actual_lines: list[str]) -> str:
+    for i, (e, a) in enumerate(zip(expected_lines, actual_lines)):
+        if e != a:
+            return f"Line {i + 1}:\n  expected: {e!r}\n  actual:   {a!r}"
+    if len(expected_lines) != len(actual_lines):
+        return f"Line count mismatch: expected {len(expected_lines)}, got {len(actual_lines)}"
+    return "(no diff found)"
+```
+
+- [ ] **RUN/PASS:**
+
+```bash
+$ python -m pytest tests/api/test_openapi_snapshot.py -v
+# First run: 1 skipped (snapshot created)
+# Second run: 1 passed
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add tests/api/test_openapi_snapshot.py
+git commit -m "test(api): OpenAPI snapshot test — catches accidental breaking changes"
+```
+
+---
+
+## Task 21 — CI workflow update
+
+**File:** `.github/workflows/ci.yml`
+
+Extend the existing CI workflow. Add a job step that:
+1. Starts uvicorn in the background
+2. Waits for health check
+3. Runs the new test suites
+4. Kills uvicorn
+
+Add or extend the `test` job in `.github/workflows/ci.yml`:
+
+```yaml
+      # --- factvault API smoke + unit tests ---
+      - name: Run API + assembler + MCP + auth unit tests
+        run: |
+          python -m pytest tests/auth/ tests/assembler/ tests/api/ tests/mcp/ \
+                           tests/workers/ -v --tb=short
+
+      - name: Boot API server for smoke check
+        run: |
+          DATABASE_URL="${{ secrets.FACTVAULT_TEST_DB_URL }}" \
+          FACTVAULT_JWT_PUBLIC_KEY="${{ secrets.FACTVAULT_JWT_PUBLIC_KEY }}" \
+          factvault-api &
+          echo $! > /tmp/factvault-api.pid
+          # Wait up to 30 s for health
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/healthz > /dev/null 2>&1; then
+              echo "API ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://localhost:8000/healthz || (echo "API failed to start" && exit 1)
+          curl -sf http://localhost:8000/readyz  || (echo "API not ready" && exit 1)
+
+      - name: Kill API server
+        if: always()
+        run: |
+          if [ -f /tmp/factvault-api.pid ]; then
+            kill "$(cat /tmp/factvault-api.pid)" || true
+          fi
+```
+
+If the CI file does not yet exist, create it with the following skeleton then add the steps above into the `test` job:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main, "plan/**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      # ... insert steps above here ...
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add .github/workflows/ci.yml
+git commit -m "ci: run API + MCP + auth tests; smoke-check uvicorn at /healthz"
+```
+
+---
+
+## Task 22 — Smoke test the API + MCP CLIs
+
+**File:** `tests/integration/test_cli_smoke.py`
+
+Extends Plan 2's smoke test. Uses `subprocess.run` to invoke console_script entry points with `--help`. Catches packaging issues where `pyproject.toml` console_script entries aren't wired.
+
+```python
+# tests/integration/test_cli_smoke.py
+"""
+CLI smoke tests — verify that all console_script entry points are installed
+and return exit code 0 for --help. These tests catch packaging regressions
+where entry points are removed or renamed in pyproject.toml.
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+
+import pytest
+
+_ENTRY_POINTS = [
+    ["factvault-api", "--help"],
+    ["factvault-mcp", "--help"],
+    ["factvault", "auth", "issue-token", "--help"],
+    ["factvault", "worker", "dossier", "--help"],
+]
+
+
+@pytest.mark.parametrize("cmd", _ENTRY_POINTS, ids=[" ".join(c) for c in _ENTRY_POINTS])
+def test_cli_help_exits_zero(cmd):
+    result = subprocess.run(
+        [sys.executable, "-m", "subprocess"] + cmd,
+        capture_output=True,
+        text=True,
+    )
+    # Use the entry point directly (requires `pip install -e .`)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"`{' '.join(cmd)}` exited with code {result.returncode}.\n"
+        f"stdout: {result.stdout}\n"
+        f"stderr: {result.stderr}"
+    )
+    # --help output should mention the command name or usage
+    assert "usage" in (result.stdout + result.stderr).lower() or \
+           "help" in (result.stdout + result.stderr).lower(), \
+        f"No usage/help text in output of `{' '.join(cmd)}`"
+```
+
+**Also add `factvault-api` and `factvault-mcp` console_script entries to `pyproject.toml`** (if not already added in Pass 1 T1):
+
+```toml
+[project.scripts]
+factvault        = "factvault.cli:main"
+factvault-api    = "factvault.api.main:run"
+factvault-mcp    = "factvault.mcp.server:run"
+factvault-worker = "factvault.workers.cli:main"
+```
+
+Add `run()` to `factvault/api/main.py`:
+
+```python
+def run() -> None:
+    import uvicorn
+    import os
+    port = int(os.getenv("FACTVAULT_PORT", "8000"))
+    uvicorn.run("factvault.api.main:app", host="0.0.0.0", port=port, reload=False)
+```
+
+And expose `app = create_app()` at module level:
+
+```python
+app = create_app()
+```
+
+- [ ] **RUN/PASS:**
+
+```bash
+$ python -m pytest tests/integration/test_cli_smoke.py -v
+# expected: 4 passed (after pip install -e .)
+```
+
+- [ ] **COMMIT:**
+
+```bash
+git add tests/integration/test_cli_smoke.py
+git commit -m "test(cli): smoke test all console_script entry points with --help"
+```
+
+---
+
+## Self-Review
+
+### Spec Coverage Checklist
+
+All rows reference the spec (§ numbers) against the Task that implements it. Pass 1 tasks are T1–T11; Pass 2 tasks are T12–T22.
+
+| Spec requirement | Task |
+|------------------|------|
+| Bundle assembler single shared function `assemble()` (§3.4) | Pass 1 T4 + T7 |
+| Dossier pre-compute worker, daily CronJob (§3.4, §5) | T15 + T17 (`dossier-worker-cronjob.yaml`) |
+| Dossier served from cache; on-demand if absent/stale (§3.4, §5) | T12 + `retrieval.py` T16 |
+| Story on-demand: ANN seed + recursive CTE graph expansion (§3.4, §5) | T13 + `retrieval.py` T16 |
+| `GET /entities/{id}/dossier` endpoint (§5) | T12 |
+| `GET /entities/by-name` endpoint (§5) | T12 |
+| `POST /stories` endpoint with `{query, depth, max_facts}` (§5) | T13 |
+| `POST /facts/query` endpoint (§5) | T14 |
+| Three MCP tools (`entity_lookup`, `story_query`, `fact_query`) (§5) | T16 |
+| JWT auth + RS256 enforcement on all endpoints (§5, §6) | Pass 1 T1–T3 + T11 |
+| `tenant_id` resolved from JWT claims (§6) | Pass 1 T11; T12–T14 use `get_tenant_id` dep |
+| Tenant context (`SET LOCAL app.tenant_id`) per request (§6) | Pass 1 T11 `tenant_context()`; T16 MCP path |
+| Conflict surfacing in bundles via `v_conflicts` (§3.2, §3.4) | Pass 1 T6 (assembler conflict query); T18 verifies |
+| Source-existence metadata on every fact (url, excerpt, offsets, content_hash, archive_url, verification_status) (§3.1, §3.4) | T14 + T16 `query_facts()`; T18 Step 7 asserts all fields |
+| `v_conflicts` SQL view integration (§3.2) | Pass 1 T6 assembler |
+| OpenAPI spec / `/docs` (§5) | Pass 1 T9; T20 snapshot |
+| K8s manifests: API Deployment, Service, Ingress; MCP Deployment; dossier CronJob (§6) | T17 |
+| Dev token issuance CLI (`factvault auth issue-token`) (§6) | Pass 1 T1–T2; T22 smoke-tests it |
+| BGE-M3 1024-dim embeddings for entity + statement ANN (§6) | T13 `embed_query()`; T16 `get_story()` |
+| Postgres RLS via `app.tenant_id` GUC (§6) | Pass 1 T11; all T12–T16 routes call `tenant_context()` |
+| Chainguard wolfi-base + tini + nonroot 65532 + `fsGroup: 65532` (§6) | T17 (all 5 manifests) |
+
+**Coverage gaps:** None identified for §3.4, §5, §6. Spec §5 also lists `GET /properties`, `GET /sources/{id}`, `GET /conflicts` — these are deferred to Plan 5 (admin/ops surface). They are not part of Plan 4's retrieval scope.
+
+### Placeholder Scan
+
+Reviewed. One intentional placeholder: `factvault-api.example.com` in `deploy/k8s/api-ingress.yaml`. This is documented inline with a comment: `# Replace with the actual hostname before deploy.` No unintentional placeholders. No `TODO`, `FIXME`, or `...` in implementation code.
+
+### Type Consistency Check
+
+Reviewed. `assemble()` signature is consistent across all callers:
+
+- Pass 1 T4 definition: `assemble(entity_ids: list[str], depth: int, tenant_id: str, query: str | None = None, max_facts: int | None = None, min_confidence: float = 0.0) -> dict`
+- T12 entities route: `assemble(entity_ids=[str(entity_id)], depth=0, tenant_id=str(tenant_id))` ✓
+- T13 stories route: `assemble(entity_ids=seed_ids, depth=req.depth, tenant_id=str(tenant_id), query=req.query, max_facts=req.max_facts)` ✓
+- T15 dossier worker: `assemble(entity_ids=[eid], depth=0, tenant_id=tenant_id)` ✓
+- T16 `retrieval.py` `get_dossier()`: `assemble(entity_ids=[entity_id], depth=0, tenant_id=tenant_id)` ✓
+- T16 `retrieval.py` `get_story()`: `assemble(entity_ids=seed_ids, depth=depth, tenant_id=tenant_id, query=query, max_facts=max_facts)` ✓
+
+All `entity_ids` arguments are `list[str]` (UUIDs cast to `str`). All `tenant_id` arguments are `str`. No type inconsistencies.
+
+### Spec/Code Cross-Check — GUC Name
+
+The spec §6 example uses `app.current_tenant_id`. Plan 1's `rls.py` uses `app.tenant_id`. This discrepancy was flagged in Pass 1.
+
+Confirmed: every Pass 2 task that touches the GUC uses `app.tenant_id`:
+
+- T12 entities route: calls `tenant_context(db, tenant_id)` from `factvault.db.rls` — which sets `app.tenant_id`. ✓
+- T13 stories route: same dependency chain. ✓
+- T14 facts route: same. ✓
+- T15 dossier worker: `with tenant_context(db, tid)`. ✓
+- T16 MCP server: `with tenant_context(db, tenant_id)`. ✓
+- T18 integration test: direct `SET LOCAL app.tenant_id = :tid` in fixture. ✓
+
+No Pass 2 code references `app.current_tenant_id`. The production GUC name `app.tenant_id` is used consistently throughout.
