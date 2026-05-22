@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import text, UniqueConstraint, CheckConstraint, ForeignKey, Index, Numeric, TIMESTAMP
+from sqlalchemy import text, UniqueConstraint, CheckConstraint, ForeignKey, Index, Numeric, TIMESTAMP, LargeBinary
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -177,6 +177,41 @@ class Relation(Base):
         ForeignKey("statements.id", ondelete="CASCADE"),
         nullable=True,
     )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class Source(Base):
+    __tablename__ = "sources"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "url", name="uq_sources_tenant_url"),
+        CheckConstraint(
+            "status IN ('collected', 'archived', 'extracted', 'verified', 'link-rot', 'content-changed')",
+            name="chk_sources_status",
+        ),
+        Index("idx_sources_tenant_status", "tenant_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    url: Mapped[str] = mapped_column(nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    content_hash: Mapped[str] = mapped_column(nullable=False)
+    raw_html: Mapped[Optional[bytes]] = mapped_column(LargeBinary(), nullable=True)
+    # raw_text is NULL until Stage 2 (archive worker) populates it permanently.
+    # Downstream queries must only run after status = 'archived'.
+    raw_text: Mapped[Optional[str]] = mapped_column(nullable=True)
+    archive_url: Mapped[Optional[str]] = mapped_column(nullable=True)
+    publisher: Mapped[Optional[str]] = mapped_column(nullable=True)
+    title: Mapped[Optional[str]] = mapped_column(nullable=True)
+    published_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    last_verified_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(nullable=False, server_default=text("'collected'"))
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
