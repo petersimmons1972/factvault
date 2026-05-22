@@ -26,6 +26,13 @@ _DOMAIN_TABLES = [
 
 
 def upgrade() -> None:
+    # Defensive: revoke any default PUBLIC privileges before granting to app_user.
+    # Default Postgres grants no table privileges to PUBLIC, but downstream operators
+    # may have customized this. Explicit revoke ensures app_user inherits ONLY what we
+    # grant below, even on databases where PUBLIC has been granted unexpectedly.
+    op.execute("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC")
+    op.execute("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC")
+
     # Policies use FOR ALL with USING only. Per Postgres semantics, when a policy
     # is declared FOR ALL and WITH CHECK is omitted, the USING expression is also
     # applied as WITH CHECK for INSERT and UPDATE. This means cross-tenant write

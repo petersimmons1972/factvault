@@ -20,14 +20,16 @@ _INDICES = [
 
 
 def upgrade() -> None:
-    for table, idx_name in _INDICES:
-        op.execute(
-            f"CREATE INDEX IF NOT EXISTS {idx_name} "
-            f"ON {table} USING hnsw (embedding vector_cosine_ops) "
-            f"WITH (m = 16, ef_construction = 64)"
-        )
+    with op.get_context().autocommit_block():
+        for table, idx_name in _INDICES:
+            op.execute(
+                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {idx_name} "
+                f"ON {table} USING hnsw (embedding vector_cosine_ops) "
+                f"WITH (m = 16, ef_construction = 64)"
+            )
 
 
 def downgrade() -> None:
-    for _, idx_name in _INDICES:
-        op.execute(f"DROP INDEX IF EXISTS {idx_name}")
+    with op.get_context().autocommit_block():
+        for _, idx_name in _INDICES:
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {idx_name}")
