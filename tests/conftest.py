@@ -64,3 +64,43 @@ def conn(migrated_engine: Engine) -> Connection:
         connection.execute(text("SAVEPOINT test_savepoint"))
         yield connection
         connection.execute(text("ROLLBACK TO SAVEPOINT test_savepoint"))
+
+
+@pytest.fixture(scope="session")
+def app_engine(migrated_engine: Engine) -> Engine:
+    """
+    Session-scoped engine that connects as a non-superuser role (app_user).
+
+    Why this fixture exists:
+    PostgreSQL superusers bypass Row-Level Security unconditionally — even
+    FORCE ROW LEVEL SECURITY does not apply to superusers (see PG docs §5.8).
+    The ``migrated_engine`` connects as the 'test' superuser, so RLS
+    enforcement tests would silently pass or fail incorrectly when using it.
+
+    This fixture creates a dedicated non-superuser ``app_user`` role after
+    migrations have run (so all tables exist for GRANT), then returns an
+    engine connecting as that role.  Only the RLS isolation tests use this
+    fixture; all other tests continue to use ``conn`` / ``migrated_engine``.
+    """
+    # Create the non-superuser role using the superuser migrated_engine
+    with migrated_engine.connect() as su_conn:
+        su_conn.execute(
+            text(
+                "DO $$ BEGIN "
+                "  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user') "
+                "  THEN CREATE ROLE app_user LOGIN PASSWORD 'apppass'; "
+                "  END IF; "
+                "END $$"
+            )
+        )
+        su_conn.execute(
+            text("GRANT ALL ON ALL TABLES IN SCHEMA public TO app_user")
+        )
+        su_conn.commit()
+
+    # Build an engine URL for app_user by replacing the credentials
+    su_url = migrated_engine.url
+    app_url = su_url.set(username="app_user", password="apppass")
+    engine = create_engine(app_url, echo=False)
+    yield engine
+    engine.dispose()
