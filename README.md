@@ -42,6 +42,8 @@ docker-compose up -d          # postgres+pgvector, api, workers, ollama
 factvault doctor
 ```
 
+Current supported Python versions for local development are 3.12 and 3.13. Python 3.14 is temporarily excluded because `pytest-asyncio` still emits an upstream deprecation warning there during test runs.
+
 The `doctor` command runs seven checks — database reachability, RLS policies, Wayback API, embedding model, LLM endpoint, and a canary fact ingest end-to-end — and exits non-zero on any failure with a remediation command.
 
 ```
