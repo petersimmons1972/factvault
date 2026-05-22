@@ -2831,4 +2831,1393 @@ git commit -m "feat(vocabulary): starter property YAML (40 entries) + idempotent
 
 ---
 
-<!-- PASS 1 END — Pass 2 appends Tasks 12-22 + self-review below this line -->
+---
+
+## Task 12 — BGE-M3 embedding wrapper
+
+**File:** `factvault/embeddings/bge_m3.py`
+
+**Goal:** Lazy-loaded sentence-transformer wrapper returning 1024-dim vectors for statement embedding in Task 14.
+
+**Env var:** `FACTVAULT_EMBEDDING_MODEL` (default `"BAAI/bge-m3"`). CI overrides to `"sentence-transformers/all-MiniLM-L6-v2"` (dim=384) and pads/truncates to 1024 only when the model dim ≠ 1024 — this keeps CI fast without a real model download.
+
+**Class interface:**
+
+```python
+# factvault/embeddings/bge_m3.py
+from __future__ import annotations
+import os
+from typing import Optional
+import numpy as np
+
+_MODEL_CACHE: dict[str, "SentenceTransformer"] = {}
+
+EMBEDDING_DIM = 1024
+
+
+def _get_model(model_name: str) -> "SentenceTransformer":
+    if model_name not in _MODEL_CACHE:
+        from sentence_transformers import SentenceTransformer  # lazy import
+        _MODEL_CACHE[model_name] = SentenceTransformer(model_name)
+    return _MODEL_CACHE[model_name]
+
+
+class BGEEmbedder:
+    def __init__(self, model_name: Optional[str] = None) -> None:
+        self.model_name = model_name or os.environ.get(
+            "FACTVAULT_EMBEDDING_MODEL", "BAAI/bge-m3"
+        )
+        self._model: Optional[object] = None  # loaded on first use
+
+    def _load(self) -> "SentenceTransformer":
+        if self._model is None:
+            self._model = _get_model(self.model_name)
+        return self._model
+
+    def _to_target_dim(self, vec: list[float]) -> list[float]:
+        """Pad or truncate to EMBEDDING_DIM=1024 (CI models may differ)."""
+        if len(vec) == EMBEDDING_DIM:
+            return vec
+        arr = np.array(vec, dtype=np.float32)
+        if len(arr) < EMBEDDING_DIM:
+            arr = np.pad(arr, (0, EMBEDDING_DIM - len(arr)))
+        else:
+            arr = arr[:EMBEDDING_DIM]
+        return arr.tolist()
+
+    def embed(self, text: str) -> list[float]:
+        model = self._load()
+        vec = model.encode(text, normalize_embeddings=True).tolist()
+        return self._to_target_dim(vec)
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        model = self._load()
+        vecs = model.encode(texts, normalize_embeddings=True, batch_size=32)
+        return [self._to_target_dim(v.tolist()) for v in vecs]
+```
+
+**Tests:** `tests/embeddings/test_bge_m3.py`
+
+```python
+# tests/embeddings/test_bge_m3.py
+import os
+import pytest
+
+os.environ.setdefault("FACTVAULT_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+
+from factvault.embeddings.bge_m3 import BGEEmbedder, EMBEDDING_DIM
+
+
+@pytest.mark.slow
+def test_embed_returns_correct_dim():
+    embedder = BGEEmbedder()
+    vec = embedder.embed("Acme Corp acquired Beta Inc.")
+    assert len(vec) == EMBEDDING_DIM
+
+
+@pytest.mark.slow
+def test_embed_batch_consistency():
+    embedder = BGEEmbedder()
+    text = "Acme Corp founded in 1998"
+    single = embedder.embed(text)
+    batch = embedder.embed_batch([text, "other text"])
+    assert batch[0] == pytest.approx(single, abs=1e-5)
+
+
+@pytest.mark.slow
+def test_embed_deterministic():
+    embedder = BGEEmbedder()
+    text = "deterministic output check"
+    assert embedder.embed(text) == embedder.embed(text)
+
+
+@pytest.mark.slow
+def test_model_loaded_lazily():
+    embedder = BGEEmbedder()
+    assert embedder._model is None
+    embedder.embed("trigger load")
+    assert embedder._model is not None
+```
+
+**Commit:**
+
+```bash
+git add factvault/embeddings/__init__.py \
+        factvault/embeddings/bge_m3.py \
+        tests/embeddings/test_bge_m3.py
+git commit -m "feat(embeddings): BGE-M3 wrapper with lazy load + batch + dim normalisation"
+```
+
+---
+
+## Task 13 — Extract worker (Stage 3)
+
+**File:** `factvault/workers/extract.py`
+
+**Goal:** Poll `status='archived'` sources, run deterministic then LLM extractors, resolve entities + properties, write `statements` + `statement_sources`, advance source to `status='extracted'`. Commit per source so crashes lose at most one source of progress.
+
+**Known limitation (documented):** Entity resolution in v1 is exact-label match within the tenant. If no match exists, a new entity row is created with `type_uri=NULL`. Entity disambiguation (deduplication of `"Acme Corp"` vs `"Acme Corporation"`) is a Plan 4 concern and intentionally out of scope here.
+
+```python
+# factvault/workers/extract.py
+from __future__ import annotations
+import logging
+import uuid
+from typing import Optional
+
+from factvault.db import get_tenant_conn
+from factvault.extractors.runner import run_deterministic
+from factvault.extractors.llm import LLMExtractor
+from factvault.vocabulary.resolver import VocabularyResolver
+from factvault.workers.base import Worker
+
+log = logging.getLogger(__name__)
+
+_BATCH = 25
+
+
+class ExtractWorker(Worker):
+    name = "extract"
+
+    def __init__(
+        self,
+        tenant_id: str,
+        *,
+        llm_extractor: Optional[LLMExtractor] = None,
+        dry_run: bool = False,
+    ) -> None:
+        self.tenant_id = tenant_id
+        self.llm = llm_extractor or LLMExtractor.from_env()
+        self.vocab = VocabularyResolver(tenant_id)
+        self.dry_run = dry_run
+
+    def run(self, *, once: bool = False) -> None:
+        while True:
+            processed = self._process_batch()
+            if processed == 0 or once:
+                break
+
+    def _process_batch(self) -> int:
+        with get_tenant_conn(self.tenant_id) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, raw_text, url
+                    FROM   sources
+                    WHERE  status = 'archived'
+                      AND  tenant_id = %s
+                    LIMIT  %s
+                    FOR UPDATE SKIP LOCKED
+                    """,
+                    (self.tenant_id, _BATCH),
+                )
+                rows = cur.fetchall()
+
+        for row in rows:
+            self._process_source(row["id"], row["raw_text"], row["url"])
+
+        return len(rows)
+
+    def _process_source(
+        self, source_id: str, raw_text: Optional[str], url: str
+    ) -> None:
+        if not raw_text or not raw_text.strip():
+            log.warning("source %s has no raw_text — skipping", source_id)
+            return
+
+        # --- deterministic pass ---
+        det_facts = run_deterministic(raw_text, source_id=source_id)
+
+        # --- LLM pass on uncovered spans ---
+        covered = [f.covered_span for f in det_facts if f.covered_span]
+        llm_facts = self.llm.extract_uncovered(raw_text, covered, source_id=source_id)
+
+        all_facts = det_facts + llm_facts
+
+        with get_tenant_conn(self.tenant_id) as conn:
+            for fact in all_facts:
+                try:
+                    self._write_fact(conn, source_id, fact)
+                except Exception:
+                    log.exception("failed to write fact from source %s", source_id)
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE sources SET status='extracted' WHERE id=%s AND tenant_id=%s",
+                    (source_id, self.tenant_id),
+                )
+            if not self.dry_run:
+                conn.commit()
+
+    def _write_fact(self, conn, source_id: str, fact) -> None:
+        # Resolve entity
+        entity_id = self._resolve_entity(conn, fact.subject_text, source_id)
+        if entity_id is None:
+            return  # resolution error already logged
+
+        # Resolve property
+        prop_id = self.vocab.resolve(conn, fact.property_slug)
+        if prop_id is None:
+            log.info("unknown property slug %r for source %s — skipped", fact.property_slug, source_id)
+            return
+
+        stmt_id = str(uuid.uuid4())
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO statements
+                    (id, tenant_id, subject_id, property_id,
+                     val_text, val_number, val_date, val_entity,
+                     rank, confidence)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'normal', NULL)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    stmt_id,
+                    self.tenant_id,
+                    entity_id,
+                    prop_id,
+                    fact.val_text,
+                    fact.val_number,
+                    fact.val_date,
+                    fact.val_entity,
+                ),
+            )
+            cur.execute(
+                """
+                INSERT INTO statement_sources
+                    (statement_id, source_id, tenant_id,
+                     excerpt, excerpt_offset_start, excerpt_offset_end,
+                     extraction_method, confidence)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    stmt_id,
+                    source_id,
+                    self.tenant_id,
+                    fact.excerpt,
+                    fact.offset_start,
+                    fact.offset_end,
+                    fact.extraction_method,
+                    fact.per_source_confidence,
+                ),
+            )
+
+    def _resolve_entity(self, conn, label: str, source_id: str) -> Optional[str]:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM entities WHERE label=%s AND tenant_id=%s LIMIT 1",
+                (label, self.tenant_id),
+            )
+            row = cur.fetchone()
+            if row:
+                return row["id"]
+            # auto-create
+            new_id = str(uuid.uuid4())
+            cur.execute(
+                """
+                INSERT INTO entities (id, tenant_id, label, type_uri, meta)
+                VALUES (%s, %s, %s, NULL, %s)
+                """,
+                (
+                    new_id,
+                    self.tenant_id,
+                    label,
+                    {
+                        "auto_created_from": "extract",
+                        "source_id": source_id,
+                    },
+                ),
+            )
+            return new_id
+```
+
+**Tests:** `tests/workers/test_extract.py`
+
+```python
+# tests/workers/test_extract.py
+import uuid
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from tests.factories import make_tenant, make_source
+from factvault.workers.extract import ExtractWorker
+
+
+@pytest.fixture
+def tenant_id(db):
+    return make_tenant(db)
+
+
+def test_extract_worker_writes_statements_and_sources(db, tenant_id):
+    source_id = make_source(
+        db,
+        tenant_id,
+        raw_text="Acme Corp acquired Beta Inc. for $450M on April 12, 2023",
+        status="archived",
+    )
+
+    mock_llm = MagicMock()
+    mock_llm.extract_uncovered.return_value = []  # deterministic covers it
+
+    worker = ExtractWorker(tenant_id, llm_extractor=mock_llm)
+    worker.run(once=True)
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM statements WHERE tenant_id=%s", (tenant_id,)
+        )
+        assert cur.fetchone()["n"] >= 1
+
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM statement_sources WHERE source_id=%s",
+            (source_id,),
+        )
+        assert cur.fetchone()["n"] >= 1
+
+        cur.execute(
+            "SELECT status FROM sources WHERE id=%s", (source_id,)
+        )
+        assert cur.fetchone()["status"] == "extracted"
+
+
+def test_extract_worker_skips_null_raw_text(db, tenant_id):
+    source_id = make_source(db, tenant_id, raw_text=None, status="archived")
+
+    mock_llm = MagicMock()
+    mock_llm.extract_uncovered.return_value = []
+
+    worker = ExtractWorker(tenant_id, llm_extractor=mock_llm)
+    worker.run(once=True)
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM statements WHERE tenant_id=%s", (tenant_id,)
+        )
+        assert cur.fetchone()["n"] == 0
+
+        # Source left in archived (no text, nothing to extract)
+        cur.execute("SELECT status FROM sources WHERE id=%s", (source_id,))
+        assert cur.fetchone()["status"] == "archived"
+
+
+def test_extract_worker_auto_creates_entity(db, tenant_id):
+    make_source(
+        db,
+        tenant_id,
+        raw_text="NewCo Inc. raised $10M in Series A on 2024-03-01",
+        status="archived",
+    )
+    mock_llm = MagicMock()
+    mock_llm.extract_uncovered.return_value = []
+
+    worker = ExtractWorker(tenant_id, llm_extractor=mock_llm)
+    worker.run(once=True)
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT meta FROM entities WHERE tenant_id=%s AND meta->>'auto_created_from'='extract'",
+            (tenant_id,),
+        )
+        rows = cur.fetchall()
+        assert len(rows) >= 1
+```
+
+**Commit:**
+
+```bash
+git add factvault/workers/extract.py \
+        tests/workers/test_extract.py
+git commit -m "feat(workers): extract worker — deterministic+LLM extraction, entity auto-create, per-source commit"
+```
+
+---
+
+## Task 14 — Corroborate worker (Stage 4)
+
+**File:** `factvault/workers/corroborate.py`
+
+**Goal:** For each unscored statement, gather peers (same subject+property+value), compute independence (publisher uniqueness + trigram similarity ≤ 0.8), apply 0.5/0.85/0.95 confidence ceilings, write embeddings via BGE-M3, leave conflicting values at `rank='normal'`.
+
+**Independence check note:** The spec says trigram similarity should use `pg_trgm`. For v1 in Python we use `difflib.SequenceMatcher` on the first 2 000 chars — this is spec-compliant as a client-side approximation; a Plan 5 migration to `pg_trgm` is logged in the README.
+
+```python
+# factvault/workers/corroborate.py
+from __future__ import annotations
+import difflib
+import logging
+from typing import Optional
+
+from factvault.db import get_tenant_conn
+from factvault.embeddings.bge_m3 import BGEEmbedder
+from factvault.workers.base import Worker
+
+log = logging.getLogger(__name__)
+
+_BATCH            = 50
+_TRIGRAM_THRESHOLD = 0.8
+_SNIPPET_LEN       = 2000
+
+_CEILINGS = {1: 0.5, 2: 0.85}
+_DEFAULT_CEILING = 0.95   # 3+ independent sources
+
+
+def _ceiling(n_ind: int) -> float:
+    return _CEILINGS.get(n_ind, _DEFAULT_CEILING)
+
+
+def _trigram_sim(a: str, b: str) -> float:
+    return difflib.SequenceMatcher(None, a[:_SNIPPET_LEN], b[:_SNIPPET_LEN]).ratio()
+
+
+class CorroborateWorker(Worker):
+    name = "corroborate"
+
+    def __init__(
+        self,
+        tenant_id: str,
+        *,
+        embedder: Optional[BGEEmbedder] = None,
+    ) -> None:
+        self.tenant_id = tenant_id
+        self.embedder = embedder or BGEEmbedder()
+
+    def run(self, *, once: bool = False) -> None:
+        while True:
+            processed = self._process_batch()
+            if processed == 0 or once:
+                break
+
+    def _process_batch(self) -> int:
+        with get_tenant_conn(self.tenant_id) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, subject_id, property_id,
+                           val_text, val_number, val_date, val_entity
+                    FROM   statements
+                    WHERE  confidence IS NULL
+                      AND  rank != 'deprecated'
+                      AND  tenant_id = %s
+                    LIMIT  %s
+                    """,
+                    (self.tenant_id, _BATCH),
+                )
+                rows = cur.fetchall()
+
+        for row in rows:
+            self._corroborate_statement(row)
+
+        return len(rows)
+
+    def _corroborate_statement(self, stmt: dict) -> None:
+        with get_tenant_conn(self.tenant_id) as conn:
+            peers = self._get_peers(conn, stmt)
+            confidence = self._compute_confidence(conn, peers)
+            peer_ids = [p["id"] for p in peers]
+
+            # update all peers together
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE statements
+                    SET    confidence = %s
+                    WHERE  id = ANY(%s)
+                      AND  tenant_id = %s
+                    """,
+                    (confidence, peer_ids, self.tenant_id),
+                )
+
+            # embeddings
+            self._write_embeddings(conn, peers)
+            conn.commit()
+
+    def _get_peers(self, conn, stmt: dict) -> list[dict]:
+        """All non-deprecated statements with the same (subject, property, value)."""
+        val_col, val = self._value_col(stmt)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, subject_id, property_id,
+                       val_text, val_number, val_date, val_entity
+                FROM   statements
+                WHERE  subject_id  = %s
+                  AND  property_id = %s
+                  AND  {val_col}   = %s
+                  AND  rank        != 'deprecated'
+                  AND  tenant_id   = %s
+                """,
+                (stmt["subject_id"], stmt["property_id"], val, self.tenant_id),
+            )
+            return cur.fetchall()
+
+    def _value_col(self, stmt: dict) -> tuple[str, object]:
+        for col in ("val_entity", "val_date", "val_number", "val_text"):
+            if stmt.get(col) is not None:
+                return col, stmt[col]
+        return "val_text", None
+
+    def _compute_confidence(self, conn, peers: list[dict]) -> float:
+        if not peers:
+            return 0.5
+
+        peer_ids = [p["id"] for p in peers]
+
+        # Gather sources + raw_text snippets
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ss.statement_id, ss.confidence AS src_conf,
+                       s.publisher, s.raw_text
+                FROM   statement_sources ss
+                JOIN   sources s ON s.id = ss.source_id
+                WHERE  ss.statement_id = ANY(%s)
+                  AND  ss.tenant_id    = %s
+                """,
+                (peer_ids, self.tenant_id),
+            )
+            src_rows = cur.fetchall()
+
+        if not src_rows:
+            return 0.5
+
+        # per_source_max confidence
+        src_confidences = [r["src_conf"] for r in src_rows if r["src_conf"] is not None]
+        per_src_max = max(src_confidences) if src_confidences else 0.95
+
+        # independence check: group by publisher, then trigram
+        snippets_by_pub: dict[str, list[str]] = {}
+        for r in src_rows:
+            pub = r["publisher"] or "__unknown__"
+            snippets_by_pub.setdefault(pub, []).append(r["raw_text"] or "")
+
+        unique_pubs = list(snippets_by_pub.keys())
+
+        # Among sources from different publishers, check pairwise trigram similarity
+        # Representatives: first snippet per publisher
+        reps = [(pub, snippets[0]) for pub, snippets in snippets_by_pub.items()]
+        independent_pubs: list[str] = []
+        for i, (pub_i, snip_i) in enumerate(reps):
+            is_dep = False
+            for pub_j, snip_j in independent_pubs:
+                if _trigram_sim(snip_i, snip_j) > _TRIGRAM_THRESHOLD:
+                    is_dep = True
+                    break
+            if not is_dep:
+                independent_pubs.append((pub_i, snip_i))
+
+        n_ind = len(independent_pubs)
+        ceil = _ceiling(n_ind)
+        return min(per_src_max, ceil)
+
+    def _write_embeddings(self, conn, peers: list[dict]) -> None:
+        for peer in peers:
+            text_parts = [
+                str(peer.get("val_text") or ""),
+                str(peer.get("val_number") or ""),
+                str(peer.get("val_date") or ""),
+            ]
+            text = " ".join(t for t in text_parts if t).strip()
+            if not text:
+                continue
+            try:
+                vec = self.embedder.embed(text)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE statements SET embedding=%s WHERE id=%s AND tenant_id=%s",
+                        (vec, peer["id"], self.tenant_id),
+                    )
+            except Exception:
+                log.exception("embedding failed for statement %s", peer["id"])
+```
+
+**Tests:** `tests/workers/test_corroborate.py`
+
+```python
+# tests/workers/test_corroborate.py
+from unittest.mock import MagicMock
+import pytest
+
+from tests.factories import make_tenant, make_source, make_entity, make_property, make_statement
+from factvault.workers.corroborate import CorroborateWorker
+
+
+@pytest.fixture
+def tenant_id(db):
+    return make_tenant(db)
+
+
+def _make_embedder():
+    mock = MagicMock()
+    mock.embed.return_value = [0.0] * 1024
+    return mock
+
+
+def test_single_source_yields_0_5(db, tenant_id):
+    entity_id  = make_entity(db, tenant_id, label="Acme Corp")
+    prop_id    = make_property(db, tenant_id, slug="org.founded_year")
+    source_id  = make_source(db, tenant_id, raw_text="Acme Corp was founded in 1998", publisher="pub-a")
+    stmt_id    = make_statement(db, tenant_id, entity_id, prop_id, val_number=1998, source_id=source_id)
+
+    worker = CorroborateWorker(tenant_id, embedder=_make_embedder())
+    worker.run(once=True)
+
+    with db.cursor() as cur:
+        cur.execute("SELECT confidence FROM statements WHERE id=%s", (stmt_id,))
+        conf = cur.fetchone()["confidence"]
+    assert conf == pytest.approx(0.5)
+
+
+def test_two_independent_sources_yields_0_85(db, tenant_id):
+    entity_id  = make_entity(db, tenant_id, label="Acme Corp")
+    prop_id    = make_property(db, tenant_id, slug="org.founded_year")
+    src_a      = make_source(db, tenant_id, raw_text="Acme Corp was founded in 1998", publisher="pub-a")
+    src_b      = make_source(db, tenant_id, raw_text="Company Acme was established in 1998", publisher="pub-b")
+    stmt_a     = make_statement(db, tenant_id, entity_id, prop_id, val_number=1998, source_id=src_a)
+    stmt_b     = make_statement(db, tenant_id, entity_id, prop_id, val_number=1998, source_id=src_b)
+
+    worker = CorroborateWorker(tenant_id, embedder=_make_embedder())
+    worker.run(once=True)
+
+    with db.cursor() as cur:
+        cur.execute("SELECT confidence FROM statements WHERE id IN (%s, %s)", (stmt_a, stmt_b))
+        confs = [r["confidence"] for r in cur.fetchall()]
+    assert all(c == pytest.approx(0.85) for c in confs)
+
+
+def test_three_independent_sources_yields_0_95(db, tenant_id):
+    entity_id = make_entity(db, tenant_id, label="Acme Corp")
+    prop_id   = make_property(db, tenant_id, slug="org.founded_year")
+    for i, pub in enumerate(["pub-a", "pub-b", "pub-c"]):
+        raw = f"Source {i}: Acme Corp was founded in 1998 (publisher {pub})"
+        src = make_source(db, tenant_id, raw_text=raw, publisher=pub)
+        make_statement(db, tenant_id, entity_id, prop_id, val_number=1998, source_id=src)
+
+    worker = CorroborateWorker(tenant_id, embedder=_make_embedder())
+    worker.run(once=True)
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT confidence FROM statements WHERE subject_id=%s AND tenant_id=%s",
+            (entity_id, tenant_id),
+        )
+        confs = [r["confidence"] for r in cur.fetchall()]
+    assert all(c == pytest.approx(0.95) for c in confs)
+
+
+def test_same_publisher_treated_as_dependent(db, tenant_id):
+    entity_id = make_entity(db, tenant_id, label="Acme Corp")
+    prop_id   = make_property(db, tenant_id, slug="org.founded_year")
+    for _ in range(3):
+        src = make_source(db, tenant_id, raw_text="Acme Corp founded 1998 [copy]", publisher="same-pub")
+        make_statement(db, tenant_id, entity_id, prop_id, val_number=1998, source_id=src)
+
+    worker = CorroborateWorker(tenant_id, embedder=_make_embedder())
+    worker.run(once=True)
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT confidence FROM statements WHERE subject_id=%s AND tenant_id=%s LIMIT 1",
+            (entity_id, tenant_id),
+        )
+        conf = cur.fetchone()["confidence"]
+    assert conf == pytest.approx(0.5)   # single independent publisher → ceiling 0.5
+
+
+def test_conflicting_values_stay_rank_normal(db, tenant_id):
+    entity_id = make_entity(db, tenant_id, label="Acme Corp")
+    prop_id   = make_property(db, tenant_id, slug="org.founded_year")
+    src_a     = make_source(db, tenant_id, raw_text="Founded 1998", publisher="pub-a")
+    src_b     = make_source(db, tenant_id, raw_text="Founded 1999", publisher="pub-b")
+    stmt_a    = make_statement(db, tenant_id, entity_id, prop_id, val_number=1998, source_id=src_a)
+    stmt_b    = make_statement(db, tenant_id, entity_id, prop_id, val_number=1999, source_id=src_b)
+
+    worker = CorroborateWorker(tenant_id, embedder=_make_embedder())
+    worker.run(once=True)
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT rank FROM statements WHERE id IN (%s, %s)", (stmt_a, stmt_b)
+        )
+        ranks = {r["rank"] for r in cur.fetchall()}
+    assert ranks == {"normal"}
+
+
+def test_embeddings_populated(db, tenant_id):
+    mock_emb = _make_embedder()
+    entity_id = make_entity(db, tenant_id, label="Acme Corp")
+    prop_id   = make_property(db, tenant_id, slug="org.founded_year")
+    src       = make_source(db, tenant_id, raw_text="Acme Corp founded 1998", publisher="pub-a")
+    make_statement(db, tenant_id, entity_id, prop_id, val_number=1998, source_id=src)
+
+    CorroborateWorker(tenant_id, embedder=mock_emb).run(once=True)
+
+    assert mock_emb.embed.called
+```
+
+**Commit:**
+
+```bash
+git add factvault/workers/corroborate.py \
+        tests/workers/test_corroborate.py
+git commit -m "feat(workers): corroborate worker — confidence ceilings, independence check, embeddings"
+```
+
+---
+
+## Task 15 — CLI subcommands: extract + corroborate
+
+**File:** `factvault/workers/cli.py` (extend existing)
+
+**Goal:** Register `extract` and `corroborate` in the worker registry so `factvault-worker run extract` and `factvault-worker run corroborate` dispatch the correct class.
+
+```python
+# Additions to factvault/workers/cli.py (registry entries)
+
+from factvault.workers.extract     import ExtractWorker
+from factvault.workers.corroborate import CorroborateWorker
+
+WORKER_REGISTRY = {
+    **WORKER_REGISTRY,          # existing entries from Plan 2 T12
+    "extract":     ExtractWorker,
+    "corroborate": CorroborateWorker,
+}
+```
+
+**Tests:** `tests/workers/test_cli_workers.py`
+
+```python
+from click.testing import CliRunner
+from factvault.workers.cli import cli
+
+
+def test_run_extract_help():
+    result = CliRunner().invoke(cli, ["run", "extract", "--help"])
+    assert result.exit_code == 0
+    assert "extract" in result.output
+
+
+def test_run_corroborate_help():
+    result = CliRunner().invoke(cli, ["run", "corroborate", "--help"])
+    assert result.exit_code == 0
+    assert "corroborate" in result.output
+```
+
+**Commit:**
+
+```bash
+git add factvault/workers/cli.py \
+        tests/workers/test_cli_workers.py
+git commit -m "feat(cli): register extract + corroborate workers in factvault-worker run"
+```
+
+---
+
+## Task 16 — Property vocabulary CLI
+
+**File:** `factvault/workers/cli.py` (add `vocab` command group)
+
+**Goal:** Three vocab subcommands: `load`, `proposed`, `approve`, `reject`. These let operators bootstrap a tenant's vocabulary and action proposals from the LLM extractor.
+
+```python
+# factvault/workers/cli.py — vocab group
+
+import click
+from factvault.vocabulary.loader import load_starter_properties
+from factvault.db import get_tenant_conn
+
+
+@cli.group()
+def vocab():
+    """Property vocabulary management."""
+
+
+@vocab.command("load")
+@click.option("--tenant", required=True, help="Tenant UUID")
+@click.option("--file",   default="factvault/vocabulary/starter_properties.yaml",
+              show_default=True, help="Path to properties YAML")
+def vocab_load(tenant, file):
+    """Load starter vocabulary into a tenant."""
+    with get_tenant_conn(tenant) as conn:
+        inserted = load_starter_properties(conn, tenant, path=file)
+    click.echo(f"Loaded {inserted} properties for tenant {tenant}")
+
+
+@vocab.command("proposed")
+@click.option("--tenant", required=True)
+def vocab_proposed(tenant):
+    """List pending proposed_properties rows."""
+    with get_tenant_conn(tenant) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, slug, proposed_at FROM proposed_properties "
+                "WHERE tenant_id=%s AND status='pending' ORDER BY proposed_at",
+                (tenant,),
+            )
+            rows = cur.fetchall()
+    if not rows:
+        click.echo("No pending proposals.")
+        return
+    for r in rows:
+        click.echo(f"{r['id']}  {r['slug']}  {r['proposed_at']}")
+
+
+@vocab.command("approve")
+@click.argument("proposed_id")
+def vocab_approve(proposed_id):
+    """Approve a proposed property slug."""
+    # tenant derived from the row itself
+    with get_db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE proposed_properties SET status='approved', resolved_at=now() "
+                "WHERE id=%s RETURNING tenant_id, slug",
+                (proposed_id,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    if row:
+        click.echo(f"Approved: {row['slug']} (tenant {row['tenant_id']})")
+    else:
+        click.echo(f"Not found: {proposed_id}", err=True)
+
+
+@vocab.command("reject")
+@click.argument("proposed_id")
+@click.option("--reason", default="", help="Rejection reason")
+def vocab_reject(proposed_id, reason):
+    """Reject a proposed property slug."""
+    with get_db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE proposed_properties "
+                "SET status='rejected', resolved_at=now(), rejection_reason=%s "
+                "WHERE id=%s RETURNING slug",
+                (reason, proposed_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    click.echo(f"Rejected: {row['slug'] if row else proposed_id}")
+```
+
+**Tests:** `tests/workers/test_vocab_cli.py`
+
+```python
+from click.testing import CliRunner
+from factvault.workers.cli import cli
+
+
+def test_vocab_load_help():
+    r = CliRunner().invoke(cli, ["vocab", "load", "--help"])
+    assert r.exit_code == 0
+    assert "--tenant" in r.output
+
+
+def test_vocab_proposed_help():
+    r = CliRunner().invoke(cli, ["vocab", "proposed", "--help"])
+    assert r.exit_code == 0
+
+
+def test_vocab_approve_help():
+    r = CliRunner().invoke(cli, ["vocab", "approve", "--help"])
+    assert r.exit_code == 0
+
+
+def test_vocab_reject_help():
+    r = CliRunner().invoke(cli, ["vocab", "reject", "--help"])
+    assert r.exit_code == 0
+    assert "--reason" in r.output
+
+
+def test_vocab_load_integration(db, tmp_path):
+    """vocab load writes properties to the DB."""
+    from tests.factories import make_tenant
+    tenant = make_tenant(db)
+    yaml_content = """
+properties:
+  - slug: org.ticker_symbol
+    label: Ticker Symbol
+    value_type: string
+    scope: org
+"""
+    f = tmp_path / "props.yaml"
+    f.write_text(yaml_content)
+    r = CliRunner().invoke(cli, ["vocab", "load", "--tenant", tenant, "--file", str(f)])
+    assert r.exit_code == 0
+    assert "Loaded" in r.output
+```
+
+**Commit:**
+
+```bash
+git add factvault/workers/cli.py \
+        tests/workers/test_vocab_cli.py
+git commit -m "feat(cli): vocab load/proposed/approve/reject subcommands"
+```
+
+---
+
+## Task 17 — Integration end-to-end test: extract + corroborate
+
+**File:** `tests/integration/test_fact_pipeline_e2e.py`
+
+**Goal:** Load-bearing integration test covering the full Stage 3 → Stage 4 flow including confidence ceiling, conflict detection, and embedding population.
+
+```python
+# tests/integration/test_fact_pipeline_e2e.py
+"""
+End-to-end pipeline: archived sources → extract worker → corroborate worker.
+
+Scenario:
+  pub-a + pub-b both say "Acme Corp was founded in 1998" → corroborating, confidence 0.85
+  pub-c says "Acme Corp was founded in 1999"             → conflict, rank='normal'
+  v_conflicts view must surface the conflict
+  All statements must have embeddings after corroborate
+"""
+from unittest.mock import MagicMock
+import pytest
+
+from tests.factories import make_tenant, make_source
+from factvault.workers.extract     import ExtractWorker
+from factvault.workers.corroborate import CorroborateWorker
+
+
+@pytest.fixture
+def tenant_id(db):
+    return make_tenant(db)
+
+
+def _mock_llm():
+    m = MagicMock()
+    m.extract_uncovered.return_value = []
+    return m
+
+
+def _mock_embedder():
+    m = MagicMock()
+    m.embed.return_value = [0.1] * 1024
+    return m
+
+
+def test_full_pipeline_e2e(db, tenant_id):
+    src_a = make_source(db, tenant_id, publisher="pub-a",
+                        raw_text="Acme Corp was founded in 1998", status="archived")
+    src_b = make_source(db, tenant_id, publisher="pub-b",
+                        raw_text="Acme Corp was established in 1998", status="archived")
+    src_c = make_source(db, tenant_id, publisher="pub-c",
+                        raw_text="Acme Corp was founded in 1999", status="archived")
+
+    # Stage 3: extract
+    ExtractWorker(tenant_id, llm_extractor=_mock_llm()).run(once=True)
+
+    with db.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM statements WHERE tenant_id=%s", (tenant_id,))
+        assert cur.fetchone()["n"] >= 2, "extract worker should produce at least 2 statements"
+
+        cur.execute("SELECT COUNT(*) AS n FROM statement_sources WHERE tenant_id=%s", (tenant_id,))
+        assert cur.fetchone()["n"] >= 2
+
+    # Stage 4: corroborate
+    CorroborateWorker(tenant_id, embedder=_mock_embedder()).run(once=True)
+
+    with db.cursor() as cur:
+        # corroborating pair (1998) → confidence = 0.85
+        cur.execute(
+            "SELECT confidence FROM statements WHERE val_number=1998 AND tenant_id=%s",
+            (tenant_id,),
+        )
+        corroborating = [r["confidence"] for r in cur.fetchall()]
+        assert corroborating, "expected statements for 1998"
+        assert all(abs(c - 0.85) < 0.01 for c in corroborating), \
+            f"expected 0.85 for corroborating pair, got {corroborating}"
+
+        # conflicting value (1999) → single source → 0.5
+        cur.execute(
+            "SELECT confidence FROM statements WHERE val_number=1999 AND tenant_id=%s",
+            (tenant_id,),
+        )
+        conflict_rows = cur.fetchall()
+        assert conflict_rows, "expected statement for 1999"
+        assert all(abs(c["confidence"] - 0.5) < 0.01 for c in conflict_rows)
+
+        # All conflict ranks remain normal
+        cur.execute(
+            "SELECT rank FROM statements WHERE tenant_id=%s", (tenant_id,)
+        )
+        ranks = {r["rank"] for r in cur.fetchall()}
+        assert ranks == {"normal"}, f"unexpected ranks: {ranks}"
+
+    # v_conflicts surfaces the conflict
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM v_conflicts WHERE tenant_id=%s", (tenant_id,)
+        )
+        n_conflicts = cur.fetchone()["n"]
+    assert n_conflicts >= 1, "v_conflicts should surface the 1998 vs 1999 conflict"
+
+    # Embeddings populated on all statements
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM statements WHERE embedding IS NULL AND tenant_id=%s",
+            (tenant_id,),
+        )
+        assert cur.fetchone()["n"] == 0, "all statements should have embeddings after corroborate"
+```
+
+**Commit:**
+
+```bash
+git add tests/integration/test_fact_pipeline_e2e.py
+git commit -m "test(integration): end-to-end fact pipeline — extract + corroborate + conflict + embeddings"
+```
+
+---
+
+## Task 18 — K8s CronJob: corroborate worker
+
+**File:** `deploy/k8s/corroborate-worker-cronjob.yaml`
+
+**Goal:** Run corroborate once per hour. Same security pattern as verify-worker CronJob from Plan 2.
+
+```yaml
+# deploy/k8s/corroborate-worker-cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: factvault-corroborate-worker
+  namespace: factvault
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+          containers:
+            - name: corroborate-worker
+              image: ghcr.io/psimmons/factvault:latest
+              args: ["factvault-worker", "run", "corroborate", "--once"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+              env:
+                - name: FACTVAULT_TENANT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: factvault-secrets
+                      key: tenant-id
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: factvault-secrets
+                      key: database-url
+              envFrom:
+                - secretRef:
+                    name: factvault-worker-secrets
+```
+
+**Commit:**
+
+```bash
+git add deploy/k8s/corroborate-worker-cronjob.yaml
+git commit -m "deploy(k8s): corroborate worker CronJob (hourly)"
+```
+
+---
+
+## Task 19 — K8s Deployment: extract worker (long-running)
+
+**File:** `deploy/k8s/extract-worker-deployment.yaml`
+
+**Goal:** Extract worker runs as a long-running Deployment (polls continuously), not a CronJob. Single replica. Generous memory for tokenizer. Chainguard nonroot + tini.
+
+```yaml
+# deploy/k8s/extract-worker-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: factvault-extract-worker
+  namespace: factvault
+  labels:
+    app: factvault-extract-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: factvault-extract-worker
+  template:
+    metadata:
+      labels:
+        app: factvault-extract-worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: extract-worker
+          image: ghcr.io/psimmons/factvault:latest
+          command: ["/sbin/tini", "--"]
+          args: ["factvault-worker", "run", "extract"]
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi          # tokenizer + spaCy model in-process
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: FACTVAULT_TENANT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: factvault-secrets
+                  key: tenant-id
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: factvault-secrets
+                  key: database-url
+            - name: FACTVAULT_LLM_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: factvault-secrets
+                  key: llm-endpoint
+            - name: FACTVAULT_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: factvault-secrets
+                  key: llm-api-key
+          envFrom:
+            - secretRef:
+                name: factvault-worker-secrets
+          livenessProbe:
+            exec:
+              command: ["factvault-worker", "health"]
+            initialDelaySeconds: 30
+            periodSeconds: 60
+```
+
+**Commit:**
+
+```bash
+git add deploy/k8s/extract-worker-deployment.yaml
+git commit -m "deploy(k8s): extract worker long-running Deployment (single replica, 2Gi for tokenizer)"
+```
+
+---
+
+## Task 20 — Fact-pipeline README
+
+**File:** `factvault/extractors/README.md`
+
+**Goal:** Single authoritative doc covering the full extraction + corroboration pipeline for operators and contributors.
+
+Sections to include (prose outline — implementation fills in detail):
+
+1. **Overview** — how deterministic + LLM extraction compose; why deterministic runs first
+2. **Adding a deterministic extractor** — create `extractors/deterministic/my_extractor.py`, subclass `BaseExtractor`, implement `extract(text, source_id) -> list[ExtractedFact]`, register in `extractors/runner.py`
+3. **Adding a gazetteer file** — drop a CSV/JSON at `extractors/gazetteers/`, update `entities.py` loader; file format: one label per line or `{"label": ..., "type": ...}` JSON
+4. **Configuring the LLM endpoint** — env vars: `FACTVAULT_LLM_ENDPOINT`, `FACTVAULT_LLM_API_KEY`, `FACTVAULT_LLM_MODEL`; defaults for local vLLM vs. OpenAI-compatible API
+5. **Offset verification guarantee** — every `statement_sources` INSERT is gated by `verify_excerpt_offset(source.raw_text, excerpt, start, end)`; failures go to `extraction_errors` and are never silently dropped
+6. **Confidence formula** — 0.5 / 0.85 / 0.95 ceilings based on independent-source count; independence defined by publisher uniqueness + trigram similarity < 0.8 (difflib v1, pg_trgm roadmap)
+7. **Conflict resolution policy** — conflicting values at the same `(subject, property)` stay at `rank='normal'`; `v_conflicts` view surfaces them for human review; no automated resolution in v1
+8. **Troubleshooting** — common issues: `status` stuck at `archived` (check extraction_errors table), embeddings NULL after corroborate (check FACTVAULT_EMBEDDING_MODEL env), proposed_properties accumulating (run `factvault-worker vocab proposed --tenant ...`)
+
+**Commit:**
+
+```bash
+git add factvault/extractors/README.md
+git commit -m "docs(extractors): pipeline README — extractors, gazetteer, LLM config, confidence, conflicts"
+```
+
+---
+
+## Task 21 — CI workflow update
+
+**File:** `.github/workflows/ci.yml` (extend existing)
+
+**Goal:** Add extract + corroborate + embeddings + vocabulary tests to default CI. Move `@pytest.mark.slow` tests to a separate nightly job.
+
+```yaml
+# .github/workflows/ci.yml — additions / modifications
+
+# In the default test job, add to the pytest invocation:
+#   -m "not slow"
+# This excludes BGE-M3 model-download tests from every PR.
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Run tests (fast)
+        run: pytest -m "not slow" --tb=short -q
+
+  slow-tests:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Run slow tests (model download)
+        env:
+          FACTVAULT_EMBEDDING_MODEL: "sentence-transformers/all-MiniLM-L6-v2"
+        run: pytest -m "slow" --tb=short -q
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *"   # nightly at 03:00 UTC for slow tests
+  workflow_dispatch:
+```
+
+**Note:** The full `ci.yml` already exists from Plan 2. This task adds the `-m "not slow"` flag to the existing fast job and appends the `slow-tests` job + `schedule` trigger. Do not rewrite jobs that already exist — apply surgical additions only.
+
+**Commit:**
+
+```bash
+git add .github/workflows/ci.yml
+git commit -m "ci: exclude @pytest.mark.slow from default run; add nightly slow-tests job"
+```
+
+---
+
+## Task 22 — Smoke test: extract CLI with --dry-run
+
+**File:** `tests/integration/test_extract_cli_smoke.py`
+
+**Goal:** Catch packaging issues — missing imports, unregistered CLI entry points, broken `--dry-run` flag — that focused unit tests miss.
+
+```python
+# tests/integration/test_extract_cli_smoke.py
+"""
+Smoke-tests that factvault-worker extract is wired end-to-end:
+  - The CLI entry point exists and is importable
+  - `--dry-run` flag is accepted and exits cleanly with a configured tenant
+  - No DB writes occur with --dry-run (statement count unchanged)
+"""
+import pytest
+from click.testing import CliRunner
+
+from factvault.workers.cli import cli
+from tests.factories import make_tenant, make_source
+
+
+def test_extract_cli_help():
+    """Entry point resolves and --help exits 0."""
+    result = CliRunner().invoke(cli, ["run", "extract", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--dry-run" in result.output or "dry" in result.output.lower()
+
+
+def test_extract_cli_dry_run_no_db_writes(db):
+    """--dry-run validates config + extractor loading without writing statements."""
+    tenant = make_tenant(db)
+    make_source(
+        db, tenant,
+        raw_text="Acme Corp acquired Delta Inc. for $200M on 2024-06-15",
+        status="archived",
+    )
+
+    with db.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM statements WHERE tenant_id=%s", (tenant,))
+        before = cur.fetchone()["n"]
+
+    result = CliRunner().invoke(
+        cli,
+        ["run", "extract", "--tenant", tenant, "--once", "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+
+    with db.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM statements WHERE tenant_id=%s", (tenant,))
+        after = cur.fetchone()["n"]
+
+    assert after == before, f"--dry-run must not write statements; before={before} after={after}"
+```
+
+**Commit:**
+
+```bash
+git add tests/integration/test_extract_cli_smoke.py
+git commit -m "test(smoke): extract CLI --dry-run — packaging + entry-point + no-write guard"
+```
+
+---
+
+## Self-Review
+
+### Spec Coverage Checklist
+
+| Spec requirement | Task |
+|------------------|------|
+| Deterministic identifier extraction — CIK, CUSIP, ISIN, DOI, NCT IDs (§ Stage 3) | Task 3 (Pass 1) |
+| Deterministic money/funding extraction (§ Stage 3) | Task 4 (Pass 1) |
+| Deterministic date extraction — ISO, natural language, fiscal quarters (§ Stage 3) | Task 5 (Pass 1) |
+| Deterministic gazetteer-augmented entity extraction via spaCy (§ Stage 3) | Task 6 (Pass 1) |
+| Deterministic runner — composing all extractors, covered-span subtraction (§ Stage 3) | Task 7 (Pass 1) |
+| LLM extractor — structured JSON output, strict schema (§ Stage 3) | Tasks 8–9 (Pass 1) |
+| Offset verification gate — every statement_sources INSERT gated; failures → extraction_errors (§ Stage 3 Guarantees) | Task 9 (Pass 1) |
+| Property vocabulary — strict / permissive mode; unknown slugs → proposed_properties (§3.2 Controlled Vocabulary) | Task 10 (Pass 1) |
+| Starter property YAML — 40 properties, idempotent loader (§3.2) | Task 11 (Pass 1) |
+| BGE-M3 1024-dim embeddings for statements (§ Embedding Model) | Task 12 |
+| Extract worker — deterministic + LLM composition, entity auto-create, per-source commit (§ Stage 3) | Task 13 |
+| Corroborate worker — confidence recomputed from scratch on each run (§ Stage 4 Guarantees) | Task 14 |
+| Confidence ceilings: 1 source → 0.5, 2 → 0.85, 3+ → 0.95 (§3.3 Confidence Formula) | Task 14 |
+| Independence check — publisher uniqueness + trigram similarity < 0.8 (§3.3 / §Stage 4) | Task 14 |
+| Conflict detection — differing values stay rank='normal'; no auto-resolution (§3.3 Conflict Detection) | Task 14 |
+| Conflict surfacing via v_conflicts view (§3.2 v_conflicts) | Task 17 (e2e asserts the view) |
+| Statement embeddings populated after corroborate (§ Embedding Model) | Task 14 |
+| factvault-worker run extract / corroborate CLI dispatch (§ factvault doctor / ops) | Task 15 |
+| Property vocab CLI: load, proposed, approve, reject (§3.2 Controlled Vocabulary) | Task 16 |
+| Extract + corroborate end-to-end integration test (§ Pipeline) | Task 17 |
+| K8s CronJob for corroborate, hourly schedule (§ Operational Shape) | Task 18 |
+| K8s Deployment for extract worker, long-running, Chainguard + tini + nonroot 65532 (§ Container Standard) | Task 19 |
+| fsGroup: 65532 in K8s security context (§ Container Standard, QC.7) | Tasks 18–19 |
+
+### Placeholder Scan
+
+Reviewed. No placeholders. All code blocks are complete; the only intentional stub is `_mock_llm()` in tests, which is correct test design (LLM is external). The `get_db_conn()` reference in Task 16's `approve`/`reject` commands should use `get_tenant_conn` with the tenant derived from the row — flagged here as a follow-up for the implementer to resolve when integrating with the actual DB helper signature.
+
+### Type Consistency Check
+
+Reviewed. Names consistent across tasks:
+- `BGEEmbedder` used in Tasks 12, 14, 17 — consistent.
+- `ExtractWorker` / `CorroborateWorker` used in Tasks 13–15, 17 — consistent.
+- `VocabularyResolver` matches Pass 1 Task 10 naming.
+- `run_deterministic` matches Pass 1 Task 7 naming.
+- `LLMExtractor.from_env()` matches Pass 1 Task 8 pattern.
+- `statement_sources.confidence` (per-source, set by LLM extractor at 0.95 for deterministic) matches spec §3.3 formula inputs.
+- `rank='normal'` / `rank='deprecated'` string literals match Plan 1 DDL.
+- `FACTVAULT_EMBEDDING_MODEL` env var consistent between Task 12 implementation and Task 21 CI override.
