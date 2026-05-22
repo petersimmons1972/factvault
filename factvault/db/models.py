@@ -139,3 +139,44 @@ class Qualifier(Base):
     val_entity: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("entities.id"), nullable=True
     )
+
+
+class Relation(Base):
+    __tablename__ = "relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "source_id", "target_id", "type",
+            name="uq_relations_tenant_source_target_type",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="chk_relations_confidence",
+        ),
+        Index("idx_relations_source", "tenant_id", "source_id"),
+        Index("idx_relations_target", "tenant_id", "target_id"),
+        Index("idx_relations_type", "tenant_id", "type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("entities.id"), nullable=False
+    )
+    target_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("entities.id"), nullable=False
+    )
+    type: Mapped[str] = mapped_column(nullable=False)
+    weight: Mapped[Optional[Decimal]] = mapped_column(Numeric(), nullable=True)
+    confidence: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 3), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(nullable=True)
+    meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
+    statement_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("statements.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
