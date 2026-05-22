@@ -3,7 +3,6 @@ Session-scoped testcontainers fixture that builds the local docker/postgres/Dock
 so pgvector is available. Function-scoped fixture wraps each test in a rolled-back
 transaction, keeping the test database clean without truncating tables.
 """
-import os
 import pytest
 from testcontainers.postgres import PostgresContainer
 from sqlalchemy import create_engine, text, Connection, Engine
@@ -46,12 +45,15 @@ def migrated_engine(postgres_engine: Engine) -> Engine:
     # render_as_string(hide_password=False) is required — str(engine.url) masks
     # the password as "***", which would cause auth failure in alembic's env.py.
     db_url = postgres_engine.url.render_as_string(hide_password=False)
-    # Set env var so env.py's os.environ branch fires and overrides alembic.ini
-    os.environ["FACTVAULT_DATABASE_URL"] = db_url
 
     alembic_cfg = Config("alembic.ini")
-    command.upgrade(alembic_cfg, "head")
-    return postgres_engine
+
+    # Ensure FACTVAULT_DATABASE_URL is set for env.py during migration,
+    # then restore the original value (or unset) at session end.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("FACTVAULT_DATABASE_URL", db_url)
+        command.upgrade(alembic_cfg, "head")
+        yield postgres_engine
 
 
 @pytest.fixture()
