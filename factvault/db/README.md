@@ -108,6 +108,15 @@ The `conn` fixture rolls back between tests — no manual cleanup needed.
 > fixture instead (which connects as a non-superuser `app_user` role). See
 > `tests/db/test_rls_isolation.py` for examples.
 
+## Migration style conventions
+
+Two migration styles appear in this codebase, both correct:
+
+- **SQLAlchemy form** (`op.create_table` + `sa.Column(..., TIMESTAMP(timezone=True))`) — used in 0002–0006, 0010, 0011, 0012, 0013. Preferred for new migrations; supports autogenerate via Alembic.
+- **Raw SQL form** (`op.execute("CREATE TABLE ... TIMESTAMPTZ ...")`) — used in 0007, 0008, 0009 where we needed Postgres-specific features (triggers, complex CHECK constraints). Both `TIMESTAMP WITH TIME ZONE` and `TIMESTAMPTZ` produce identical column types; the form follows the migration style.
+
+When adding a new migration: prefer the SQLAlchemy form unless you need Postgres-only DDL (triggers, partial unique indexes, materialised views, etc.).
+
 ## What This Plan Covers
 
 **Plan 1 — Schema and Migrations** (this plan):
