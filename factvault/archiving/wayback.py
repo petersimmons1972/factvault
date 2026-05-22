@@ -2,10 +2,15 @@
 Internet Archive Save Page Now (SPN2) client.
 
 submit_url(url) -> str | None
+
+Rate limiting: a per-process token bucket enforces max 15 req/min (SPN2 documented
+limit). Configurable via FACTVAULT_WAYBACK_RATE_LIMIT_PER_MIN env var.
 """
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import time
 
 import httpx
@@ -14,6 +19,31 @@ logger = logging.getLogger(__name__)
 
 _SPN_ENDPOINT = "https://web.archive.org/save"
 _WAYBACK_REPLAY_BASE = "https://web.archive.org/web/{timestamp}/{url}"
+
+
+class _RateLimiter:
+    """Simple token-bucket rate limiter (no external deps)."""
+
+    def __init__(self, max_per_minute: int = 15) -> None:
+        self._max = max_per_minute
+        self._interval = 60.0 / max_per_minute  # seconds between requests
+        self._next_allowed: float = 0.0
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        """Block until the next request slot is available."""
+        with self._lock:
+            now = time.monotonic()
+            if now < self._next_allowed:
+                sleep_for = self._next_allowed - now
+                time.sleep(sleep_for)
+                now = self._next_allowed
+            self._next_allowed = max(self._next_allowed, now) + self._interval
+
+
+_LIMITER = _RateLimiter(
+    max_per_minute=int(os.environ.get("FACTVAULT_WAYBACK_RATE_LIMIT_PER_MIN", "15"))
+)
 
 
 def submit_url(
@@ -27,6 +57,7 @@ def submit_url(
 
     Returns the Wayback replay URL on success or None on final failure.
     """
+    _LIMITER.acquire()
     for attempt in range(max_retries):
         if attempt > 0 and base_delay > 0.0:
             delay = base_delay * (2 ** (attempt - 1))
