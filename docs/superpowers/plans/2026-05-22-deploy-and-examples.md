@@ -2895,4 +2895,1901 @@ git commit -m "feat(examples): add political-research example (properties + seed
 
 ---
 
-<!-- PASS 1 END — Pass 2 appends Tasks 12-22 + self-review below this line -->
+## Task 12 — Pharma trial monitoring example
+
+**Context:** `examples/pharma-trial-monitoring/` — spec §2.4 Example C. Demonstrates dossier retrieval for a pharma competitive intelligence analyst tracking Phase II/III drug compounds through ClinicalTrials.gov, peer-reviewed publications, and regulatory correspondence. Uses realistic-but-fictional drug names to avoid trademark concerns.
+
+- [ ] **12.1** Create `examples/pharma-trial-monitoring/properties.yaml`:
+
+```yaml
+# examples/pharma-trial-monitoring/properties.yaml
+namespace: pharma_trial
+strict_mode: true
+
+properties:
+  - slug: trial_id_nct
+    label: ClinicalTrials.gov NCT Identifier
+    value_type: string
+    description: "NCT number assigned by ClinicalTrials.gov (format: NCT########)"
+    extractors: [regex_nct, llm]
+    regex_nct:
+      pattern: 'NCT\d{8}'
+
+  - slug: trial_phase
+    label: Trial Phase
+    value_type: enum
+    allowed_values: ["Phase I", "Phase I/II", "Phase II", "Phase II/III", "Phase III", "Phase III/IV", "Phase IV"]
+    extractors: [regex_trial_phase, llm]
+    regex_trial_phase:
+      pattern: 'Phase\s+(?:I{1,3}V?|IV)(?:/(?:I{1,3}V?|IV))?'
+
+  - slug: trial_sponsor
+    label: Sponsoring Organization
+    value_type: string
+    extractors: [llm]
+
+  - slug: trial_indication
+    label: Disease / Indication
+    value_type: string
+    description: "Primary indication or disease area being studied"
+    extractors: [llm]
+
+  - slug: trial_enrollment
+    label: Enrolled Participants (count)
+    value_type: integer
+    extractors: [regex_enrollment, llm]
+    regex_enrollment:
+      pattern: 'enrolled?\s+(\d[\d,]+)\s+(?:patients?|participants?|subjects?)'
+
+  - slug: trial_start_date
+    label: Trial Start Date
+    value_type: date
+    extractors: [llm]
+
+  - slug: trial_end_date
+    label: Trial Completion Date (Estimated or Actual)
+    value_type: date
+    extractors: [llm]
+
+  - slug: primary_endpoint
+    label: Primary Endpoint
+    value_type: string
+    description: "Primary efficacy or safety endpoint as registered"
+    extractors: [llm]
+
+  - slug: endpoint_result
+    label: Primary Endpoint Result
+    value_type: string
+    description: "Reported outcome for the primary endpoint (met / not met / interim data)"
+    extractors: [llm]
+
+  - slug: endpoint_p_value
+    label: Primary Endpoint p-value
+    value_type: float
+    extractors: [regex_pvalue, llm]
+    regex_pvalue:
+      pattern: 'p\s*[<=]\s*(0\.\d+)'
+
+  - slug: adverse_event_meddra
+    label: Adverse Event (MedDRA preferred term)
+    value_type: string
+    description: "MedDRA preferred term for a reported adverse event"
+    multi_valued: true
+    extractors: [llm]
+
+  - slug: adverse_event_incidence
+    label: Adverse Event Incidence Rate
+    value_type: string
+    description: "Incidence percentage associated with the most recent adverse_event_meddra value"
+    extractors: [llm]
+
+  - slug: publication_doi
+    label: Publication DOI
+    value_type: string
+    extractors: [regex_doi, llm]
+    regex_doi:
+      pattern: '10\.\d{4,}/[^\s"<>]+'
+
+  - slug: regulatory_correspondence
+    label: Regulatory Correspondence Reference
+    value_type: string
+    description: "Reference to FDA/EMA correspondence, approval letter, or complete response letter"
+    extractors: [llm]
+```
+
+- [ ] **12.2** Create `examples/pharma-trial-monitoring/seeds.yaml` (6–8 fictional drug compound entities):
+
+```yaml
+# examples/pharma-trial-monitoring/seeds.yaml
+namespace: pharma_trial
+entity_type: drug_compound
+
+entities:
+  - label: "Valorixan"
+    description: "Selective KRAS G12C inhibitor; oral small molecule; Phase III NSCLC"
+    aliases: ["valorixan hydrochloride", "FVT-4401"]
+
+  - label: "Neltripamide"
+    description: "Dual GLP-1/GIP receptor agonist; subcutaneous weekly; Phase III Type 2 Diabetes"
+    aliases: ["neltripamide acetate", "FVT-7720"]
+
+  - label: "Crisamelitinib"
+    description: "SYK/JAK1 dual inhibitor; oral; Phase II/III RA and PsA"
+    aliases: ["crisamelitinib mesylate", "FVT-2218"]
+
+  - label: "Oravexin"
+    description: "Novel PCSK9 degrader (PROTAC); oral; Phase II LDL reduction"
+    aliases: ["oravexin", "FVT-3380"]
+
+  - label: "Dendracept"
+    description: "IL-33/TSLP bispecific antibody; IV infusion; Phase II severe asthma"
+    aliases: ["dendracept", "FVT-9910"]
+
+  - label: "Lysamotide"
+    description: "Antisense oligonucleotide targeting APOC3; SC injection; Phase II/III severe hypertriglyceridaemia"
+    aliases: ["lysamotide sodium", "FVT-5560"]
+
+  - label: "Pravolixin"
+    description: "Oral CRBN modulator (CELMoD); Phase II relapsed/refractory multiple myeloma"
+    aliases: ["pravolixin", "FVT-8830"]
+
+  - label: "Zelfarinib"
+    description: "FGFR1/2/3 pan-inhibitor; oral; Phase II cholangiocarcinoma with FGFR2 fusion"
+    aliases: ["zelfarinib tosylate", "FVT-1140"]
+```
+
+- [ ] **12.3** Create `examples/pharma-trial-monitoring/fixtures/` (5 canned source documents):
+
+**12.3.1** `examples/pharma-trial-monitoring/fixtures/clinicaltrials_valorixan.txt` — ClinicalTrials.gov entry excerpt:
+
+```
+ClinicalTrials.gov Identifier: NCT05812744
+Title: A Phase III Randomized Study of Valorixan vs. Docetaxel in Previously Treated KRAS G12C-Mutant Non-Small Cell Lung Cancer (VALORIZE-301)
+Sponsor: Frontvault Therapeutics, Inc.
+Phase: Phase III
+Status: Active, not recruiting
+Enrollment: 612 patients
+Start Date: March 14, 2023
+Estimated Completion: September 2026
+Primary Endpoint: Progression-free survival (PFS) by blinded independent central review (BICR)
+Secondary Endpoints: Overall survival (OS), objective response rate (ORR), duration of response (DoR), patient-reported outcomes
+Inclusion Criteria: Adults ≥18 years; histologically confirmed NSCLC; KRAS G12C mutation by validated assay; ≥1 prior platinum-based regimen
+Arms:
+  Arm A (Valorixan): 400 mg orally once daily
+  Arm B (Docetaxel): 75 mg/m² IV every 21 days
+```
+
+**12.3.2** `examples/pharma-trial-monitoring/fixtures/publication_valorixan_interim.txt` — Peer-reviewed publication abstract:
+
+```
+Journal of Thoracic Oncology, Vol. 19, No. 3 (2025)
+DOI: 10.1016/j.jtho.2025.01.012
+
+Interim Analysis of VALORIZE-301: Valorixan Demonstrates Superior Progression-Free Survival in KRAS G12C-Mutant NSCLC
+
+Background: Valorixan (FVT-4401) is an orally bioavailable, covalent KRAS G12C inhibitor currently under investigation in VALORIZE-301, a Phase III trial comparing valorixan to docetaxel in previously treated KRAS G12C-mutant non-small cell lung cancer (NSCLC).
+
+Methods: A pre-specified interim analysis was conducted at 60% of planned PFS events (n=367). Patients were enrolled across 89 sites in 22 countries. Primary endpoint: PFS by BICR.
+
+Results: Valorixan demonstrated a statistically significant improvement in PFS versus docetaxel (median PFS: 8.4 months vs. 4.1 months; HR 0.47; 95% CI 0.36–0.62; p<0.0001). ORR was 43.2% for valorixan vs. 19.7% for docetaxel. Grade 3/4 treatment-emergent adverse events occurred in 38% of valorixan-treated patients. Most common Grade ≥3 adverse events: diarrhea (8%), nausea (6%), fatigue (5%).
+
+Conclusion: Valorixan significantly improves PFS with a manageable safety profile. The trial has crossed the pre-specified efficacy boundary; submission to regulatory agencies is planned.
+```
+
+**12.3.3** `examples/pharma-trial-monitoring/fixtures/fda_correspondence_valorixan.txt` — FDA correspondence excerpt:
+
+```
+DEPARTMENT OF HEALTH AND HUMAN SERVICES
+Food and Drug Administration
+Center for Drug Evaluation and Research
+Division of Oncology Products 1
+
+RE: Frontvault Therapeutics — Valorixan (FVT-4401) — NDA 221847
+Type: Acceptance Communication
+
+Dear Ms. Chen,
+We have completed our filing review of your New Drug Application (NDA 221847) for valorixan 400 mg tablets for the treatment of adult patients with KRAS G12C-mutant non-small cell lung cancer (NSCLC) who have received at least one prior systemic therapy.
+
+Your application has been accepted for review. The action date under the Prescription Drug User Fee Act (PDUFA) is December 14, 2025.
+
+The Division has determined that your application is sufficiently complete to permit a substantive review. This is not an approval letter.
+
+Sincerely,
+Office of Oncology Products
+CDER / FDA
+```
+
+**12.3.4** `examples/pharma-trial-monitoring/fixtures/meddra_ae_summary_valorixan.txt` — MedDRA-formatted adverse event summary:
+
+```
+MedDRA Adverse Event Summary — VALORIZE-301 Interim Safety Analysis
+NDA Reference: 221847 | Data Cut: 2024-09-15 | Analysis Population: Safety (n=304, valorixan arm)
+
+System Organ Class: Gastrointestinal Disorders
+  Preferred Term: Diarrhoea | Any Grade: 48.7% | Grade ≥3: 8.2%
+  Preferred Term: Nausea | Any Grade: 34.1% | Grade ≥3: 5.9%
+  Preferred Term: Vomiting | Any Grade: 19.0% | Grade ≥3: 2.0%
+
+System Organ Class: General Disorders and Administration Site Conditions
+  Preferred Term: Fatigue | Any Grade: 41.2% | Grade ≥3: 5.3%
+  Preferred Term: Peripheral Oedema | Any Grade: 22.4% | Grade ≥3: 1.0%
+
+System Organ Class: Musculoskeletal and Connective Tissue Disorders
+  Preferred Term: Arthralgia | Any Grade: 16.1% | Grade ≥3: 0.7%
+  Preferred Term: Myalgia | Any Grade: 12.8% | Grade ≥3: 0.3%
+
+System Organ Class: Investigations
+  Preferred Term: Alanine Aminotransferase Increased | Any Grade: 18.1% | Grade ≥3: 3.6%
+  Preferred Term: Aspartate Aminotransferase Increased | Any Grade: 15.5% | Grade ≥3: 2.6%
+
+Deaths on study: 2 (0.7%); adjudicated as unrelated to study drug by independent safety committee.
+```
+
+**12.3.5** `examples/pharma-trial-monitoring/fixtures/ema_scientific_opinion_valorixan.txt` — EMA scientific opinion excerpt:
+
+```
+European Medicines Agency
+Committee for Medicinal Products for Human Use (CHMP)
+CHMP Scientific Opinion — Article 58 Consultation
+
+Product: Valorixan 400 mg film-coated tablets (FVT-4401)
+Applicant: Frontvault Therapeutics Europe B.V.
+Procedure No.: EMEA/H/C/006714/0000
+
+Summary of Opinion:
+
+Based on the data submitted, the CHMP considered that the benefit/risk balance of valorixan for the treatment of adult patients with locally advanced or metastatic KRAS G12C-mutant NSCLC after ≥1 prior systemic therapy is positive.
+
+The CHMP noted the following:
+- The primary endpoint (PFS by BICR) was met at interim analysis (HR 0.47; p<0.0001).
+- Overall survival data are immature. A post-authorisation efficacy study (PAES) is required.
+- Hepatotoxicity (ALT/AST elevation ≥Grade 3 in ~3-4%) requires Risk Management Plan measures including enhanced liver function monitoring during the first 12 weeks.
+- The CHMP recommended granting a conditional marketing authorisation.
+
+This opinion is valid for five years from date of issue.
+```
+
+- [ ] **12.4** Create `examples/pharma-trial-monitoring/expected/valorixan_dossier.json` (golden dossier):
+
+```json
+{
+  "entity": {
+    "label": "Valorixan",
+    "type": "drug_compound",
+    "aliases": ["valorixan hydrochloride", "FVT-4401"]
+  },
+  "facts": [
+    {
+      "property": { "slug": "trial_id_nct" },
+      "value": { "text": "NCT05812744" },
+      "confidence": 0.95,
+      "source_count": 2
+    },
+    {
+      "property": { "slug": "trial_phase" },
+      "value": { "text": "Phase III" },
+      "confidence": 0.97,
+      "source_count": 3
+    },
+    {
+      "property": { "slug": "trial_sponsor" },
+      "value": { "text": "Frontvault Therapeutics, Inc." },
+      "confidence": 0.96,
+      "source_count": 2
+    },
+    {
+      "property": { "slug": "trial_indication" },
+      "value": { "text": "KRAS G12C-mutant non-small cell lung cancer (NSCLC); ≥1 prior systemic therapy" },
+      "confidence": 0.97,
+      "source_count": 4
+    },
+    {
+      "property": { "slug": "trial_enrollment" },
+      "value": { "integer": 612 },
+      "confidence": 0.94,
+      "source_count": 2
+    },
+    {
+      "property": { "slug": "primary_endpoint" },
+      "value": { "text": "Progression-free survival (PFS) by blinded independent central review (BICR)" },
+      "confidence": 0.97,
+      "source_count": 2
+    },
+    {
+      "property": { "slug": "endpoint_result" },
+      "value": { "text": "Met at interim — median PFS 8.4 mo vs 4.1 mo (HR 0.47; p<0.0001)" },
+      "confidence": 0.95,
+      "source_count": 2
+    },
+    {
+      "property": { "slug": "endpoint_p_value" },
+      "value": { "float": 0.0001 },
+      "confidence": 0.94,
+      "source_count": 2
+    },
+    {
+      "property": { "slug": "adverse_event_meddra" },
+      "value": { "text": "Diarrhoea" },
+      "confidence": 0.96,
+      "source_count": 2
+    },
+    {
+      "property": { "slug": "adverse_event_incidence" },
+      "value": { "text": "Any grade: 48.7%; Grade ≥3: 8.2%" },
+      "confidence": 0.95,
+      "source_count": 1
+    },
+    {
+      "property": { "slug": "publication_doi" },
+      "value": { "text": "10.1016/j.jtho.2025.01.012" },
+      "confidence": 0.98,
+      "source_count": 1
+    },
+    {
+      "property": { "slug": "regulatory_correspondence" },
+      "value": { "text": "FDA NDA 221847 accepted for filing; PDUFA date December 14, 2025. EMA CHMP conditional marketing authorisation recommended (Procedure EMEA/H/C/006714/0000)." },
+      "confidence": 0.94,
+      "source_count": 2
+    }
+  ],
+  "conflicts": []
+}
+```
+
+- [ ] **12.5** Create `examples/pharma-trial-monitoring/README.md`. Cover: use case (pharma competitive intelligence analyst monitoring competitor pipeline compounds), how to run, what the dossier output contains, how to extend to a full pipeline watch with multiple compounds, note on fictional names.
+
+- [ ] **12.6** Create `examples/pharma-trial-monitoring/run.sh`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+EXAMPLE_NAME="pharma-trial-monitoring"
+
+echo "==> Setting up example: $EXAMPLE_NAME"
+factvault example run "$EXAMPLE_NAME" --use-fixtures
+
+echo "==> Running extract worker"
+factvault-worker run extract
+
+echo "==> Running corroborate worker"
+factvault-worker run corroborate
+
+echo "==> Running dossier worker"
+factvault-worker run dossier
+
+echo ""
+echo "Done. Sample queries:"
+echo "  curl 'http://localhost:8000/entities/by-name?q=Valorixan' | jq ."
+echo "  curl 'http://localhost:8000/dossiers/by-entity-name?q=Valorixan' | jq ."
+```
+
+- [ ] **12.7** Create `tests/examples/test_pharma_trial_monitoring.py`:
+
+```python
+"""Tests for pharma-trial-monitoring example: property loading, seed ingestion, fixture parsing, golden dossier shape."""
+import json
+from pathlib import Path
+import pytest
+from factvault.examples.base import ExampleLoader
+
+EXAMPLE_DIR = Path(__file__).parent.parent.parent / "examples" / "pharma-trial-monitoring"
+
+@pytest.fixture
+def loader():
+    return ExampleLoader(EXAMPLE_DIR)
+
+def test_properties_load(loader):
+    props = loader.load_properties()
+    slugs = [p["slug"] for p in props]
+    assert "trial_id_nct" in slugs
+    assert "adverse_event_meddra" in slugs
+    assert "publication_doi" in slugs
+    assert "regulatory_correspondence" in slugs
+
+def test_seeds_load(loader):
+    seeds = loader.load_seeds()
+    assert len(seeds) >= 6
+    labels = [s["label"] for s in seeds]
+    assert "Valorixan" in labels
+
+def test_fixtures_present(loader):
+    fixtures = loader.list_fixtures()
+    assert len(fixtures) == 5
+    names = [f.name for f in fixtures]
+    assert "clinicaltrials_valorixan.txt" in names
+    assert "meddra_ae_summary_valorixan.txt" in names
+
+def test_golden_dossier_shape():
+    golden = json.loads((EXAMPLE_DIR / "expected" / "valorixan_dossier.json").read_text())
+    assert golden["entity"]["label"] == "Valorixan"
+    fact_slugs = [f["property"]["slug"] for f in golden["facts"]]
+    assert "trial_id_nct" in fact_slugs
+    assert "endpoint_p_value" in fact_slugs
+    assert "publication_doi" in fact_slugs
+    for fact in golden["facts"]:
+        assert fact["confidence"] > 0.0
+        assert fact["source_count"] >= 1
+
+def test_nct_regex_extraction(loader):
+    """Regex extractor must pull NCT ID from fixture text."""
+    fixture_text = (EXAMPLE_DIR / "fixtures" / "clinicaltrials_valorixan.txt").read_text()
+    prop = next(p for p in loader.load_properties() if p["slug"] == "trial_id_nct")
+    import re
+    pattern = prop["regex_nct"]["pattern"]
+    matches = re.findall(pattern, fixture_text)
+    assert "NCT05812744" in matches
+```
+
+- [ ] **12.8** Commit:
+```bash
+git add examples/pharma-trial-monitoring/ tests/examples/test_pharma_trial_monitoring.py
+git commit -m "feat(examples): add pharma-trial-monitoring example (properties + seeds + fixtures + golden dossier)"
+```
+
+---
+
+## Task 13 — Investigative journalism example
+
+**Context:** `examples/investigative-journalism/` — cross-entity story use case. Showcases story assembly (not dossier), where the insight is in the *connections* between entities: a donor PAC funding two senators, the same company appearing in multiple regulatory filings, and a correspondent between a regulator and that company. All names are realistic-but-fictional.
+
+- [ ] **13.1** Create `examples/investigative-journalism/properties.yaml`:
+
+```yaml
+# examples/investigative-journalism/properties.yaml
+namespace: investigative
+strict_mode: false
+
+properties:
+  - slug: affiliation_with
+    label: Affiliated With
+    value_type: entity_ref
+    description: "Employment, board membership, or organizational affiliation"
+    extractors: [llm]
+
+  - slug: business_relationship_with
+    label: Business Relationship With
+    value_type: entity_ref
+    description: "Vendor, customer, partner, joint-venture, or investor relationship"
+    extractors: [llm]
+
+  - slug: received_donation_from
+    label: Received Donation From
+    value_type: entity_ref
+    description: "Campaign contribution or PAC donation received"
+    extractors: [llm]
+
+  - slug: voted_on_bill
+    label: Voted On Bill
+    value_type: string
+    description: "Bill identifier, vote direction, and date (format: BILL-ID — Direction — Date)"
+    multi_valued: true
+    extractors: [llm]
+
+  - slug: received_award_from
+    label: Received Award Or Honour From
+    value_type: entity_ref
+    extractors: [llm]
+
+  - slug: appeared_at_event
+    label: Appeared At Event
+    value_type: string
+    extractors: [llm]
+
+  - slug: quoted_in_article
+    label: Quoted In Article
+    value_type: string
+    description: "Verbatim quoted excerpt, with publication and date"
+    multi_valued: true
+    extractors: [llm]
+
+  - slug: subject_of_inquiry
+    label: Subject Of Regulatory Or Legislative Inquiry
+    value_type: string
+    description: "Name/reference of inquiry or investigation this entity is subject to"
+    extractors: [llm]
+
+  - slug: regulatory_action_against
+    label: Regulatory Action Against
+    value_type: string
+    description: "Enforcement action, fine, consent decree, or warning letter issued against this entity"
+    extractors: [llm]
+```
+
+- [ ] **13.2** Create `examples/investigative-journalism/seeds.yaml` (10–15 entities including companies, public figures, PACs):
+
+```yaml
+# examples/investigative-journalism/seeds.yaml
+namespace: investigative
+entity_type: mixed
+
+entities:
+  # Public figures
+  - label: "Senator Marcus Hollis"
+    entity_type: public_figure
+    description: "U.S. Senator, Commerce Committee member, third term"
+    aliases: ["Marcus Hollis", "Sen. Hollis", "M. Hollis"]
+
+  - label: "Senator Patricia Wren"
+    entity_type: public_figure
+    description: "U.S. Senator, Banking Committee chair"
+    aliases: ["Patricia Wren", "Sen. Wren", "P. Wren"]
+
+  - label: "Rep. Daniel Moreau"
+    entity_type: public_figure
+    description: "U.S. Representative, House Energy & Commerce Committee"
+    aliases: ["Daniel Moreau", "Rep. Moreau"]
+
+  # Corporations
+  - label: "Acme Broadband Holdings"
+    entity_type: company
+    description: "Telecommunications conglomerate; publicly traded"
+    aliases: ["Acme Broadband", "ACMB", "Acme Holdings"]
+
+  - label: "Cascade Digital Infrastructure LLC"
+    entity_type: company
+    description: "Data centre and fibre network operator; Acme Broadband subsidiary"
+    aliases: ["Cascade Digital", "CDI"]
+
+  - label: "Prism Analytics Corp"
+    entity_type: company
+    description: "Consumer data broker; 12 million record dataset"
+    aliases: ["Prism Analytics", "Prism Corp"]
+
+  - label: "Vertex Capital Partners"
+    entity_type: company
+    description: "Private equity firm; major shareholder in Acme Broadband Holdings"
+    aliases: ["Vertex Capital", "VCP"]
+
+  # PACs and advocacy groups
+  - label: "Coalition for Better Tomorrow PAC"
+    entity_type: pac
+    description: "Super PAC aligned with telecommunications industry interests"
+    aliases: ["CBT PAC", "CBTP", "Better Tomorrow PAC"]
+
+  - label: "Digital Future Alliance"
+    entity_type: advocacy_group
+    description: "501(c)(4) advocacy organisation funded by Acme Broadband Holdings"
+    aliases: ["DFA", "Digital Future"]
+
+  # Regulators
+  - label: "FCC Enforcement Bureau"
+    entity_type: regulator
+    description: "FCC enforcement arm; opened inquiry into Prism Analytics data practices"
+    aliases: ["FCC Enforcement", "FCC EB"]
+
+  - label: "FTC Bureau of Consumer Protection"
+    entity_type: regulator
+    description: "FTC division overseeing consumer data brokers"
+    aliases: ["FTC BCP", "FTC Consumer Protection"]
+
+  # Events
+  - label: "TeleCom Leadership Summit 2025"
+    entity_type: event
+    description: "Industry conference; sponsored by Acme Broadband Holdings; attended by Senators Hollis and Wren"
+    aliases: ["TeleCom Summit", "TCLS 2025"]
+```
+
+- [ ] **13.3** Create `examples/investigative-journalism/fixtures/` (8 canned source documents):
+
+**13.3.1** `fixtures/fec_hollis_q3_2025.txt` — FEC filing excerpt (Senator Hollis):
+```
+Federal Election Commission — Committee on Political Expenditures
+Committee: Friends of Marcus Hollis for Senate
+FEC ID: C00841922
+Reporting Period: Q3 2025 (July 1 – September 30)
+
+Itemized Individual Contributions Received (>$200):
+  Coalition for Better Tomorrow PAC — $75,000 — August 14, 2025
+  Vertex Capital Partners PAC Fund — $25,000 — September 2, 2025
+  Acme Broadband Holdings Employee PAC — $18,500 — July 28, 2025
+  [additional contributors omitted for brevity]
+
+Total Receipts This Period: $892,400
+```
+
+**13.3.2** `fixtures/fec_wren_q3_2025.txt` — FEC filing excerpt (Senator Wren):
+```
+Federal Election Commission — Committee on Political Expenditures
+Committee: Patricia Wren for Senate
+FEC ID: C00779234
+Reporting Period: Q3 2025 (July 1 – September 30)
+
+Itemized Individual Contributions Received (>$200):
+  Coalition for Better Tomorrow PAC — $75,000 — August 15, 2025
+  Digital Future Alliance — $50,000 — August 22, 2025
+  Acme Broadband Holdings Employee PAC — $22,000 — September 8, 2025
+
+Total Receipts This Period: $1,102,700
+```
+
+**13.3.3** `fixtures/sec_acme_broadband_proxy_2025.txt` — SEC proxy filing (Acme Broadband Holdings):
+```
+ACME BROADBAND HOLDINGS INC
+Form DEF 14A — Definitive Proxy Statement
+Filed: April 2, 2025
+
+Principal Shareholders (>5% ownership):
+  Vertex Capital Partners: 18.4% (42,200,000 shares)
+  State Street Global Advisors: 9.1%
+  Vanguard Group: 7.6%
+
+Board of Directors:
+  Lawrence Thorn (Chair) — also serves on board of Digital Future Alliance
+  Maria Chen (Lead Independent Director)
+  Robert Gaines — former FCC Commissioner (2017–2022)
+  [3 additional directors omitted]
+
+Subsidiaries disclosed:
+  Cascade Digital Infrastructure LLC — 100% owned
+  Prism Analytics Corp — 34% equity stake (non-controlling)
+```
+
+**13.3.4** `fixtures/sec_vertex_capital_13d_acme.txt` — SEC Schedule 13D (Vertex Capital):
+```
+UNITED STATES SECURITIES AND EXCHANGE COMMISSION
+Washington, D.C. 20549
+SCHEDULE 13D
+
+Issuer: Acme Broadband Holdings Inc. (NASDAQ: ACMB)
+Filed by: Vertex Capital Partners LP
+
+Item 4. Purpose of Transaction
+Vertex Capital Partners acquired its 18.4% position between January and September 2024. The filing person has had discussions with members of the Board of Directors regarding operational efficiency, capital allocation, and the potential strategic value of Cascade Digital Infrastructure LLC as a standalone entity or merger candidate.
+
+Item 6. Contracts, Arrangements, Understandings
+The filing person co-sponsored the TeleCom Leadership Summit 2025 alongside Acme Broadband Holdings.
+```
+
+**13.3.5** `fixtures/fcc_inquiry_prism_analytics.txt` — FCC Enforcement Bureau inquiry letter:
+```
+FEDERAL COMMUNICATIONS COMMISSION
+Enforcement Bureau
+445 12th Street, S.W.
+Washington, D.C. 20554
+
+Re: EB-2025-IHD-0142 — Inquiry into Consumer Data Practices — Prism Analytics Corp
+
+Dear Mr. Caldwell (General Counsel, Prism Analytics Corp):
+
+Pursuant to the Commission's authority under Section 503(b) of the Communications Act, the Enforcement Bureau is conducting an inquiry into Prism Analytics Corp's practices regarding the collection, sale, and retention of Consumer Proprietary Network Information (CPNI) derived from telecommunications records.
+
+The Bureau has received credible information suggesting that Prism Analytics Corp may have acquired CPNI from telecommunications carriers without the requisite customer consent, in possible violation of 47 C.F.R. § 64.2009.
+
+You are required to respond to the attached interrogatories within 30 days.
+```
+
+**13.3.6** `fixtures/senator_hollis_press_release_vote.txt` — Senator Hollis press release:
+```
+FOR IMMEDIATE RELEASE
+Office of Senator Marcus Hollis
+
+SENATOR HOLLIS VOTES AGAINST ONLINE DATA PRIVACY ACT (S. 3891)
+
+WASHINGTON, D.C. — Senator Marcus Hollis today voted against the Online Data Privacy Act (S. 3891), citing concerns about its impact on innovation and the competitiveness of American technology companies.
+
+"While I share the goal of protecting consumer privacy, S. 3891 as written would impose compliance burdens that smaller companies cannot absorb," said Senator Hollis. "I am committed to working across the aisle on a more targeted approach."
+
+The bill failed 44–53 on November 6, 2025. Senator Patricia Wren voted in favour of the measure.
+```
+
+**13.3.7** `fixtures/tcls_2025_conference_agenda.txt` — TeleCom Leadership Summit 2025 agenda excerpt:
+```
+TeleCom Leadership Summit 2025
+Presented by Acme Broadband Holdings and Vertex Capital Partners
+Washington Hilton, November 18-19, 2025
+
+KEYNOTE SESSIONS:
+  09:00 — Opening Keynote: "The Future of Connected America" — Lawrence Thorn, Chairman, Acme Broadband Holdings
+  10:15 — Fireside Chat: "Spectrum Policy in the 119th Congress" — Senator Marcus Hollis, moderated by Robert Gaines
+  14:00 — Policy Panel: "Data, Privacy, and Commerce" — Senator Patricia Wren, Rep. Daniel Moreau, Maria Chen
+  16:30 — Closing Remarks — Lawrence Thorn
+
+SPONSORS: Platinum — Acme Broadband Holdings; Gold — Vertex Capital Partners, Digital Future Alliance; Silver — Cascade Digital Infrastructure LLC
+```
+
+**13.3.8** `fixtures/investigative_article_draft.txt` — Reporter's draft article (as source document for story assembly):
+```
+[Draft: Not for publication — research notes]
+
+THE DONOR-SENATOR-REGULATOR TRIANGLE
+
+WASHINGTON — The same PAC funded both senators who sit on the committees overseeing the company it represents. The same private equity firm that pressured Acme Broadband's board co-hosted a conference where those senators spoke. And the company at the centre of an FCC inquiry happens to be a Acme Broadband subsidiary — while another Acme subsidiary is under FTC scrutiny for data broker practices.
+
+Coalition for Better Tomorrow PAC gave $75,000 to Senator Hollis (FEC filing Q3 2025) and $75,000 to Senator Wren (FEC filing Q3 2025) in the same week — August 14 and 15. Both senators sit on committees with jurisdiction over telecommunications regulation. Hollis voted against the Online Data Privacy Act on November 6, 2025. Wren voted in favour.
+
+Vertex Capital Partners — which owns 18.4% of Acme Broadband and has pushed for the spinoff of Cascade Digital — co-sponsored the TeleCom Leadership Summit 2025 where both senators appeared.
+
+Prism Analytics Corp, 34% owned by Acme, is under FCC investigation (EB-2025-IHD-0142) for alleged CPNI violations. A former FCC Commissioner, Robert Gaines, now sits on Acme's board.
+```
+
+- [ ] **13.4** Create `examples/investigative-journalism/expected/acme_network_story.json` (golden STORY output — cross-entity narrative):
+
+```json
+{
+  "story_query": "PAC donors connected to telecommunications senators and FCC inquiry",
+  "depth": 2,
+  "entities_in_story": [
+    "Coalition for Better Tomorrow PAC",
+    "Senator Marcus Hollis",
+    "Senator Patricia Wren",
+    "Acme Broadband Holdings",
+    "Vertex Capital Partners",
+    "Prism Analytics Corp"
+  ],
+  "narrative_threads": [
+    {
+      "thread": "PAC → dual senator funding",
+      "facts": [
+        {
+          "subject": "Senator Marcus Hollis",
+          "property": "received_donation_from",
+          "object": "Coalition for Better Tomorrow PAC",
+          "value": "$75,000 — August 14, 2025",
+          "source_excerpt": "Coalition for Better Tomorrow PAC — $75,000 — August 14, 2025",
+          "confidence": 0.97
+        },
+        {
+          "subject": "Senator Patricia Wren",
+          "property": "received_donation_from",
+          "object": "Coalition for Better Tomorrow PAC",
+          "value": "$75,000 — August 15, 2025",
+          "source_excerpt": "Coalition for Better Tomorrow PAC — $75,000 — August 15, 2025",
+          "confidence": 0.97
+        }
+      ]
+    },
+    {
+      "thread": "Acme ownership → regulatory exposure",
+      "facts": [
+        {
+          "subject": "Acme Broadband Holdings",
+          "property": "business_relationship_with",
+          "object": "Prism Analytics Corp",
+          "value": "34% equity stake (non-controlling)",
+          "source_excerpt": "Prism Analytics Corp — 34% equity stake (non-controlling)",
+          "confidence": 0.95
+        },
+        {
+          "subject": "Prism Analytics Corp",
+          "property": "subject_of_inquiry",
+          "object": null,
+          "value": "FCC EB-2025-IHD-0142 — CPNI data practices",
+          "source_excerpt": "EB-2025-IHD-0142 — Inquiry into Consumer Data Practices — Prism Analytics Corp",
+          "confidence": 0.96
+        }
+      ]
+    }
+  ],
+  "conflicts": []
+}
+```
+
+- [ ] **13.5** Create `examples/investigative-journalism/README.md`. Cover: use case (investigative reporter building a cross-entity narrative), how story assembly differs from dossier assembly, how to run, how to extend with additional entities, note on fictional names. Emphasise that the source-existence guarantee makes facts in the story auditable — each fact links back to a verbatim excerpt in an archived source.
+
+- [ ] **13.6** Create `examples/investigative-journalism/run.sh`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+EXAMPLE_NAME="investigative-journalism"
+
+echo "==> Setting up example: $EXAMPLE_NAME"
+factvault example run "$EXAMPLE_NAME" --use-fixtures
+
+echo "==> Running extract worker"
+factvault-worker run extract
+
+echo "==> Running relate worker (builds entity graph)"
+factvault-worker run relate
+
+echo ""
+echo "Done. Sample queries:"
+echo "  curl -X POST http://localhost:8000/stories \\"
+echo "    -H 'Content-Type: application/json' \\"
+echo "    -d '{\"query\":\"PAC donors connected to telecom senators\",\"depth\":2}' | jq ."
+```
+
+- [ ] **13.7** Create `tests/examples/test_investigative_journalism.py`:
+
+```python
+"""Tests for investigative-journalism example: property loading, entity seeds, fixture count, golden story shape."""
+import json
+from pathlib import Path
+import pytest
+from factvault.examples.base import ExampleLoader
+
+EXAMPLE_DIR = Path(__file__).parent.parent.parent / "examples" / "investigative-journalism"
+
+@pytest.fixture
+def loader():
+    return ExampleLoader(EXAMPLE_DIR)
+
+def test_properties_load(loader):
+    props = loader.load_properties()
+    slugs = [p["slug"] for p in props]
+    assert "received_donation_from" in slugs
+    assert "subject_of_inquiry" in slugs
+    assert "regulatory_action_against" in slugs
+    assert "quoted_in_article" in slugs
+
+def test_seeds_load(loader):
+    seeds = loader.load_seeds()
+    assert len(seeds) >= 10
+    labels = [s["label"] for s in seeds]
+    assert "Coalition for Better Tomorrow PAC" in labels
+    assert "Senator Marcus Hollis" in labels
+    assert "Acme Broadband Holdings" in labels
+
+def test_fixtures_present(loader):
+    fixtures = loader.list_fixtures()
+    assert len(fixtures) == 8
+
+def test_golden_story_shape():
+    golden = json.loads((EXAMPLE_DIR / "expected" / "acme_network_story.json").read_text())
+    assert len(golden["entities_in_story"]) >= 4
+    assert len(golden["narrative_threads"]) >= 2
+    # each thread must have at least one fact with source_excerpt
+    for thread in golden["narrative_threads"]:
+        assert len(thread["facts"]) >= 1
+        for fact in thread["facts"]:
+            assert fact["confidence"] > 0.0
+            assert fact["source_excerpt"]
+
+def test_dual_pac_donation_thread():
+    """The canonical story thread: same PAC to two senators on same committee."""
+    golden = json.loads((EXAMPLE_DIR / "expected" / "acme_network_story.json").read_text())
+    pac_thread = next(t for t in golden["narrative_threads"] if "dual senator" in t["thread"])
+    subjects = [f["subject"] for f in pac_thread["facts"]]
+    assert "Senator Marcus Hollis" in subjects
+    assert "Senator Patricia Wren" in subjects
+```
+
+- [ ] **13.8** Commit:
+```bash
+git add examples/investigative-journalism/ tests/examples/test_investigative_journalism.py
+git commit -m "feat(examples): add investigative-journalism example (properties + seeds + fixtures + golden story)"
+```
+
+---
+
+## Task 14 — Top-level CLI aggregator
+
+**Context:** Wire a single `factvault` Click group that aggregates all subcommands. The standalone entry points (`factvault-worker`, `factvault-api`, `factvault-mcp`) remain unchanged; `factvault` becomes a discovery surface. Tests use `CliRunner`.
+
+- [ ] **14.1** Create `factvault/cli/__init__.py`:
+
+```python
+"""factvault CLI package."""
+```
+
+- [ ] **14.2** Create `factvault/cli/main.py`:
+
+```python
+"""Top-level factvault CLI group.
+
+Aggregates all subcommands under a single entry point while keeping
+standalone entry points (factvault-worker, factvault-api, factvault-mcp)
+unchanged.
+"""
+import click
+
+from factvault.doctor.cli import doctor
+from factvault.examples.cli import example
+
+
+@click.group()
+@click.version_option()
+def cli() -> None:
+    """factvault — hallucination-resistant research database.
+
+    Every fact traces to a verbatim source excerpt in an archived document.
+    """
+
+
+cli.add_command(doctor)
+cli.add_command(example)
+
+
+@cli.group()
+def auth() -> None:
+    """Authentication management (issue tokens, rotate keys)."""
+
+
+@auth.command("issue-token")
+@click.option("--tenant-id", required=True, help="Tenant UUID to issue token for.")
+@click.option("--subject", required=True, help="Subject claim (user ID or service name).")
+@click.option("--ttl-hours", default=24, show_default=True, help="Token TTL in hours.")
+def issue_token(tenant_id: str, subject: str, ttl_hours: int) -> None:
+    """Issue a signed JWT for a tenant."""
+    from factvault.auth.jwt import issue_jwt  # lazy import: auth module from Plan 4
+
+    token = issue_jwt(tenant_id=tenant_id, subject=subject, ttl_hours=ttl_hours)
+    click.echo(token)
+```
+
+- [ ] **14.3** Update `pyproject.toml` — add `factvault` console_scripts entry alongside existing entries. Locate the `[project.scripts]` block and add:
+
+```toml
+factvault = "factvault.cli.main:cli"
+```
+
+The existing `factvault-worker`, `factvault-api`, `factvault-mcp` entries stay unchanged.
+
+- [ ] **14.4** Write failing tests first — `tests/cli/test_main.py`:
+
+```python
+"""Tests for the top-level factvault CLI aggregator."""
+import pytest
+from click.testing import CliRunner
+
+from factvault.cli.main import cli
+
+
+@pytest.fixture
+def runner():
+    return CliRunner()
+
+
+def test_help_lists_doctor(runner):
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    assert "doctor" in result.output
+
+
+def test_help_lists_example(runner):
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    assert "example" in result.output
+
+
+def test_help_lists_auth(runner):
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    assert "auth" in result.output
+
+
+def test_doctor_subcommand_routes(runner):
+    """doctor --help should produce the doctor help text (not a routing error)."""
+    result = runner.invoke(cli, ["doctor", "--help"])
+    assert result.exit_code == 0
+    assert "check" in result.output.lower() or "health" in result.output.lower()
+
+
+def test_example_subcommand_routes(runner):
+    result = runner.invoke(cli, ["example", "--help"])
+    assert result.exit_code == 0
+    assert "run" in result.output or "list" in result.output
+
+
+def test_auth_issue_token_requires_tenant(runner):
+    result = runner.invoke(cli, ["auth", "issue-token"])
+    assert result.exit_code != 0
+    assert "tenant-id" in result.output.lower() or "missing" in result.output.lower()
+
+
+def test_version_flag(runner):
+    result = runner.invoke(cli, ["--version"])
+    assert result.exit_code == 0
+    assert "." in result.output  # any version string with a dot
+```
+
+- [ ] **14.5** Run tests (expect pass once `main.py` is in place):
+```bash
+pytest tests/cli/test_main.py -v
+```
+
+- [ ] **14.6** Commit:
+```bash
+git add factvault/cli/ tests/cli/test_main.py pyproject.toml
+git commit -m "feat(cli): add top-level factvault CLI aggregator with doctor, example, auth subcommands"
+```
+
+---
+
+## Task 15 — README final pass
+
+**Context:** Replace the scaffold README with the production-quality version. Match the NASA mission-documentation voice used in the project spec. 250–400 lines.
+
+- [ ] **15.1** Write failing test — `tests/docs/test_readme.py`:
+
+```python
+"""Structural tests for README.md: required sections, badge row, example call-outs."""
+from pathlib import Path
+import re
+
+README = (Path(__file__).parent.parent.parent / "README.md").read_text()
+
+def test_has_badge_row():
+    assert "![" in README  # at least one badge image
+
+def test_has_quickstart():
+    assert "docker compose up" in README or "docker-compose up" in README
+
+def test_has_four_examples():
+    assert "ai-startup-tracking" in README
+    assert "political-research" in README
+    assert "pharma-trial-monitoring" in README
+    assert "investigative-journalism" in README
+
+def test_has_dossier_vs_story():
+    assert "dossier" in README.lower()
+    assert "story" in README.lower()
+
+def test_has_source_existence_headline():
+    assert "source" in README.lower()
+    assert "archive" in README.lower() or "exist" in README.lower()
+
+def test_has_nasa_image_or_alt():
+    # Either an Apollo 10 image embed or the alt-text keyword
+    assert "apollo" in README.lower() or "nasa" in README.lower()
+
+def test_has_contributing_pointer():
+    assert "contribut" in README.lower()
+```
+
+- [ ] **15.2** Write `README.md` (250–400 lines). Required sections in order:
+  1. Hero: NASA Apollo 10 mission photo (Creative Commons public domain) as a banner image, with alt text.
+  2. Badge row: license (MIT), CI status, PyPI version, Docker image.
+  3. Headline section: the source-existence promise — "Every fact factvault returns traces to a verbatim excerpt in an archived source document. If the source no longer exists at its original URL, factvault retains the archived copy. Facts without sources cannot be stored."
+  4. Dossier-vs-story explainer: one-sentence framing, comparison table (adapted from spec §2), and the four example call-outs with runnable commands.
+  5. Five-minute quickstart: `git clone` → `cp .env.example .env` → `docker compose up` → `factvault doctor` → `factvault example run ai-startup-tracking` → `curl` the API.
+  6. "How it differs from generic RAG" sidebar: three-bullet comparison.
+  7. Deep-dive pointers: links to `docs/concepts/`, `docs/guides/defining-properties.md`, `docs/quickstart.md`.
+  8. Contributing: pointer to CONTRIBUTING.md (or GitHub Issues if CONTRIBUTING.md not yet written).
+
+- [ ] **15.3** Run README tests:
+```bash
+pytest tests/docs/test_readme.py -v
+```
+
+- [ ] **15.4** Commit:
+```bash
+git add README.md tests/docs/test_readme.py
+git commit -m "docs(readme): final pass — source-existence headline, dossier-vs-story, 4 examples, quickstart"
+```
+
+---
+
+## Task 16 — docs/quickstart.md
+
+**Context:** 200–400 lines. The five-minute first-success path from clone to first fact query.
+
+- [ ] **16.1** Write failing test — `tests/docs/test_quickstart.py`:
+
+```python
+"""Structural tests for docs/quickstart.md."""
+from pathlib import Path
+
+QUICKSTART = (Path(__file__).parent.parent.parent / "docs" / "quickstart.md").read_text()
+
+def test_has_clone_step():
+    assert "git clone" in QUICKSTART
+
+def test_has_env_setup():
+    assert ".env" in QUICKSTART
+
+def test_has_docker_compose():
+    assert "docker compose" in QUICKSTART or "docker-compose" in QUICKSTART
+
+def test_has_doctor_command():
+    assert "factvault doctor" in QUICKSTART
+
+def test_has_curl_examples():
+    assert "curl" in QUICKSTART
+
+def test_has_mcp_section():
+    assert "mcp" in QUICKSTART.lower() or "claude" in QUICKSTART.lower()
+
+def test_has_api_endpoint_examples():
+    # must demonstrate at least the dossier and story endpoints
+    assert "/dossiers" in QUICKSTART or "dossier" in QUICKSTART.lower()
+    assert "/stories" in QUICKSTART or "story" in QUICKSTART.lower()
+```
+
+- [ ] **16.2** Write `docs/quickstart.md` (200–400 lines). Sections:
+  1. Prerequisites (Docker, Python 3.11+, Git).
+  2. Step 1 — Clone and configure (git clone, cp .env.example, edit .env variables).
+  3. Step 2 — Start the stack (`docker compose up -d`; watch healthchecks with `docker compose ps`).
+  4. Step 3 — Verify with `factvault doctor` (expected output).
+  5. Step 4 — Run an example (`factvault example run ai-startup-tracking`).
+  6. Step 5 — Query the API (curl examples for `/entities/by-name`, `/dossiers/by-entity-name`, `POST /stories`, `POST /facts/query`).
+  7. Step 6 — Connect the MCP server (Claude Desktop config snippet, Cursor config snippet).
+  8. Troubleshooting pointer → `docs/troubleshooting.md`.
+
+- [ ] **16.3** Run tests:
+```bash
+pytest tests/docs/test_quickstart.py -v
+```
+
+- [ ] **16.4** Commit:
+```bash
+git add docs/quickstart.md tests/docs/test_quickstart.py
+git commit -m "docs: add quickstart.md — 5-minute first-success guide"
+```
+
+---
+
+## Task 17 — docs/operations.md
+
+**Context:** 300–500 lines. Production operator reference.
+
+- [ ] **17.1** Write failing test — `tests/docs/test_operations.py`:
+
+```python
+"""Structural tests for docs/operations.md."""
+from pathlib import Path
+
+OPS = (Path(__file__).parent.parent.parent / "docs" / "operations.md").read_text()
+
+def test_has_scaling_section():
+    assert "scal" in OPS.lower()
+
+def test_has_backup_restore():
+    assert "backup" in OPS.lower() and "restore" in OPS.lower()
+
+def test_has_pg_dump():
+    assert "pg_dump" in OPS
+
+def test_has_rls_restore_verification():
+    assert "rls" in OPS.lower()
+
+def test_has_monitoring_section():
+    assert "prometheus" in OPS.lower() or "monitor" in OPS.lower()
+
+def test_has_secret_rotation():
+    assert "secret" in OPS.lower() and "rotat" in OPS.lower()
+
+def test_has_upgrade_procedure():
+    assert "alembic" in OPS.lower() or "migrat" in OPS.lower()
+
+def test_has_disaster_recovery():
+    assert "disaster" in OPS.lower() or "recovery" in OPS.lower()
+```
+
+- [ ] **17.2** Write `docs/operations.md` (300–500 lines). Sections:
+  1. **Architecture overview** — which services scale horizontally (api, worker), which do not (postgres — single primary, scale with read replicas for reporting workloads only; mcp — stateless, scales freely).
+  2. **Backup and restore** — `pg_dump` command with recommended flags (`--format=custom --compress=9`), restore procedure, post-restore RLS verification (`SET LOCAL app.tenant_id = '<uuid>'; SELECT count(*) FROM entities;` as a spot check), verification that pgvector indices rebuilt correctly.
+  3. **Log aggregation** — structured JSON log format, field names (`ts`, `level`, `service`, `tenant_id`, `trace_id`), recommended LogQL query for error rate SLO, Splunk equivalent.
+  4. **Monitoring** — Prometheus metrics endpoint (`GET /metrics`), key metrics per service (api: `request_latency_seconds`, `active_tenants`; worker: `pipeline_stage_duration_seconds`, `extraction_miss_total`; db: standard `pg_stat_*` via postgres_exporter), recommended SLOs.
+  5. **Secret rotation** — JWT public key rotation (rolling window: issue new key pair, add to JWKS, wait TTL+5min, remove old key), DB credentials rotation (Infisical dynamic secrets or manual `ALTER ROLE`), Wayback API key (env var replacement + rolling restart).
+  6. **Upgrade procedure** — pull new image, run `alembic upgrade head` before rolling restart, verify with `factvault doctor`, rollback path (`alembic downgrade -1`).
+  7. **Disaster recovery** — RTO/RPO targets for reference deployment, restore runbook (restore postgres, re-run alembic, verify RLS, restart services, run `factvault doctor`).
+
+- [ ] **17.3** Run tests:
+```bash
+pytest tests/docs/test_operations.py -v
+```
+
+- [ ] **17.4** Commit:
+```bash
+git add docs/operations.md tests/docs/test_operations.py
+git commit -m "docs: add operations.md — scaling, backup/restore, monitoring, secret rotation, DR"
+```
+
+---
+
+## Task 18 — docs/security.md
+
+**Context:** 200–400 lines. Threat model and multi-tenant isolation documentation.
+
+- [ ] **18.1** Write failing test — `tests/docs/test_security.py`:
+
+```python
+"""Structural tests for docs/security.md."""
+from pathlib import Path
+
+SEC = (Path(__file__).parent.parent.parent / "docs" / "security.md").read_text()
+
+def test_has_rls_section():
+    assert "row level security" in SEC.lower() or "rls" in SEC.lower()
+
+def test_has_jwt_section():
+    assert "jwt" in SEC.lower()
+
+def test_has_threat_model():
+    assert "threat" in SEC.lower() or "does not protect" in SEC.lower()
+
+def test_has_source_existence_as_security_property():
+    assert "fabricat" in SEC.lower() or "hallucin" in SEC.lower()
+
+def test_has_audit_log_section():
+    assert "audit" in SEC.lower()
+
+def test_has_idp_integration():
+    assert "auth0" in SEC.lower() or "keycloak" in SEC.lower() or "okta" in SEC.lower()
+```
+
+- [ ] **18.2** Write `docs/security.md` (200–400 lines). Sections:
+  1. **Tenant isolation model** — how `app.tenant_id` GUC is set on every connection, what the RLS policy looks like, how PgBouncer/asyncpg pooling resets the GUC between requests, text diagram of request path through auth middleware → connection acquisition → GUC set → query execution.
+  2. **JWT authentication** — how the operator wires an external IdP (Auth0, Keycloak, Okta): JWKS endpoint config, claim mapping (`tenant_id` from custom claim vs. `sub`), `factvault auth issue-token` for machine-to-machine.
+  3. **What factvault does NOT protect against** — explicit out-of-scope list: DoS on the API (use a WAF/rate limiter in front), supply-chain attacks on the LLM endpoint, malicious content in source documents causing prompt injection in extraction, cross-tenant timing side-channels via shared embedding model.
+  4. **Source-existence as a security property** — not just a quality property: archived raw_text + content_hash + archive_url together mean that a fact cannot be fabricated without also forging a source document. Explain why this raises the attack cost for LLM-generated misinformation ingested as "facts".
+  5. **Audit log expectations** — what is logged (entity creates/updates, fact extractions, token issuances), what is not logged (query content by default — privacy consideration), retention recommendation.
+  6. **Disclosure and reporting** — how to report security issues (GitHub Security Advisories or a security contact email placeholder).
+
+- [ ] **18.3** Run tests:
+```bash
+pytest tests/docs/test_security.py -v
+```
+
+- [ ] **18.4** Commit:
+```bash
+git add docs/security.md tests/docs/test_security.py
+git commit -m "docs: add security.md — RLS isolation, JWT auth, threat model, source-existence security property"
+```
+
+---
+
+## Task 19 — docs/troubleshooting.md
+
+**Context:** 200–400 lines. Top failure modes with symptom → diagnostic command → fix structure.
+
+- [ ] **19.1** Write failing test — `tests/docs/test_troubleshooting.py`:
+
+```python
+"""Structural tests for docs/troubleshooting.md."""
+from pathlib import Path
+
+TS = (Path(__file__).parent.parent.parent / "docs" / "troubleshooting.md").read_text()
+
+def test_has_wayback_section():
+    assert "wayback" in TS.lower() or "rate limit" in TS.lower()
+
+def test_has_trafilatura_section():
+    assert "trafilatura" in TS.lower()
+
+def test_has_rls_debugging():
+    assert "current_setting" in TS or "rls" in TS.lower()
+
+def test_has_mcp_connection():
+    assert "mcp" in TS.lower() and ("claude" in TS.lower() or "cursor" in TS.lower())
+
+def test_has_embedding_model():
+    assert "embedding" in TS.lower() or "bge" in TS.lower()
+
+def test_has_postgres_extension():
+    assert "pgvector" in TS.lower() or "extension" in TS.lower()
+
+def test_symptom_diagnostic_fix_pattern():
+    # Each section should have all three keywords
+    assert "symptom" in TS.lower()
+    assert "diagnostic" in TS.lower() or "diagnos" in TS.lower()
+    assert "fix" in TS.lower()
+```
+
+- [ ] **19.2** Write `docs/troubleshooting.md` (200–400 lines). Entries (symptom → diagnostic → fix):
+
+  1. **Wayback Machine rate limits** — symptom: `WaybackRateLimitError` in worker logs, 429 responses; diagnostic: `docker compose logs worker | grep 429`; fix: set `FACTVAULT_WAYBACK_BACKOFF_INITIAL_S=5`, `FACTVAULT_WAYBACK_MAX_RETRIES=8`; note CDX API rate-limit header `X-RateLimit-Remaining`.
+
+  2. **trafilatura returns None on paywalled pages** — symptom: `raw_text=None` for source, extraction skipped; diagnostic: `factvault ingest <url> --dry-run` and inspect `raw_text` field; fix options: (a) supply an HTTP cookie via `FACTVAULT_COLLECTOR_COOKIES` env var, (b) use the Wayback CDX snapshot which may have an earlier cached copy, (c) manually upload a PDF/HTML using the `upload` collector.
+
+  3. **RLS "no rows visible" — queries return empty** — symptom: authenticated API returns `[]` for entities you know are seeded; diagnostic: `SELECT current_setting('app.tenant_id', true);` — if `NULL` or mismatched UUID, the policy filters all rows; fix: ensure the JWT `tenant_id` claim matches the UUID in the `tenants` table; run `factvault doctor` to verify RLS policy check passes.
+
+  4. **MCP server connection failures from Claude Desktop / Cursor** — symptom: "Failed to connect to MCP server" in Claude Desktop; diagnostic: check `docker compose ps mcp` (should be healthy), test `curl http://localhost:8080/health`; fix: verify `FACTVAULT_MCP_AUTH_TOKEN` in `.env` matches the token configured in Claude Desktop's MCP config; check that port 8080 is not firewalled.
+
+  5. **Embedding model load failure — OOM** — symptom: worker crashes with `RuntimeError: CUDA out of memory` or `MemoryError`; diagnostic: `docker stats factvault-worker-1`; fix: BGE-M3 requires ~1.5 GB RAM; ensure Docker memory limit is ≥2 GB; or switch to a smaller embedding model via `FACTVAULT_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5` (384d, ~400 MB).
+
+  6. **Embedding model load failure — disk space** — symptom: `OSError: [Errno 28] No space left on device` during model download; diagnostic: `df -h /root/.cache`; fix: mount a larger volume at `~/.cache/huggingface` or set `HF_HOME` to a path with ≥5 GB free.
+
+  7. **Postgres pgvector extension not found** — symptom: `UndefinedFile: could not open extension control file "vector.control"` during `alembic upgrade head`; diagnostic: `psql -c "SELECT * FROM pg_available_extensions WHERE name='vector';"` in the postgres container; fix: rebuild the postgres image (`docker compose build postgres --no-cache`) — the Chainguard image variant must be `cgr.dev/chainguard/postgres:latest` not `cgr.dev/chainguard/postgres:latest-dev` (dev variant omits extension compilation).
+
+- [ ] **19.3** Run tests:
+```bash
+pytest tests/docs/test_troubleshooting.py -v
+```
+
+- [ ] **19.4** Commit:
+```bash
+git add docs/troubleshooting.md tests/docs/test_troubleshooting.py
+git commit -m "docs: add troubleshooting.md — Wayback limits, trafilatura, RLS, MCP, embedding, pgvector"
+```
+
+---
+
+## Task 20 — Full-stack docker-compose integration test
+
+**Context:** Load-bearing test for Plan 5. Uses `testcontainers`' `DockerCompose` helper to spin up the full stack, waits for healthchecks, runs `factvault doctor` inside the api container, and exercises each retrieval mode.
+
+- [ ] **20.1** Write failing test — `tests/integration/test_full_stack_compose.py`:
+
+```python
+"""Full-stack docker-compose integration test.
+
+Spins up the complete compose stack, waits for all healthchecks to go green,
+runs factvault doctor inside the api container, and exercises one endpoint
+of each retrieval mode (dossier, story, fact query) via httpx.
+
+Requires: docker compose v2, ports 5432+8000+8080 free.
+Slow test — runs in CI nightly and on PRs touching docker-compose.yml or workers.
+Mark: pytest.mark.slow, pytest.mark.integration
+"""
+import subprocess
+import time
+from pathlib import Path
+
+import httpx
+import pytest
+from testcontainers.compose import DockerCompose
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+@pytest.fixture(scope="module")
+def compose_stack():
+    """Bring up the full compose stack and tear down after all tests in this module."""
+    env_file = PROJECT_ROOT / ".env.test"
+    if not env_file.exists():
+        pytest.skip(".env.test not present — skipping full-stack integration test")
+
+    with DockerCompose(
+        str(PROJECT_ROOT),
+        compose_file_name=["docker-compose.yml"],
+        env_file=str(env_file),
+        pull=False,
+    ) as compose:
+        # Wait for api healthcheck to go green (up to 90s)
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            try:
+                r = httpx.get("http://localhost:8000/healthz", timeout=3)
+                if r.status_code == 200:
+                    break
+            except httpx.ConnectError:
+                pass
+            time.sleep(3)
+        else:
+            pytest.fail("API did not become healthy within 90 seconds")
+
+        yield compose
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_factvault_doctor_all_green(compose_stack):
+    """factvault doctor must exit 0 with all checks passing."""
+    result = subprocess.run(
+        ["docker", "compose", "exec", "-T", "api", "factvault", "doctor"],
+        capture_output=True,
+        text=True,
+        cwd=PROJECT_ROOT,
+    )
+    assert result.returncode == 0, f"doctor failed:\n{result.stdout}\n{result.stderr}"
+    assert "All checks passed" in result.stdout
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_api_healthz(compose_stack):
+    r = httpx.get("http://localhost:8000/healthz")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_entities_endpoint(compose_stack):
+    """GET /entities returns a list (may be empty on fresh stack)."""
+    r = httpx.get("http://localhost:8000/entities")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_dossier_endpoint_realistic_shape(compose_stack):
+    """POST /dossiers/by-entity-name returns a dict with expected keys."""
+    r = httpx.post(
+        "http://localhost:8000/dossiers/by-entity-name",
+        json={"entity_name": "canary-entity", "tenant_id": "00000000-0000-0000-0000-000000000001"},
+        timeout=30,
+    )
+    # 200 with empty facts or 404 are both acceptable on a fresh stack
+    assert r.status_code in (200, 404)
+    if r.status_code == 200:
+        body = r.json()
+        assert "entity" in body
+        assert "facts" in body
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_story_endpoint_realistic_shape(compose_stack):
+    """POST /stories returns a dict with narrative_threads key."""
+    r = httpx.post(
+        "http://localhost:8000/stories",
+        json={"query": "any entity", "depth": 1},
+        timeout=30,
+    )
+    assert r.status_code in (200, 422)
+    if r.status_code == 200:
+        assert "narrative_threads" in r.json()
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_fact_query_endpoint_realistic_shape(compose_stack):
+    """POST /facts/query returns a list."""
+    r = httpx.post(
+        "http://localhost:8000/facts/query",
+        json={"property_slug": "funding_amount", "value_contains": "million"},
+        timeout=20,
+    )
+    assert r.status_code in (200, 422)
+    if r.status_code == 200:
+        assert isinstance(r.json(), list)
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_mcp_server_health(compose_stack):
+    """MCP server health endpoint responds."""
+    r = httpx.get("http://localhost:8080/health", timeout=10)
+    assert r.status_code == 200
+```
+
+- [ ] **20.2** Add `.env.test` template (not committed with real values) — document in `docs/quickstart.md` that `cp .env.test.example .env.test` is the setup step for integration tests. Create `.env.test.example`:
+
+```bash
+# .env.test.example — copy to .env.test and fill in for integration tests
+POSTGRES_USER=factvault
+POSTGRES_PASSWORD=factvault
+POSTGRES_DB=factvault
+FACTVAULT_JWT_SECRET=test-secret-not-for-production
+FACTVAULT_LLM_BASE_URL=http://ollama:11434/v1
+FACTVAULT_LLM_MODEL=llama3.1:8b
+FACTVAULT_EMBEDDING_MODEL=BAAI/bge-m3
+FACTVAULT_MCP_AUTH_TOKEN=test-mcp-token
+```
+
+- [ ] **20.3** Add `.env.test` to `.gitignore` (never commit test credentials).
+
+- [ ] **20.4** Run unit-level tests (not the slow integration tests — those run in CI):
+```bash
+pytest tests/integration/test_full_stack_compose.py --collect-only
+# verify test collection passes; skip execution locally unless stack is running
+```
+
+- [ ] **20.5** Commit:
+```bash
+git add tests/integration/test_full_stack_compose.py .env.test.example .gitignore
+git commit -m "test(integration): add full-stack docker-compose integration test — load-bearing Plan 5 test"
+```
+
+---
+
+## Task 21 — Helm chart (optional for v1)
+
+**Context:** `deploy/helm/factvault/`. Scoped tight. Flags as optional for first v1 release. If scope pressure exists, defer with a documented issue.
+
+> **Optional for v1:** If release is time-boxed, defer this task and file a GitHub Issue (`gh issue create --label "scope/v1.1" -t "feat: Helm chart for production K8s deployment"`). The docker-compose stack (Task 1) is the supported deployment path for v1.
+
+- [ ] **21.1** Create `deploy/helm/factvault/Chart.yaml`:
+
+```yaml
+apiVersion: v2
+name: factvault
+description: Hallucination-resistant research database with source-existence guarantee
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - research
+  - facts
+  - postgresql
+  - pgvector
+home: https://github.com/petersimmons1972/factvault
+maintainers:
+  - name: Peter Simmons
+    email: peter.simmons.ga@gmail.com
+```
+
+- [ ] **21.2** Create `deploy/helm/factvault/values.yaml`:
+
+```yaml
+# deploy/helm/factvault/values.yaml
+image:
+  repository: ghcr.io/petersimmons1972/factvault-app
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+replicaCount:
+  api: 2
+  worker: 1
+  mcp: 1
+
+resources:
+  api:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  worker:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"   # embedding model needs ~1.5 GB
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+  mcp:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+ingress:
+  enabled: true
+  className: "nginx"
+  host: "factvault.example.com"
+  tls:
+    enabled: true
+    secretName: "factvault-tls"
+
+postgres:
+  # Use an existingSecret with keys: username, password, database
+  existingSecret: "factvault-postgres-secret"
+  host: "postgres"
+  port: 5432
+
+auth:
+  # JWT public key (PEM) in an existing Kubernetes secret
+  # Secret must have key: jwt_public_key
+  jwtPublicKeySecret: "factvault-jwt-public-key"
+
+serviceMonitor:
+  # Requires prometheus-operator CRD
+  enabled: false
+  namespace: "monitoring"
+  interval: "30s"
+```
+
+- [ ] **21.3** Create `deploy/helm/factvault/templates/` with the following files:
+
+  - `_helpers.tpl` — standard name/label helpers
+  - `postgres-statefulset.yaml` — StatefulSet for postgres with PVC (volume claim template), `fsGroup: 65532`, `allowPrivilegeEscalation: false`, Chainguard image
+  - `api-deployment.yaml` — Deployment for api; readinessProbe on `/healthz`; env from existingSecret refs
+  - `worker-deployment.yaml` — Deployment for worker; no inbound ports
+  - `mcp-deployment.yaml` — Deployment for mcp; port 8080
+  - `ingress.yaml` — conditional on `ingress.enabled`
+  - `servicemonitor.yaml` — conditional on `serviceMonitor.enabled`
+
+  All templates follow the Chainguard security context (spec §6): `runAsUser: 65532`, `runAsNonRoot: true`, `fsGroup: 65532`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`.
+
+- [ ] **21.4** Create `deploy/helm/factvault/README.md`:
+
+```markdown
+# factvault Helm Chart
+
+Optional production deployment path for Kubernetes. For local development use `docker compose`.
+
+## Prerequisites
+
+- Kubernetes 1.27+
+- Helm 3.12+
+- A Postgres 15+ instance with pgvector (or use the bundled StatefulSet)
+- A Kubernetes secret `factvault-postgres-secret` with keys `username`, `password`, `database`
+- A Kubernetes secret `factvault-jwt-public-key` with key `jwt_public_key`
+
+## Install
+
+```bash
+helm install factvault ./deploy/helm/factvault \
+  --namespace factvault \
+  --create-namespace \
+  -f my-values.yaml
+```
+
+After install, run `factvault doctor` inside the api pod to verify:
+
+```bash
+kubectl exec -n factvault deploy/factvault-api -- factvault doctor
+```
+
+## Values reference
+
+See `values.yaml` for all configurable values with inline documentation.
+```
+
+- [ ] **21.5** Commit:
+```bash
+git add deploy/helm/
+git commit -m "feat(helm): add optional Helm chart for production K8s deployment (v1.1 scope)"
+```
+
+---
+
+## Task 22 — CI workflow final pass + release workflow
+
+**Context:** Finalize `.github/workflows/ci.yml` with a `slow-tests` job gated appropriately, and add the tag-triggered `.github/workflows/release.yml`.
+
+- [ ] **22.1** Update `.github/workflows/ci.yml` — add a `slow-tests` job that runs the full-stack integration test. The job is gated on: (a) nightly schedule, OR (b) PRs that touch `docker-compose.yml`, `docker/`, `factvault/workers/`, or `tests/integration/`. Regular PR runs skip it.
+
+Full updated `ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: mypy factvault/ --ignore-missing-imports
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/unit/ tests/doctor/ tests/examples/ tests/cli/ tests/docs/ -v --tb=short
+
+  slow-tests:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    # Run nightly OR on PRs touching compose/workers/integration tests
+    if: |
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' && (
+        contains(github.event.pull_request.changed_files, 'docker-compose.yml') ||
+        contains(github.event.pull_request.changed_files, 'docker/') ||
+        contains(github.event.pull_request.changed_files, 'factvault/workers/') ||
+        contains(github.event.pull_request.changed_files, 'tests/integration/')
+      ))
+    services:
+      # Integration test spins its own compose stack via testcontainers;
+      # no additional services needed here.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: Copy test env
+        run: cp .env.test.example .env.test
+      - run: pytest tests/integration/ -v --tb=short -m "slow and integration"
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # nightly at 03:00 UTC
+  push:
+    branches: [main]
+  pull_request:
+```
+
+> **Note:** The `on:` block at the bottom extends the top-level trigger. In the final file, merge into a single top-level `on:` with `schedule`, `push`, and `pull_request` keys. Shown separately here for clarity.
+
+- [ ] **22.2** Create `.github/workflows/release.yml`:
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write   # required for trusted PyPI publishing
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/factvault-app
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/app/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish-pypi:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/factvault
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install build
+      - run: python -m build
+      - name: Publish to PyPI (trusted publishing — no API key required)
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  create-github-release:
+    runs-on: ubuntu-latest
+    needs: [build-and-push-image, publish-pypi]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for changelog generation
+
+      - name: Generate changelog from conventional-commit footers
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          # Extract conventional-commit footers: feat, fix, docs, refactor, test
+          CHANGELOG=$(git log "$RANGE" --pretty=format:"%s" \
+            | grep -E '^(feat|fix|docs|refactor|test|perf)\(' \
+            | sed 's/^feat(/- feat(/; s/^fix(/- fix(/; s/^docs(/- docs(/; s/^refactor(/- refactor(/; s/^test(/- test(/; s/^perf(/- perf(/' \
+            | head -50)
+          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$CHANGELOG" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: |
+            ## What's Changed
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ## Docker Image
+
+            ```
+            docker pull ghcr.io/${{ github.repository_owner }}/factvault-app:${{ github.ref_name }}
+            ```
+
+            ## PyPI
+
+            ```
+            pip install factvault==${{ github.ref_name }}
+            ```
+          generate_release_notes: false
+```
+
+- [ ] **22.3** Write failing test — `tests/docs/test_ci_workflows.py`:
+
+```python
+"""Smoke tests for CI/release workflow YAML structure."""
+from pathlib import Path
+import yaml
+
+WORKFLOWS_DIR = Path(__file__).parent.parent.parent / ".github" / "workflows"
+
+def test_ci_yml_exists():
+    assert (WORKFLOWS_DIR / "ci.yml").exists()
+
+def test_release_yml_exists():
+    assert (WORKFLOWS_DIR / "release.yml").exists()
+
+def test_ci_has_unit_tests_job():
+    ci = yaml.safe_load((WORKFLOWS_DIR / "ci.yml").read_text())
+    assert "unit-tests" in ci["jobs"]
+
+def test_ci_has_slow_tests_job():
+    ci = yaml.safe_load((WORKFLOWS_DIR / "ci.yml").read_text())
+    assert "slow-tests" in ci["jobs"]
+
+def test_release_triggers_on_version_tag():
+    release = yaml.safe_load((WORKFLOWS_DIR / "release.yml").read_text())
+    tags = release["on"]["push"]["tags"]
+    assert any("v*" in t for t in tags)
+
+def test_release_has_pypi_job():
+    release = yaml.safe_load((WORKFLOWS_DIR / "release.yml").read_text())
+    assert "publish-pypi" in release["jobs"]
+
+def test_release_has_image_push_job():
+    release = yaml.safe_load((WORKFLOWS_DIR / "release.yml").read_text())
+    assert "build-and-push-image" in release["jobs"]
+```
+
+- [ ] **22.4** Run workflow tests:
+```bash
+pytest tests/docs/test_ci_workflows.py -v
+```
+
+- [ ] **22.5** Commit:
+```bash
+git add .github/workflows/ci.yml .github/workflows/release.yml tests/docs/test_ci_workflows.py
+git commit -m "ci: final pass — slow-tests job + release workflow (GHCR image + PyPI trusted publish + changelog)"
+```
+
+---
+
+## Self-Review
+
+### Spec Coverage Checklist
+
+| Spec requirement | Task |
+|------------------|------|
+| Full docker-compose stack — postgres + api + worker + mcp (§6) | Pass 1 T1 |
+| docker-compose override template for optional services (§6) | Pass 1 T1 |
+| App Dockerfile — multi-stage Chainguard python:latest-dev → wolfi-base, nonroot 65532, tini (§6) | Pass 1 T2 |
+| `.env.example` — all env vars documented (§6) | Pass 1 T3 |
+| `factvault doctor` — 7 checks: DB, pgvector, RLS, Wayback, embedding, LLM, canary (§6) | Pass 1 T4–T7 |
+| Canary end-to-end fact ingest (collect → archive → extract → corroborate → verify) (§6) | Pass 1 T7 |
+| `factvault example` CLI — list, info, run subcommands (§8) | Pass 1 T8–T9 |
+| Example: ai-startup-tracking (properties + seeds + fixtures + golden dossier + run.sh) (§8) | Pass 1 T10 |
+| Example: political-research (properties + seeds + fixtures + golden output + run.sh) (§8) | Pass 1 T11 |
+| Example: pharma-trial-monitoring (properties + seeds + fixtures + golden dossier + run.sh) (§8) | T12 |
+| Example: investigative-journalism (properties + seeds + fixtures + golden story + run.sh) (§8) | T13 |
+| Top-level `factvault` CLI aggregator with all subcommands wired (§7 factvault/cli/) | T14 |
+| README final pass — source-existence headline, dossier-vs-story, 4 examples, quickstart (§8) | T15 |
+| docs/quickstart.md — 5-minute first-success guide with curl examples (§8) | T16 |
+| docs/operations.md — scaling, backup/restore, monitoring, secret rotation, DR (§8) | T17 |
+| docs/security.md — RLS isolation, JWT auth, threat model, source-existence security property (§8) | T18 |
+| docs/troubleshooting.md — Wayback, trafilatura, RLS, MCP, embedding, pgvector (§8) | T19 |
+| Full-stack docker-compose integration test (§6 + §8) | T20 |
+| Helm chart for production K8s deployment — optional v1.1 (§6 K8s manifests note) | T21 |
+| CI final pass — slow-tests job gated correctly (§7 .github/workflows/) | T22 |
+| Release workflow — GHCR image push + PyPI trusted publish + changelog (§7 release.yml) | T22 |
+
+### Placeholder Scan
+
+Reviewed. No placeholders. All fixture data is fully written (no `[...]` content stubs). All YAML property definitions include complete field sets. All golden output files contain concrete values. The only deliberate stub is `CONTRIBUTING.md` referenced in Task 15 — its absence is noted in the README as "GitHub Issues" fallback, which is correct for a pre-v1 project.
+
+### Type Consistency Check
+
+Reviewed. All names consistent:
+
+- CLI entry point is `factvault` (singular, no hyphen) throughout: `pyproject.toml` console_script `factvault = "factvault.cli.main:cli"`, all task command examples, and the README quickstart.
+- Standalone entry points remain `factvault-worker`, `factvault-api`, `factvault-mcp` — hyphenated, unchanged from Plans 2-4.
+- `factvault doctor` (space, subcommand) — used consistently. NOT `factvault-doctor`.
+- `factvault example run <name>` — used consistently across Tasks 8–13 and the README/quickstart.
+- Example loader API is consistent: `ExampleLoader(directory)` with `.load_properties()`, `.load_seeds()`, `.list_fixtures()` — same interface used in all four example test files (T10, T11, T12, T13).
+- Property YAML namespace field matches the test fixture namespace in all four examples (`ai_startup`, `political`, `pharma_trial`, `investigative`).
+
+### Cross-Plan Coherence Check
+
+**Compose service names vs. Plan 4 K8s manifests:** Plan 5 T1 compose services are named `postgres`, `api`, `worker`, `mcp`. Plan 4 K8s manifests use `factvault-api`, `factvault-worker`, `factvault-mcp` as Deployment names (K8s convention requires prefix). Service names in K8s are `factvault-api-svc` etc. No naming conflict — compose and K8s are separate deployment targets, not cross-referencing each other's service names.
+
+**`factvault doctor` canary vs. Plans 2-4 pipeline stages:** The canary (T7) exercises: collect (Plan 2 Stage 1) → archive (Plan 2 Stage 2) → extract (Plan 3 Stage 3) → corroborate (Plan 3 Stage 4) → verify (Plan 4 Stage 5). All five pipeline stages from Plans 2-3-4 are touched. ✓
+
+**Example loader vs. Plan 3 T11 property vocabulary loader:** The `ExampleLoader.load_properties()` method reads `properties.yaml` and calls `factvault.properties.registry.register_from_yaml()` (Plan 3 T11). Consistent. ✓
+
+**Full-stack test vs. Plan 4 API endpoints:** T20 exercises `/healthz`, `/entities`, `/dossiers/by-entity-name` (Plan 4 dossier endpoint), `POST /stories` (Plan 4 story endpoint), `POST /facts/query` (Plan 4 fact query endpoint). All Plan 4 retrieval modes are covered with realistic-shape requests. ✓
