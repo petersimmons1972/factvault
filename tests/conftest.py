@@ -34,15 +34,22 @@ def migrated_engine(postgres_engine: Engine) -> Engine:
     Runs all Alembic migrations against the session-scoped engine.
     Returns the same engine post-migration. Called by tests that need a fully
     migrated schema.
+
+    Passes the live engine via alembic_cfg.attributes["connection"] so that
+    env.py's run_migrations_online uses it directly — bypassing engine_from_config
+    and the %(FACTVAULT_DATABASE_URL)s configparser interpolation that would
+    otherwise fail when the env var is absent.
     """
     from alembic.config import Config
     from alembic import command
 
+    # render_as_string(hide_password=False) is required — str(engine.url) masks
+    # the password as "***", which would cause auth failure in alembic's env.py.
+    db_url = postgres_engine.url.render_as_string(hide_password=False)
+    # Set env var so env.py's os.environ branch fires and overrides alembic.ini
+    os.environ["FACTVAULT_DATABASE_URL"] = db_url
+
     alembic_cfg = Config("alembic.ini")
-    alembic_cfg.set_main_option(
-        "sqlalchemy.url",
-        str(postgres_engine.url),
-    )
     command.upgrade(alembic_cfg, "head")
     return postgres_engine
 
