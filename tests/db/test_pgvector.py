@@ -171,3 +171,101 @@ def test_relation_embedding_roundtrip(conn):
         {"id": str(rid)},
     ).fetchone()
     assert len(_as_list(row.embedding)) == 1024
+
+
+# ---------------------------------------------------------------------------
+# Task 16 — HNSW index plan-verify tests
+# ---------------------------------------------------------------------------
+
+
+def test_hnsw_index_used_entities(conn):
+    """EXPLAIN with seqscan disabled must show the HNSW index for entities."""
+    TENANT2 = uuid4()
+    vec = _rand_vec()
+
+    # Insert a handful of entities with embeddings so the planner has data
+    for i in range(10):
+        v = _rand_vec()
+        conn.execute(
+            text(
+                "INSERT INTO entities (id, tenant_id, label, ext_id, embedding) "
+                "VALUES (:id, :tid, :lbl, :eid_str, CAST(:emb AS vector))"
+            ),
+            {
+                "id": str(uuid4()),
+                "tid": str(TENANT2),
+                "lbl": f"HNSWEntity{i}",
+                "eid_str": f"hnsw-ent-{i}-{TENANT2}",
+                "emb": _vec_literal(v),
+            },
+        )
+
+    conn.execute(text("SET enable_seqscan = OFF"))
+    plan = conn.execute(
+        text(
+            "EXPLAIN (ANALYZE, FORMAT TEXT) "
+            "SELECT id FROM entities "
+            "ORDER BY embedding <=> CAST(:emb AS vector) "
+            "LIMIT 5"
+        ),
+        {"emb": _vec_literal(vec)},
+    ).fetchall()
+    conn.execute(text("SET enable_seqscan = ON"))
+
+    plan_text = "\n".join(str(row[0]) for row in plan)
+    assert "idx_entities_embedding" in plan_text, (
+        f"Expected HNSW index 'idx_entities_embedding' in plan, got:\n{plan_text}"
+    )
+
+
+def test_hnsw_index_used_statements(conn):
+    """EXPLAIN with seqscan disabled must show the HNSW index for statements."""
+    TENANT3 = uuid4()
+    eid = uuid4()
+    pid = uuid4()
+
+    conn.execute(
+        text("INSERT INTO entities (id, tenant_id, label) VALUES (:id, :tid, 'HE')"),
+        {"id": str(eid), "tid": str(TENANT3)},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO properties (id, slug, label, value_type) "
+            "VALUES (:id, :slug, 'HNSW', 'string')"
+        ),
+        {"id": str(pid), "slug": f"hnsw_prop_{pid}"},
+    )
+    for i in range(10):
+        conn.execute(
+            text(
+                "INSERT INTO statements "
+                "(id, tenant_id, subject_id, property_id, val_text, rank, confidence, embedding) "
+                "VALUES (:id, :tid, :eid, :pid, :val, 'normal', 0.5, CAST(:emb AS vector))"
+            ),
+            {
+                "id": str(uuid4()),
+                "tid": str(TENANT3),
+                "eid": str(eid),
+                "pid": str(pid),
+                "val": f"val{i}",
+                "emb": _vec_literal(_rand_vec()),
+            },
+        )
+
+    vec = _rand_vec()
+    conn.execute(text("SET enable_seqscan = OFF"))
+    plan = conn.execute(
+        text(
+            "EXPLAIN (ANALYZE, FORMAT TEXT) "
+            "SELECT id FROM statements "
+            "ORDER BY embedding <=> CAST(:emb AS vector) "
+            "LIMIT 5"
+        ),
+        {"emb": _vec_literal(vec)},
+    ).fetchall()
+    conn.execute(text("SET enable_seqscan = ON"))
+
+    plan_text = "\n".join(str(row[0]) for row in plan)
+    assert "idx_statements_embedding" in plan_text, (
+        f"Expected HNSW index 'idx_statements_embedding' in plan, got:\n{plan_text}"
+    )
