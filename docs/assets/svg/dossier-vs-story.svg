@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 420">
+  <defs>
+    <style>
+      .bg        { fill: #0B0E14; }
+      .rule      { stroke: #5C5852; stroke-width: 1; fill: none; }
+      .rule-dash { stroke: #5C5852; stroke-width: 1; fill: none; stroke-dasharray: 4 3; }
+      .title     { font-family: 'Roboto Slab','Courier New',Georgia,serif; fill: #E8E4D8; font-size: 13px; font-weight: bold; letter-spacing: 2px; }
+      .col-head  { font-family: 'Roboto Slab','Courier New',Georgia,serif; fill: #C8850A; font-size: 12px; font-weight: bold; letter-spacing: 2px; }
+      .dim-head  { font-family: 'Roboto Slab','Courier New',Georgia,serif; fill: #5C5852; font-size: 9px; letter-spacing: 1px; }
+      .cell      { font-family: 'Inter','Helvetica Neue',sans-serif; fill: #A8A49A; font-size: 10px; }
+      .cell-em   { font-family: 'Roboto Slab','Courier New',Georgia,serif; fill: #E8E4D8; font-size: 10px; }
+      .mono      { font-family: 'Courier New',monospace; fill: #C8850A; font-size: 10px; }
+      .footer    { font-family: 'Courier New',monospace; fill: #5C5852; font-size: 8px; letter-spacing: 1px; }
+      .sep       { stroke: #1E2330; stroke-width: 1; fill: none; }
+      .sep-amber { stroke: #C8850A; stroke-width: 1; fill: none; stroke-dasharray: 2 3; }
+    </style>
+  </defs>
+
+  <rect width="750" height="420" class="bg"/>
+
+  <!-- Title band -->
+  <line x1="30" y1="38" x2="720" y2="38" class="rule"/>
+  <text x="375" y="25" class="title" text-anchor="middle">DOSSIER vs. STORY — RETRIEVAL MODES</text>
+  <line x1="30" y1="42" x2="720" y2="42" class="rule-dash"/>
+
+  <!-- Column headers -->
+  <text x="185" y="66" class="col-head" text-anchor="middle">DOSSIER</text>
+  <text x="565" y="66" class="col-head" text-anchor="middle">STORY</text>
+
+  <!-- Column divider -->
+  <line x1="375" y1="55" x2="375" y2="370" class="rule"/>
+
+  <!-- Row separator baseline -->
+  <line x1="30"  y1="75" x2="720" y2="75" class="sep"/>
+
+  <!-- Dimension labels column (left edge) — implied by row -->
+  <!-- Row 1: Keyed by -->
+  <rect x="30" y="75" width="340" height="40" fill="#0F1219"/>
+  <rect x="375" y="75" width="345" height="40" fill="#0B0E14"/>
+  <text x="50"  y="90" class="dim-head">KEYED BY</text>
+  <text x="50"  y="107" class="cell-em">Entity ID or canonical name</text>
+  <text x="390" y="90" class="dim-head">KEYED BY</text>
+  <text x="390" y="107" class="cell-em">Free-text query string</text>
+  <line x1="30" y1="115" x2="720" y2="115" class="sep"/>
+
+  <!-- Row 2: Question -->
+  <rect x="30" y="115" width="340" height="40" fill="#0B0E14"/>
+  <rect x="375" y="115" width="345" height="40" fill="#0F1219"/>
+  <text x="50"  y="130" class="dim-head">QUESTION ANSWERED</text>
+  <text x="50"  y="147" class="cell">"Tell me everything about entity X"</text>
+  <text x="390" y="130" class="dim-head">QUESTION ANSWERED</text>
+  <text x="390" y="147" class="cell">"What's happening with [concept/trend]"</text>
+  <line x1="30" y1="155" x2="720" y2="155" class="sep"/>
+
+  <!-- Row 3: Computation -->
+  <rect x="30" y="155" width="340" height="40" fill="#0F1219"/>
+  <rect x="375" y="155" width="345" height="40" fill="#0B0E14"/>
+  <text x="50"  y="170" class="dim-head">COMPUTATION</text>
+  <text x="50"  y="186" class="cell">Pre-computed nightly · served from cache</text>
+  <text x="390" y="170" class="dim-head">COMPUTATION</text>
+  <text x="390" y="186" class="cell">On-demand · recursive CTE at query time</text>
+  <line x1="30" y1="195" x2="720" y2="195" class="sep"/>
+
+  <!-- Row 4: API call -->
+  <rect x="30" y="195" width="340" height="40" fill="#0B0E14"/>
+  <rect x="375" y="195" width="345" height="40" fill="#0F1219"/>
+  <text x="50"  y="210" class="dim-head">API CALL</text>
+  <text x="50"  y="226" class="mono">GET /entities/{id}/dossier</text>
+  <text x="390" y="210" class="dim-head">API CALL</text>
+  <text x="390" y="226" class="mono">POST /stories  {query, depth}</text>
+  <line x1="30" y1="235" x2="720" y2="235" class="sep"/>
+
+  <!-- Row 5: depth parameter -->
+  <rect x="30" y="235" width="340" height="40" fill="#0F1219"/>
+  <rect x="375" y="235" width="345" height="40" fill="#0B0E14"/>
+  <text x="50"  y="250" class="dim-head">ASSEMBLER CALL</text>
+  <text x="50"  y="266" class="mono">assemble(ids, depth=0)</text>
+  <text x="390" y="250" class="dim-head">ASSEMBLER CALL</text>
+  <text x="390" y="266" class="mono">assemble(ids, depth=2 or 3)</text>
+  <line x1="30" y1="275" x2="720" y2="275" class="sep"/>
+
+  <!-- Row 6: Stable URL -->
+  <rect x="30" y="275" width="340" height="40" fill="#0B0E14"/>
+  <rect x="375" y="275" width="345" height="40" fill="#0F1219"/>
+  <text x="50"  y="290" class="dim-head">STABLE URL</text>
+  <text x="50"  y="306" class="cell-em">Yes — entity-keyed permalink</text>
+  <text x="390" y="290" class="dim-head">STABLE URL</text>
+  <text x="390" y="306" class="cell">No — POST body with query</text>
+  <line x1="30" y1="315" x2="720" y2="315" class="sep"/>
+
+  <!-- Row 7: Use case -->
+  <rect x="30" y="315" width="340" height="40" fill="#0F1219"/>
+  <rect x="375" y="315" width="345" height="40" fill="#0B0E14"/>
+  <text x="50"  y="330" class="dim-head">USE CASE</text>
+  <text x="50"  y="346" class="cell">Monitor known entity set over time</text>
+  <text x="390" y="330" class="dim-head">USE CASE</text>
+  <text x="390" y="346" class="cell">Investigative queries across unknown sets</text>
+  <line x1="30" y1="355" x2="720" y2="355" class="sep"/>
+
+  <!-- Note: One assembler -->
+  <line x1="30" y1="355" x2="720" y2="355" class="sep-amber"/>
+  <rect x="30" y="356" width="690" height="14" fill="#131720"/>
+  <text x="375" y="367" class="footer" text-anchor="middle">ONE CODE PATH · bundle_assembler() · depth=0 for dossier · depth=2/3 for story · same bundle JSON shape</text>
+
+  <!-- Bottom rules -->
+  <line x1="30" y1="370" x2="720" y2="370" class="rule-dash"/>
+  <line x1="30" y1="374" x2="720" y2="374" class="rule"/>
+
+  <text x="375" y="393" class="footer" text-anchor="middle">EVERY BUNDLE CARRIES FULL SOURCE-EXISTENCE METADATA ON EVERY FACT</text>
+  <text x="375" y="407" class="footer" text-anchor="middle">URL · VERBATIM EXCERPT · CONTENT HASH · WAYBACK ARCHIVE URL · VERIFICATION STATUS</text>
+</svg>

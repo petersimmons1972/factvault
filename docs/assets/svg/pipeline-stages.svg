@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 420">
+  <defs>
+    <style>
+      .bg { fill: #0B0E14; }
+      .panel { fill: #0F1219; stroke: #5C5852; stroke-width: 1; }
+      .stage-box { fill: #131720; stroke: #C8850A; stroke-width: 2; }
+      .stage-active { fill: #1A1E28; stroke: #C8850A; stroke-width: 2; }
+      .arrow { stroke: #C8850A; stroke-width: 2; fill: none; }
+      .arrow-head { fill: #C8850A; stroke: none; }
+      .title { font-family: 'Roboto Slab', 'Courier New', Georgia, serif; fill: #E8E4D8; font-size: 13px; font-weight: bold; letter-spacing: 2px; }
+      .stage-num { font-family: 'Courier New', monospace; fill: #C8850A; font-size: 11px; font-weight: bold; }
+      .stage-label { font-family: 'Roboto Slab', 'Courier New', Georgia, serif; fill: #E8E4D8; font-size: 11px; font-weight: bold; letter-spacing: 1px; }
+      .stage-desc { font-family: 'Inter', 'Helvetica Neue', sans-serif; fill: #A8A49A; font-size: 9px; }
+      .io-label { font-family: 'Courier New', monospace; fill: #5C5852; font-size: 8px; }
+      .rule { stroke: #5C5852; stroke-width: 1; fill: none; }
+      .footer { font-family: 'Courier New', monospace; fill: #5C5852; font-size: 8px; letter-spacing: 1px; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="750" height="420" class="bg"/>
+
+  <!-- Top rule + title -->
+  <line x1="30" y1="38" x2="720" y2="38" class="rule"/>
+  <text x="375" y="25" class="title" text-anchor="middle">FACTVAULT — SIX-STAGE INGESTION PIPELINE</text>
+  <line x1="30" y1="42" x2="720" y2="42" class="rule" stroke-dasharray="4 3"/>
+
+  <!-- Stage boxes: 6 stages, top row 1-3, bottom row 4-6 -->
+  <!-- Stage 1: Collect -->
+  <rect x="30" y="70" width="110" height="80" class="stage-box"/>
+  <text x="40" y="85" class="stage-num">01</text>
+  <text x="40" y="100" class="stage-label">COLLECT</text>
+  <text x="40" y="115" class="stage-desc">RSS · Sitemap</text>
+  <text x="40" y="127" class="stage-desc">SearXNG · HTTP</text>
+  <text x="40" y="139" class="stage-desc">Upload · Wayback</text>
+
+  <!-- Arrow 1→2 -->
+  <line x1="140" y1="110" x2="165" y2="110" class="arrow"/>
+  <polygon points="165,106 173,110 165,114" class="arrow-head"/>
+
+  <!-- Stage 2: Archive -->
+  <rect x="173" y="70" width="110" height="80" class="stage-box"/>
+  <text x="183" y="85" class="stage-num">02</text>
+  <text x="183" y="100" class="stage-label">ARCHIVE</text>
+  <text x="183" y="115" class="stage-desc">raw_text extract</text>
+  <text x="183" y="127" class="stage-desc">Wayback SPN2</text>
+  <text x="183" y="139" class="stage-desc">SHA-256 hash</text>
+
+  <!-- Arrow 2→3 -->
+  <line x1="283" y1="110" x2="308" y2="110" class="arrow"/>
+  <polygon points="308,106 316,110 308,114" class="arrow-head"/>
+
+  <!-- Stage 3: Extract -->
+  <rect x="316" y="70" width="110" height="80" class="stage-box"/>
+  <text x="326" y="85" class="stage-num">03</text>
+  <text x="326" y="100" class="stage-label">EXTRACT</text>
+  <text x="326" y="115" class="stage-desc">Deterministic first</text>
+  <text x="326" y="127" class="stage-desc">LLM on remainder</text>
+  <text x="326" y="139" class="stage-desc">Offset check ✓</text>
+
+  <!-- Arrow 3→4: curves down -->
+  <line x1="459" y1="110" x2="490" y2="110" class="arrow"/>
+  <line x1="490" y1="110" x2="490" y2="250" class="arrow"/>
+  <line x1="490" y1="250" x2="456" y2="250" class="arrow"/>
+  <polygon points="456,246 448,250 456,254" class="arrow-head"/>
+
+  <!-- Stage 4: Corroborate -->
+  <rect x="316" y="210" width="130" height="80" class="stage-box"/>
+  <text x="326" y="225" class="stage-num">04</text>
+  <text x="326" y="240" class="stage-label">CORROBORATE</text>
+  <text x="326" y="255" class="stage-desc">Independence check</text>
+  <text x="326" y="267" class="stage-desc">Confidence 0→0.95</text>
+  <text x="326" y="279" class="stage-desc">Conflict detection</text>
+
+  <!-- Arrow 4→5 -->
+  <line x1="316" y1="250" x2="291" y2="250" class="arrow"/>
+  <polygon points="291,246 283,250 291,254" class="arrow-head"/>
+
+  <!-- Stage 5: Verify -->
+  <rect x="173" y="210" width="110" height="80" class="stage-box"/>
+  <text x="183" y="225" class="stage-num">05</text>
+  <text x="183" y="240" class="stage-label">VERIFY</text>
+  <text x="183" y="255" class="stage-desc">Daily CronJob</text>
+  <text x="183" y="267" class="stage-desc">Re-fetch + hash</text>
+  <text x="183" y="279" class="stage-desc">Append-only log</text>
+
+  <!-- Arrow 5→6 -->
+  <line x1="173" y1="250" x2="148" y2="250" class="arrow"/>
+  <polygon points="148,246 140,250 148,254" class="arrow-head"/>
+
+  <!-- Stage 6: Relate -->
+  <rect x="30" y="210" width="110" height="80" class="stage-box"/>
+  <text x="40" y="225" class="stage-num">06</text>
+  <text x="40" y="240" class="stage-label">RELATE</text>
+  <text x="40" y="255" class="stage-desc">Entity edges sync</text>
+  <text x="40" y="267" class="stage-desc">Embedding-near</text>
+  <text x="40" y="279" class="stage-desc">Graph traversal</text>
+
+  <!-- Vertical divider for right panel -->
+  <line x1="560" y1="58" x2="560" y2="370" class="rule"/>
+
+  <!-- Right panel: Output surface -->
+  <text x="575" y="80" class="title" font-size="10px">OUTPUT SURFACE</text>
+  <line x1="570" y1="86" x2="720" y2="86" class="rule" stroke-dasharray="3 2"/>
+
+  <!-- REST API block -->
+  <rect x="570" y="95" width="140" height="70" class="panel"/>
+  <text x="580" y="112" class="stage-label" font-size="10px">REST API</text>
+  <text x="580" y="126" class="stage-desc">GET /entities/{id}/dossier</text>
+  <text x="580" y="138" class="stage-desc">POST /stories</text>
+  <text x="580" y="150" class="stage-desc">POST /facts/query</text>
+
+  <!-- MCP block -->
+  <rect x="570" y="175" width="140" height="60" class="panel"/>
+  <text x="580" y="192" class="stage-label" font-size="10px">MCP SERVER</text>
+  <text x="580" y="206" class="stage-desc">entity_lookup</text>
+  <text x="580" y="218" class="stage-desc">story_query · fact_query</text>
+
+  <!-- Bundle block -->
+  <rect x="570" y="245" width="140" height="80" class="panel" stroke="#C8850A" stroke-dasharray="4 2"/>
+  <text x="580" y="262" class="stage-label" font-size="10px">BUNDLE JSON</text>
+  <text x="580" y="276" class="stage-desc">facts + sources</text>
+  <text x="580" y="288" class="stage-desc">excerpts + offsets</text>
+  <text x="580" y="300" class="stage-desc">archive_url</text>
+  <text x="580" y="312" class="stage-desc">verification_status</text>
+
+  <!-- Connector from stage flow to output panel -->
+  <line x1="460" y1="250" x2="540" y2="250" class="arrow" stroke-dasharray="5 3"/>
+  <polygon points="540,246 548,250 540,254" class="arrow-head"/>
+
+  <!-- Bottom annotations -->
+  <line x1="30" y1="370" x2="720" y2="370" class="rule" stroke-dasharray="4 3"/>
+  <line x1="30" y1="374" x2="720" y2="374" class="rule"/>
+
+  <!-- Status labels under stages -->
+  <text x="85" y="392" class="io-label" text-anchor="middle">→ status:</text>
+  <text x="85" y="402" class="io-label" text-anchor="middle">'collected'</text>
+  <text x="228" y="392" class="io-label" text-anchor="middle">→ 'archived'</text>
+  <text x="371" y="392" class="io-label" text-anchor="middle">→ 'extracted'</text>
+  <text x="381" y="402" class="io-label" text-anchor="middle">conf. updated</text>
+  <text x="228" y="402" class="io-label" text-anchor="middle">raw_text∥hash</text>
+
+  <!-- Footer -->
+  <text x="560" y="395" class="footer" text-anchor="middle">EXCERPT OFFSET CHECK MANDATORY AT STAGE 3</text>
+  <text x="560" y="408" class="footer" text-anchor="middle">LLM HALLUCINATIONS REJECTED BEFORE INSERT</text>
+</svg>

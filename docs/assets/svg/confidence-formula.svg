@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 420">
+  <defs>
+    <style>
+      .bg        { fill: #0B0E14; }
+      .rule      { stroke: #5C5852; stroke-width: 1; fill: none; }
+      .rule-dash { stroke: #5C5852; stroke-width: 1; fill: none; stroke-dasharray: 4 3; }
+      .title     { font-family: 'Roboto Slab','Courier New',Georgia,serif; fill: #E8E4D8; font-size: 13px; font-weight: bold; letter-spacing: 2px; }
+      .label     { font-family: 'Roboto Slab','Courier New',Georgia,serif; fill: #E8E4D8; font-size: 11px; font-weight: bold; letter-spacing: 1px; }
+      .body      { font-family: 'Inter','Helvetica Neue',sans-serif; fill: #A8A49A; font-size: 10px; }
+      .mono      { font-family: 'Courier New',monospace; fill: #C8850A; font-size: 11px; }
+      .mono-dim  { font-family: 'Courier New',monospace; fill: #5C5852; font-size: 9px; }
+      .bar-bg    { fill: #131720; stroke: #5C5852; stroke-width: 1; }
+      .bar-fill  { fill: #C8850A; }
+      .bar-mid   { fill: #7A5006; }
+      .footer    { font-family: 'Courier New',monospace; fill: #5C5852; font-size: 8px; letter-spacing: 1px; }
+    </style>
+  </defs>
+
+  <rect width="750" height="420" class="bg"/>
+
+  <!-- Title band -->
+  <line x1="30" y1="38" x2="720" y2="38" class="rule"/>
+  <text x="375" y="25" class="title" text-anchor="middle">CONFIDENCE — DETERMINISTIC FORMULA</text>
+  <line x1="30" y1="42" x2="720" y2="42" class="rule-dash"/>
+
+  <!-- Left panel: formula table -->
+  <text x="50" y="72" class="label">INDEPENDENT SOURCES → CEILING</text>
+  <line x1="50" y1="78" x2="370" y2="78" class="rule-dash"/>
+
+  <!-- Row headers -->
+  <text x="50"  y="100" class="body">Sources</text>
+  <text x="160" y="100" class="body">Ceiling</text>
+  <text x="260" y="100" class="body">Bar</text>
+  <line x1="50" y1="106" x2="370" y2="106" class="rule"/>
+
+  <!-- Row 0 -->
+  <text x="50"  y="128" class="mono">0</text>
+  <text x="160" y="128" class="mono">0.00</text>
+  <rect x="260" y="116" width="0" height="16" class="bar-bg"/>
+  <rect x="260" y="116" width="90" height="16" class="bar-bg"/>
+
+  <!-- Row 1 -->
+  <text x="50"  y="160" class="mono">1</text>
+  <text x="160" y="160" class="mono">0.50</text>
+  <rect x="260" y="148" width="90" height="16" class="bar-bg"/>
+  <rect x="260" y="148" width="45" height="16" class="bar-mid"/>
+  <text x="310" y="160" class="body" text-anchor="middle">50%</text>
+
+  <!-- Row 2 -->
+  <text x="50"  y="192" class="mono">2</text>
+  <text x="160" y="192" class="mono">0.85</text>
+  <rect x="260" y="180" width="90" height="16" class="bar-bg"/>
+  <rect x="260" y="180" width="76" height="16" class="bar-fill" opacity="0.7"/>
+  <text x="310" y="192" class="body" text-anchor="middle">85%</text>
+
+  <!-- Row ≥3 -->
+  <text x="50"  y="224" class="mono">≥ 3</text>
+  <text x="160" y="224" class="mono">0.95</text>
+  <rect x="260" y="212" width="90" height="16" class="bar-bg"/>
+  <rect x="260" y="212" width="85" height="16" class="bar-fill"/>
+  <text x="310" y="224" class="body" text-anchor="middle">95%</text>
+
+  <line x1="50" y1="236" x2="370" y2="236" class="rule"/>
+  <text x="50"  y="254" class="body">No statement reaches 1.0 via automated pipeline.</text>
+  <text x="50"  y="270" class="body">Human review required to exceed 0.95.</text>
+
+  <!-- Independence criteria box -->
+  <rect x="50" y="290" width="320" height="70" fill="#0F1219" stroke="#5C5852" stroke-width="1"/>
+  <text x="62" y="308" class="label" font-size="9px">INDEPENDENCE CRITERIA</text>
+  <text x="62" y="323" class="body">A · Same publisher domain (eTLD+1) → not independent</text>
+  <text x="62" y="337" class="body">B · Trigram similarity ≥ 0.8 (first 2 000 chars) → not independent</text>
+  <text x="62" y="351" class="body">Wire-copy published under different outlets caught by rule B.</text>
+
+  <!-- Vertical divider -->
+  <line x1="400" y1="58" x2="400" y2="380" class="rule"/>
+
+  <!-- Right panel: conflict surface -->
+  <text x="420" y="72" class="label">CONFLICT SURFACE — v_conflicts</text>
+  <line x1="420" y1="78" x2="710" y2="78" class="rule-dash"/>
+
+  <text x="420" y="102" class="body">Two non-deprecated statements with the same</text>
+  <text x="420" y="116" class="body">(subject_id, property_id) and differing values</text>
+  <text x="420" y="130" class="body">are a conflict. Neither is deleted.</text>
+
+  <!-- Conflict resolution diagram -->
+  <rect x="420" y="148" width="130" height="36" fill="#131720" stroke="#C8850A" stroke-width="1"/>
+  <text x="485" y="162" class="label" text-anchor="middle" font-size="9px">STATEMENT A</text>
+  <text x="485" y="176" class="mono" text-anchor="middle" font-size="9px">rank=normal · conf=0.85</text>
+
+  <rect x="570" y="148" width="130" height="36" fill="#131720" stroke="#5C5852" stroke-width="1"/>
+  <text x="635" y="162" class="label" text-anchor="middle" font-size="9px">STATEMENT B</text>
+  <text x="635" y="176" class="mono-dim" text-anchor="middle" font-size="9px">rank=normal · conf=0.50</text>
+
+  <text x="553" y="172" class="mono" text-anchor="middle" font-size="14px">≠</text>
+
+  <text x="420" y="210" class="body">Resolution: human sets rank='preferred' on A,</text>
+  <text x="420" y="224" class="body">rank='deprecated' on B. Neither deleted.</text>
+  <text x="420" y="238" class="body">Both appear in v_conflicts until resolved.</text>
+
+  <!-- rank enum box -->
+  <rect x="420" y="260" width="280" height="80" fill="#0F1219" stroke="#5C5852" stroke-width="1"/>
+  <text x="432" y="278" class="label" font-size="9px">rank ENUM</text>
+  <text x="432" y="294" class="mono" font-size="10px">preferred</text>
+  <text x="530" y="294" class="body">  authoritative value for this (subj, prop)</text>
+  <text x="432" y="310" class="mono" font-size="10px">normal  </text>
+  <text x="530" y="310" class="body">  not yet adjudicated</text>
+  <text x="432" y="326" class="mono" font-size="10px">deprecated</text>
+  <text x="530" y="326" class="body">  superseded; retained for audit</text>
+
+  <!-- Footer -->
+  <line x1="30" y1="370" x2="720" y2="370" class="rule-dash"/>
+  <line x1="30" y1="374" x2="720" y2="374" class="rule"/>
+  <text x="375" y="392" class="footer" text-anchor="middle">THE LLM NEVER SETS CONFIDENCE · FORMULA IS DETERMINISTIC · SOURCE-INDEPENDENCE-CHECKED</text>
+  <text x="375" y="407" class="footer" text-anchor="middle">FACTVAULT DESIGN SPEC § 3.3</text>
+</svg>
