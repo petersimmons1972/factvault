@@ -240,11 +240,13 @@ CREATE INDEX idx_dossiers_tenant_assembled ON dossiers (tenant_id, assembled_at 
 
 -- ---------------------------------------------------------------------------
 -- 0011: HNSW indices on embedding columns
+-- NOTE: Migration uses CREATE INDEX CONCURRENTLY to avoid exclusive table locks.
+-- CONCURRENTLY requires autocommit mode (outside a transaction block).
 -- ---------------------------------------------------------------------------
-CREATE INDEX idx_entities_embedding   ON entities   USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
-CREATE INDEX idx_statements_embedding ON statements USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
-CREATE INDEX idx_relations_embedding  ON relations  USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
-CREATE INDEX idx_sources_embedding    ON sources    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_entities_embedding   ON entities   USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_statements_embedding ON statements USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_relations_embedding  ON relations  USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sources_embedding    ON sources    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
 -- ---------------------------------------------------------------------------
 -- 0012: RLS policies
