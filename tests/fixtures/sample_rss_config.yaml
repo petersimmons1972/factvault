@@ -1,0 +1,18 @@
+tenants:
+  - id: 22222222-2222-2222-2222-222222222222
+    name: smoke-test
+
+collectors:
+  - name: rss
+    config:
+      feed_urls:
+        - https://example.com/smoke-feed.xml
+
+archive_worker:
+  interval_seconds: 60
+  batch_size: 50
+
+verify_worker:
+  age_threshold_days: 30
+  fetch_age_threshold_days: 7
+  batch_size: 50
