@@ -297,3 +297,168 @@ def test_no_tenant_context_returns_zero_rows(app_engine: Engine):
                 {"id": entity_id},
             )
         conn_clean.commit()
+
+
+# ---------------------------------------------------------------------------
+# Behavior 5 — Qualifiers isolation via EXISTS policy
+# ---------------------------------------------------------------------------
+
+def test_qualifiers_rls_via_exists_policy(app_engine: Engine):
+    """
+    Qualifiers have no tenant_id column; isolation is enforced via EXISTS policy
+    that checks the parent statement's tenant_id. Verify that a qualifier created
+    by Tenant A is not visible to Tenant B, and that Tenant B cannot UPDATE it.
+    """
+    entity_id = str(uuid4())
+    prop_id = str(uuid4())
+    stmt_id = str(uuid4())
+    qual_id = str(uuid4())
+
+    # --- Tenant A: create entity, property, statement, and qualifier ---
+    with app_engine.connect() as conn_a:
+        with tenant_context(conn_a, TENANT_A):
+            conn_a.execute(
+                text(
+                    "INSERT INTO entities (id, tenant_id, label) "
+                    "VALUES (:id, :tid, :lbl)"
+                ),
+                {"id": entity_id, "tid": str(TENANT_A), "lbl": "test-entity"},
+            )
+            conn_a.execute(
+                text(
+                    "INSERT INTO properties (id, tenant_id, slug, label, value_type) "
+                    "VALUES (:id, :tid, :slug, :label, :vtype)"
+                ),
+                {
+                    "id": prop_id,
+                    "tid": str(TENANT_A),
+                    "slug": "test-property",
+                    "label": "Test Property",
+                    "vtype": "string",
+                },
+            )
+            conn_a.execute(
+                text(
+                    "INSERT INTO statements (id, tenant_id, subject_id, property_id, val_text, confidence) "
+                    "VALUES (:id, :tid, :sid, :pid, :val, :conf)"
+                ),
+                {
+                    "id": stmt_id,
+                    "tid": str(TENANT_A),
+                    "sid": entity_id,
+                    "pid": prop_id,
+                    "val": "original-value",
+                    "conf": 0.95,
+                },
+            )
+            conn_a.execute(
+                text(
+                    "INSERT INTO qualifiers (id, statement_id, property_id, val_text) "
+                    "VALUES (:id, :sid, :pid, :val)"
+                ),
+                {
+                    "id": qual_id,
+                    "sid": stmt_id,
+                    "pid": prop_id,
+                    "val": "original-qualifier-val",
+                },
+            )
+        conn_a.commit()
+
+    # --- Tenant B read: must see zero qualifiers ---
+    with app_engine.connect() as conn_b:
+        with tenant_context(conn_b, TENANT_B):
+            rows_b = conn_b.execute(
+                text("SELECT id FROM qualifiers WHERE id = :id"),
+                {"id": qual_id},
+            ).fetchall()
+        conn_b.rollback()
+
+    assert rows_b == [], (
+        f"Tenant B saw Tenant A's qualifier — EXISTS policy not enforced. rows={rows_b}"
+    )
+
+    # --- Tenant B UPDATE: must affect 0 rows ---
+    with app_engine.connect() as conn_b2:
+        with tenant_context(conn_b2, TENANT_B):
+            result = conn_b2.execute(
+                text("UPDATE qualifiers SET val_text = 'hacked' WHERE id = :id"),
+                {"id": qual_id},
+            )
+            assert result.rowcount == 0, (
+                f"Tenant B updated Tenant A's qualifier — EXISTS policy not enforced. "
+                f"rowcount={result.rowcount}"
+            )
+        conn_b2.rollback()
+
+    # --- Tenant A verify qualifier unchanged ---
+    with app_engine.connect() as conn_a2:
+        with tenant_context(conn_a2, TENANT_A):
+            row_a = conn_a2.execute(
+                text("SELECT val_text FROM qualifiers WHERE id = :id"),
+                {"id": qual_id},
+            ).fetchone()
+        conn_a2.rollback()
+
+    assert row_a is not None, "Tenant A's qualifier disappeared"
+    assert row_a.val_text == "original-qualifier-val", (
+        f"Qualifier val_text was mutated despite EXISTS policy: "
+        f"expected 'original-qualifier-val', got '{row_a.val_text}'"
+    )
+
+    # Cleanup
+    with app_engine.connect() as conn_clean:
+        with tenant_context(conn_clean, TENANT_A):
+            conn_clean.execute(
+                text("DELETE FROM qualifiers WHERE id = :id"),
+                {"id": qual_id},
+            )
+            conn_clean.execute(
+                text("DELETE FROM statements WHERE id = :id"),
+                {"id": stmt_id},
+            )
+            conn_clean.execute(
+                text("DELETE FROM properties WHERE id = :id"),
+                {"id": prop_id},
+            )
+            conn_clean.execute(
+                text("DELETE FROM entities WHERE id = :id"),
+                {"id": entity_id},
+            )
+        conn_clean.commit()
+
+
+# ---------------------------------------------------------------------------
+# Behavior 6 — Cross-tenant INSERT blocked by WITH CHECK
+# ---------------------------------------------------------------------------
+
+def test_cross_tenant_insert_blocked_by_with_check(app_engine: Engine):
+    """
+    Attempt to INSERT a row with a cross-tenant tenant_id (e.g., Tenant A inserts
+    into entities with tenant_id = TENANT_B_UUID). The implicit WITH CHECK clause
+    (derived from USING when FOR ALL is used) must block this, raising
+    ProgrammingError / InsufficientPrivilege with a row-level security message.
+    """
+    import sqlalchemy.exc
+
+    entity_id = str(uuid4())
+
+    # --- Tenant A attempts INSERT with tenant_id = TENANT_B ---
+    with app_engine.connect() as conn_a:
+        with tenant_context(conn_a, TENANT_A):
+            with pytest.raises(
+                (sqlalchemy.exc.ProgrammingError, sqlalchemy.exc.DBAPIError),
+                match=r"(?i)(row-level security|policy|insufficient privilege)",
+            ):
+                conn_a.execute(
+                    text(
+                        "INSERT INTO entities (id, tenant_id, label) "
+                        "VALUES (:id, :tid, :lbl)"
+                    ),
+                    {
+                        "id": entity_id,
+                        "tid": str(TENANT_B),  # Wrong tenant
+                        "lbl": "cross-tenant-insert",
+                    },
+                )
+            conn_a.rollback()

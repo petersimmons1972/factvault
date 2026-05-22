@@ -26,6 +26,21 @@ _DOMAIN_TABLES = [
 
 
 def upgrade() -> None:
+    # Policies use FOR ALL with USING only. Per Postgres semantics, when a policy
+    # is declared FOR ALL and WITH CHECK is omitted, the USING expression is also
+    # applied as WITH CHECK for INSERT and UPDATE. This means cross-tenant write
+    # spoofing (e.g., INSERT INTO entities (..., tenant_id) VALUES (..., other_tenant))
+    # is blocked: the new row's tenant_id is evaluated against current_setting(...)
+    # and fails the policy, raising "new row violates row-level security policy".
+    # Do NOT split this into separate FOR SELECT + FOR INSERT without explicitly
+    # restoring WITH CHECK — silent loss of write-spoof protection would result.
+    #
+    # The NULLIF(current_setting('app.tenant_id', true), '')::uuid form handles
+    # the "no GUC set" case: current_setting with missing_ok=true returns '' (empty
+    # string), not NULL. NULLIF converts that to NULL, NULL::uuid is NULL, and
+    # tenant_id = NULL evaluates to NULL (filtered out). Without NULLIF, unset GUC
+    # would raise InvalidTextRepresentation when casting '' to uuid.
+
     for table in _DOMAIN_TABLES:
         op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
         op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")

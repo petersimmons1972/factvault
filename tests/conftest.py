@@ -59,6 +59,12 @@ def conn(migrated_engine: Engine) -> Connection:
     """
     Function-scoped connection inside a SAVEPOINT transaction.
     Rolls back at the end of each test, leaving the DB clean.
+
+    IMPORTANT: This fixture uses the superuser connection from `migrated_engine`.
+    Postgres superusers bypass Row-Level Security unconditionally — tests using
+    `conn` do NOT exercise RLS policies. For RLS-sensitive tests, use the
+    `app_engine` fixture (which connects as the non-superuser `app_user` role).
+    See `tests/db/test_rls_isolation.py` for examples.
     """
     with migrated_engine.connect() as connection:
         connection.execute(text("SAVEPOINT test_savepoint"))
