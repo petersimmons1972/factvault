@@ -217,6 +217,24 @@ class Source(Base):
     )
 
 
+class SourceVerification(Base):
+    __tablename__ = "source_verifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    status: Mapped[str] = mapped_column(nullable=False)
+    new_content_hash: Mapped[Optional[str]] = mapped_column(nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(nullable=True)
+
+
 class StatementSource(Base):
     __tablename__ = "statement_sources"
     __table_args__ = (
