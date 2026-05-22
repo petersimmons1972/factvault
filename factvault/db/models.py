@@ -215,3 +215,44 @@ class Source(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
+
+
+class StatementSource(Base):
+    __tablename__ = "statement_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "statement_id", "source_id",
+            name="uq_statement_sources_stmt_src",
+        ),
+        CheckConstraint("excerpt_offset_start >= 0", name="chk_ss_offset_start"),
+        CheckConstraint(
+            "excerpt_offset_end > excerpt_offset_start", name="chk_ss_offset_end"
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="chk_ss_confidence",
+        ),
+        Index("idx_stmt_sources_statement", "statement_id"),
+        Index("idx_stmt_sources_source", "source_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    statement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("statements.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False
+    )
+    excerpt: Mapped[str] = mapped_column(nullable=False)
+    excerpt_offset_start: Mapped[int] = mapped_column(nullable=False)
+    excerpt_offset_end: Mapped[int] = mapped_column(nullable=False)
+    extraction_method: Mapped[str] = mapped_column(nullable=False)
+    extracted_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    confidence: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 3), nullable=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
