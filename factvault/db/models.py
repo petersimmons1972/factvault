@@ -217,6 +217,28 @@ class Source(Base):
     )
 
 
+class ProposedProperty(Base):
+    __tablename__ = "proposed_properties"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    proposed_slug: Mapped[str] = mapped_column(nullable=False)
+    proposed_value_type: Mapped[str] = mapped_column(nullable=False)
+    proposed_by: Mapped[str] = mapped_column(nullable=False)
+    example_excerpt: Mapped[Optional[str]] = mapped_column(nullable=True)
+    example_source_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(nullable=False, server_default=text("'pending'"))
+    reviewed_by: Mapped[Optional[str]] = mapped_column(nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=text("now()")
+    )
+
+
 class SourceVerification(Base):
     __tablename__ = "source_verifications"
 
