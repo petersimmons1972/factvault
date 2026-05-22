@@ -258,6 +258,12 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sources_embedding    ON sources    U
 -- InvalidTextRepresentation. NULLIF converts '' to NULL, and NULL::uuid is NULL,
 -- so tenant_id = NULL evaluates to NULL (row is filtered out, not errored).
 -- ---------------------------------------------------------------------------
+
+-- Defensive revoke: ensure app_user inherits only explicitly-granted privileges,
+-- even on databases where PUBLIC has been granted unexpectedly by operators.
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC;
+
 ALTER TABLE entities              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE entities              FORCE ROW LEVEL SECURITY;
 ALTER TABLE properties            ENABLE ROW LEVEL SECURITY;
