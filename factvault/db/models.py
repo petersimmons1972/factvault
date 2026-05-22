@@ -217,6 +217,22 @@ class Source(Base):
     )
 
 
+class Dossier(Base):
+    __tablename__ = "dossiers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("entities.id"), nullable=False
+    )
+    assembled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    bundle: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
 class ProposedProperty(Base):
     __tablename__ = "proposed_properties"
 
