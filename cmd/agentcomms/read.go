@@ -51,7 +51,7 @@ func newReadCmd() *cobra.Command {
 	cmd.Flags().StringVar(&inbox, "inbox", "", "which inbox to read (claude|codex) [default: claude]")
 	cmd.Flags().StringVar(&kind, "kind", "", "filter by kind")
 	cmd.Flags().StringVar(&from, "from", "", "filter by sender")
-	cmd.Flags().BoolVar(&unread, "unread", false, "only show unread (cursor not yet implemented; flag accepted)")
+	cmd.Flags().BoolVar(&unread, "unread", false, "only show unread messages and advance the inbox cursor")
 	// suppress unused-arg complaints; intentional.
 	_ = fmt.Sprintln
 	return cmd

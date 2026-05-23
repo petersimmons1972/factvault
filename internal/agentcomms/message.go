@@ -31,12 +31,17 @@ const (
 	KindBlock    Kind = "block"
 	KindHandoff  Kind = "handoff"
 	KindAck      Kind = "ack"
+	KindClaim    Kind = "claim"
+	KindProgress Kind = "progress"
+	KindCapPub   Kind = "capability_publish"
+	KindLessons  Kind = "lessons"
 )
 
 // validKinds is the set of valid Kind values per schema.json.
 var validKinds = map[Kind]struct{}{
 	KindQuestion: {}, KindAnswer: {}, KindNudge: {},
 	KindBlock: {}, KindHandoff: {}, KindAck: {},
+	KindClaim: {}, KindProgress: {}, KindCapPub: {}, KindLessons: {},
 }
 
 // validAgents is the set of valid Agent values per schema.json.

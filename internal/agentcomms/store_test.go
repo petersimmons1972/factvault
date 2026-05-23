@@ -229,6 +229,46 @@ func TestQueueDepth(t *testing.T) {
 	}
 }
 
+func TestReadUnreadAdvancesCursor(t *testing.T) {
+	s := newStore(t)
+	first := mkMsg(t, KindNudge, AgentClaude, AgentCodex)
+	first.TS = "2026-05-23T01:00:00Z"
+	first.ID = "01HXYZABCDEFGHJKMNPQRSTVWX"
+	if err := s.Send(first); err != nil {
+		t.Fatal(err)
+	}
+	second := mkMsg(t, KindAck, AgentClaude, AgentCodex)
+	second.TS = "2026-05-23T01:00:01Z"
+	second.ID = "01HXYZABCDEFGHJKMNPQRSTVXY"
+	if err := s.Send(second); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Read(ReadFilter{Inbox: AgentCodex, Unread: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Messages) != 2 {
+		t.Fatalf("got %d unread messages, want 2", len(res.Messages))
+	}
+	cursorTS, cursorID, found, err := s.readCursor(AgentCodex)
+	if err != nil {
+		t.Fatalf("readCursor: %v", err)
+	}
+	if !found {
+		t.Fatal("expected cursor to be persisted")
+	}
+	if cursorTS != second.TS || cursorID != second.ID {
+		t.Fatalf("cursor=%s/%s want %s/%s", cursorTS, cursorID, second.TS, second.ID)
+	}
+	res, err = s.Read(ReadFilter{Inbox: AgentCodex, Unread: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Messages) != 0 {
+		t.Fatalf("expected no unread messages after cursor advance, got %d", len(res.Messages))
+	}
+}
+
 // TestSendWritesValidSchema verifies round-trip JSON shape.
 func TestSendWritesValidSchema(t *testing.T) {
 	s := newStore(t)

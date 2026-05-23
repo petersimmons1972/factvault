@@ -34,7 +34,7 @@ type Store struct {
 func NewStore(root string) (*Store, error) {
 	s := &Store{Root: root}
 	for _, sub := range []string{
-		"inbox/claude", "inbox/codex", "processed", "dead-letter", "audit",
+		"inbox/claude", "inbox/codex", "processed", "dead-letter", "audit", "cursors", "registry",
 	} {
 		if err := os.MkdirAll(filepath.Join(root, sub), 0o755); err != nil {
 			return nil, fmt.Errorf("mkdir %s: %w", sub, err)
@@ -139,7 +139,7 @@ type ReadFilter struct {
 	Inbox  Agent
 	Kind   Kind  // empty = no filter
 	From   Agent // empty = no filter
-	Unread bool  // future hook (cursor) — current impl is stateless
+	Unread bool  // when true, return only messages after the persisted cursor
 }
 
 // Read returns messages from the inbox, drained by priority lane (§20.3) then
@@ -156,6 +156,13 @@ func (s *Store) Read(filter ReadFilter) (*ReadResult, error) {
 	}
 	out := &ReadResult{}
 	var priority, normal []*Message
+	var cursorTS, cursorID string
+	if filter.Unread {
+		cursorTS, cursorID, _, err = s.readCursor(filter.Inbox)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -185,6 +192,9 @@ func (s *Store) Read(filter ReadFilter) (*ReadResult, error) {
 			out.DeadLetter++
 			continue
 		}
+		if filter.Unread && !isAfterCursor(msg, cursorTS, cursorID) {
+			continue
+		}
 		if filter.Kind != "" && msg.Kind != filter.Kind {
 			continue
 		}
@@ -200,13 +210,70 @@ func (s *Store) Read(filter ReadFilter) (*ReadResult, error) {
 	sortByTS(priority)
 	sortByTS(normal)
 	out.Messages = append(priority, normal...)
+	if filter.Unread && len(out.Messages) > 0 {
+		last := out.Messages[len(out.Messages)-1]
+		if err := s.writeCursor(filter.Inbox, last.TS, last.ID); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
 }
 
 func sortByTS(ms []*Message) {
 	sort.SliceStable(ms, func(i, j int) bool {
+		if ms[i].TS == ms[j].TS {
+			return ms[i].ID < ms[j].ID
+		}
 		return ms[i].TS < ms[j].TS // RFC3339 sorts lexicographically when zulu
 	})
+}
+
+func isAfterCursor(msg *Message, cursorTS, cursorID string) bool {
+	if cursorTS == "" && cursorID == "" {
+		return true
+	}
+	if msg.TS > cursorTS {
+		return true
+	}
+	if msg.TS < cursorTS {
+		return false
+	}
+	return msg.ID > cursorID
+}
+
+type cursorState struct {
+	LastTS    string `json:"last_ts"`
+	LastID    string `json:"last_id"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func (s *Store) cursorPath(a Agent) string {
+	return filepath.Join(s.Root, "cursors", string(a)+".json")
+}
+
+func (s *Store) readCursor(a Agent) (ts, id string, found bool, err error) {
+	p := s.cursorPath(a)
+	data, err := os.ReadFile(p)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", "", false, nil
+		}
+		return "", "", false, fmt.Errorf("read cursor %s: %w", a, err)
+	}
+	var st cursorState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return "", "", false, fmt.Errorf("parse cursor %s: %w", a, err)
+	}
+	return st.LastTS, st.LastID, true, nil
+}
+
+func (s *Store) writeCursor(a Agent, ts, id string) error {
+	st := cursorState{
+		LastTS:    ts,
+		LastID:    id,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	return atomicWriteJSON(s.cursorPath(a), &st)
 }
 
 // routeDeadLetter moves the offending file under dead-letter/ alongside a

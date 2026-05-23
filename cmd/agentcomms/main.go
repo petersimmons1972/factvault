@@ -25,6 +25,12 @@ func main() {
 		newReadCmd(),
 		newAckCmd(),
 		newHeartbeatCmd(),
+		newClaimCmd(),
+		newQuestionCmd(),
+		newBlockCmd(),
+		newHandoffCmd(),
+		newCapabilityCmd(),
+		newLessonsCmd(),
 		newArchiveCmd(),
 		newHealthCmd(),
 	)
