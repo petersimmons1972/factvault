@@ -10,8 +10,9 @@ Two separate confidence values appear in the data model.
 
 **Per-source confidence** (`statement_sources.confidence`) is set by the extraction worker when it writes a `statement_sources` row. It reflects the extraction quality: how clearly the excerpt supports the statement, the reliability of the extraction method, and whether the extraction was machine-produced or human-reviewed. A well-matched excerpt from a structured regulatory filing might score 0.95; an ambiguous passage from a blog post might score 0.65. These values are inputs to the corroboration formula, not the output.
 
-**Statement-level confidence** (`statements.confidence`) is computed by `factvault/assembler/confidence.py` and reflects independent source count with a ceiling applied by the per-source maximum. The formula:
+**Statement-level confidence** (`statements.confidence`) is computed deterministically and reflects independent source count with a ceiling applied by the per-source maximum.
 
+Python implementation (legacy):
 ```python
 def compute_confidence(statement_id: str, tenant_id: str) -> float:
     sources = get_sources_for_statement(statement_id, tenant_id)
@@ -31,6 +32,37 @@ def compute_confidence(statement_id: str, tenant_id: str) -> float:
         return min(per_source_max, 0.85)
     else:  # n >= 3
         return min(per_source_max, 0.95)
+```
+
+Go implementation (current):
+```go
+func ComputeConfidence(independentSourceCount int, sourceConfidences []float64) float64 {
+    ceiling := corroborationCeiling(independentSourceCount)
+    perSourceMax := 0.95
+    if len(sourceConfidences) > 0 {
+        perSourceMax = sourceConfidences[0]
+        for _, confidence := range sourceConfidences[1:] {
+            if confidence > perSourceMax {
+                perSourceMax = confidence
+            }
+        }
+    }
+    if perSourceMax < ceiling {
+        return perSourceMax
+    }
+    return ceiling
+}
+
+func corroborationCeiling(independentSourceCount int) float64 {
+    switch {
+    case independentSourceCount <= 1:
+        return 0.50
+    case independentSourceCount == 2:
+        return 0.85
+    default:
+        return 0.95
+    }
+}
 ```
 
 The LLM never calls this function and never writes to `statements.confidence` directly. The corroborate worker owns confidence recomputation.

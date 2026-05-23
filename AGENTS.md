@@ -54,6 +54,16 @@ You are the execution engine. The coordinator (Claude) opens GitHub Issues descr
 - Open a PR that closes the issue. The PR's last commit MUST end with `Closes #<N>` on its own line. The PR body should also reference `Closes #<N>` for auto-close on merge.
 - After your PR is merged (or closed), pick the next issue.
 
+## TDD-first protocol
+
+- Before writing implementation code for any issue, construct TDD scenarios first.
+- Translate the issue's acceptance criteria into failing test files (red).
+- Confirm tests fail for the right reason (assertion failure, not compile error or missing file).
+- Write the minimum implementation to make tests pass (green).
+- Refactor with tests still green.
+- Commits: prefer separate commits for test (first) and implementation (second), or document the red->green progression in the PR description.
+- A PR opened without a visible TDD trail (failing-test commit preceding passing implementation, or PR description walking through red->green) will be sent back for rework.
+
 **What the coordinator guarantees in every issue:**
 - Exact file paths to create or modify
 - Acceptance criteria (tests to write, behaviors to verify)
@@ -64,7 +74,7 @@ You are the execution engine. The coordinator (Claude) opens GitHub Issues descr
 - Pick up issues without the `agent/codex` label
 - Push directly to `main` (use a feature branch + PR)
 - Use `--no-verify` or bypass any safety check
-- Edit `AGENTS.md`, `CLAUDE.md`, `.mcp.json`, or anything under `.github/` unless the issue explicitly requests it
+- Edit `AGENTS.md`, `CLAUDE.md`, or anything under `.github/` unless the issue explicitly requests it
 
 ## Required reading
 
@@ -136,8 +146,8 @@ a Plan N (e.g., "Plan 3 T13"), find the corresponding plan file and read the
 relevant task section before implementing. Plans are the source of truth for
 file paths, function signatures, and test expectations.
 
-Codex handoff docs (one per plan after Plan 2) at `docs/superpowers/plans/2026-05-22-codex-handoff-plan<N>.md`
-contain per-task briefs designed for direct Codex execution.
+Codex handoff docs (one per plan after Plan 2) are archived at
+`docs/superpowers/plans/archive/2026-05-22-codex-handoff-plan<N>.md`.
 
 ## RLS and tenant_context
 

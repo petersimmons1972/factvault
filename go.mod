@@ -3,6 +3,7 @@ module github.com/petersimmons1972/factvault
 go 1.23.0
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/ory/dockertest/v3 v3.12.0
 	github.com/pgvector/pgvector-go v0.3.0

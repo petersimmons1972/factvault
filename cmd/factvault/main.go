@@ -16,6 +16,7 @@ func main() {
 		Version: version.Version,
 	}
 	root.AddCommand(newMigrateCmd())
+	root.AddCommand(newWorkerCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
