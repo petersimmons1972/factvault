@@ -50,5 +50,6 @@ jobs:
           pip install fastapi uvicorn pytest httpx
 
       - name: Run embedder tests
-        working-directory: services/embedder
-        run: pytest tests -v --tb=short
+        env:
+          PYTHONPATH: services/embedder
+        run: pytest services/embedder/tests -v --tb=short
