@@ -1,0 +1,138 @@
+package retrieval
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/petersimmons1972/factvault/internal/assembler"
+	"github.com/petersimmons1972/factvault/internal/db"
+)
+
+type Service struct {
+	Pool *pgxpool.Pool
+}
+
+type DossierResponse struct {
+	Bundle   *assembler.Bundle `json:"bundle"`
+	CachedAt *string           `json:"cached_at,omitempty"`
+}
+
+type StoryRequest struct {
+	Query         string  `json:"query"`
+	Depth         int     `json:"depth,omitempty"`
+	MaxFacts      *int    `json:"max_facts,omitempty"`
+	MinConfidence float64 `json:"min_confidence,omitempty"`
+}
+
+type StoryResponse struct {
+	Bundle *assembler.Bundle `json:"bundle"`
+}
+
+type FactsQueryRequest struct {
+	Query         string  `json:"query"`
+	MaxFacts      *int    `json:"max_facts,omitempty"`
+	MinConfidence float64 `json:"min_confidence,omitempty"`
+}
+
+type FactsQueryResponse struct {
+	Bundle *assembler.Bundle `json:"bundle"`
+}
+
+func (s Service) Dossier(ctx context.Context, tenantID, entityID string) (*DossierResponse, error) {
+	return withTenantTx(ctx, s.Pool, tenantID, func(ctx context.Context, tx pgx.Tx) (*DossierResponse, error) {
+		bundle, err := assembler.Assemble(ctx, tx, []string{entityID}, 0, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		return &DossierResponse{Bundle: bundle}, nil
+	})
+}
+
+func (s Service) Story(ctx context.Context, tenantID string, req StoryRequest) (*StoryResponse, error) {
+	depth := req.Depth
+	if depth == 0 {
+		depth = 2
+	}
+	if depth < 1 || depth > 3 {
+		return nil, assembler.ErrInvalidDepth
+	}
+	return withTenantTx(ctx, s.Pool, tenantID, func(ctx context.Context, tx pgx.Tx) (*StoryResponse, error) {
+		seeds, err := seedEntities(ctx, tx, tenantID, req.Query, 10)
+		if err != nil {
+			return nil, err
+		}
+		if len(seeds) == 0 {
+			return nil, assembler.ErrEntityNotFound
+		}
+		bundle, err := assembler.Assemble(ctx, tx, seeds, depth, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		return &StoryResponse{Bundle: bundle}, nil
+	})
+}
+
+func (s Service) FactsQuery(ctx context.Context, tenantID string, req FactsQueryRequest) (*FactsQueryResponse, error) {
+	return withTenantTx(ctx, s.Pool, tenantID, func(ctx context.Context, tx pgx.Tx) (*FactsQueryResponse, error) {
+		seeds, err := seedEntities(ctx, tx, tenantID, req.Query, 10)
+		if err != nil {
+			return nil, err
+		}
+		if len(seeds) == 0 {
+			return nil, assembler.ErrEntityNotFound
+		}
+		bundle, err := assembler.Assemble(ctx, tx, seeds, 0, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		return &FactsQueryResponse{Bundle: bundle}, nil
+	})
+}
+
+func withTenantTx[T any](ctx context.Context, pool *pgxpool.Pool, tenantID string, fn func(context.Context, pgx.Tx) (T, error)) (T, error) {
+	var zero T
+	if pool == nil {
+		return zero, fmt.Errorf("retrieval: nil db pool")
+	}
+	var tenant pgtype.UUID
+	if err := tenant.Scan(tenantID); err != nil {
+		return zero, fmt.Errorf("invalid tenant id: %w", err)
+	}
+	txCtx := db.WithPool(ctx, pool)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
+	if err != nil {
+		return zero, err
+	}
+	defer tx.Rollback(txCtx)
+	return fn(txCtx, tx)
+}
+
+func seedEntities(ctx context.Context, tx pgx.Tx, tenantID, query string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id::text
+		FROM entities
+		WHERE tenant_id = $1::uuid AND ($2 = '' OR label ILIKE '%' || $2 || '%' OR COALESCE(description, '') ILIKE '%' || $2 || '%')
+		ORDER BY created_at DESC
+		LIMIT $3
+	`, tenantID, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

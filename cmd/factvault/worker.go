@@ -72,5 +72,27 @@ func newWorkerCmd() *cobra.Command {
 		defer cancel()
 		return p.VerifyOnce(ctx, tenantID, ageDays, limit)
 	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "dossier",
+		Short: "Precompute dossier bundles",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if dsn == "" {
+				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+			}
+			if dsn == "" {
+				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
+			}
+			if tenantID == "" {
+				return fmt.Errorf("tenant required: set --tenant")
+			}
+			pool, err := db.NewPool(cmd.Context(), dsn)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			_, err = (workers.DossierWorker{DB: pool}).RunOnce(cmd.Context(), workers.DossierOptions{TenantID: tenantID, Limit: limit})
+			return err
+		},
+	})
 	return cmd
 }
