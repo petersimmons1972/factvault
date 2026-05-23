@@ -22,3 +22,7 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# agent message bus — local-only inboxes
+.agent-comms/inbox/
+.agent-comms/processed/
