@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -6,124 +5,150 @@ import datetime as dt
 import fcntl
 import json
 import os
-import random
-import shutil
+import platform
+import re
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 PROTO_VERSION = "v1.0"
 KIND_VALUES = {
-    "ack",
-    "archive",
-    "block",
-    "capability_publish",
-    "claim",
-    "decision",
-    "error",
-    "handoff",
-    "heartbeat",
-    "lessons",
-    "nack",
-    "negotiate",
-    "nudge",
     "order",
+    "ack",
+    "nack",
+    "heartbeat",
+    "claim",
     "progress",
+    "handoff",
+    "block",
     "question",
-    "registry_snapshot",
+    "nudge",
+    "error",
     "suggestion",
+    "negotiate",
+    "decision",
+    "capability_publish",
+    "capability_query",
+    "capability_response",
+    "registry_snapshot",
+    "lessons",
 }
-LEGACY_KIND_VALUES = {"question", "answer", "nudge", "block", "handoff", "ack"}
+LEGACY_KIND_VALUES = {"answer"}
 WHO_VALUES = {"claude", "codex"}
+ULID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
+
+
+class Message:
+    def __init__(
+        self,
+        *,
+        id: str,
+        proto_version: str,
+        sender: str,
+        recipient: str,
+        ts: str,
+        seq: int,
+        kind: str,
+        refs: list[str],
+        body: str,
+        in_reply_to: str | None = None,
+        hmac: str | None = None,
+        profile_hash: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        self.id = id
+        self.proto_version = proto_version
+        self.sender = sender
+        self.recipient = recipient
+        self.ts = ts
+        self.seq = seq
+        self.kind = kind
+        self.refs = refs
+        self.body = body
+        self.in_reply_to = in_reply_to
+        self.hmac = hmac
+        self.profile_hash = profile_hash
+        self.payload = payload
+
+    def to_dict(self) -> dict[str, Any]:
+        msg = {
+            "id": self.id,
+            "proto_version": self.proto_version,
+            "from": self.sender,
+            "to": self.recipient,
+            "ts": self.ts,
+            "seq": self.seq,
+            "kind": self.kind,
+            "refs": self.refs,
+            "body": self.body,
+            "in_reply_to": self.in_reply_to,
+            "hmac": self.hmac,
+        }
+        if self.profile_hash is not None:
+            msg["profile_hash"] = self.profile_hash
+        if self.payload is not None:
+            msg["payload"] = self.payload
+        return msg
 
 
 def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-def iso_ts(now: dt.datetime | None = None) -> str:
-    ts = (now or utc_now()).astimezone(dt.timezone.utc).replace(microsecond=0)
-    return ts.isoformat().replace("+00:00", "Z")
+def iso_ts_z() -> str:
+    return utc_now().isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def parse_ts(value: str | None) -> dt.datetime | None:
-    if not value or not isinstance(value, str):
-        return None
-    try:
-        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+def iso_ts_filename() -> str:
+    return utc_now().strftime("%Y-%m-%dT%H-%M-%SZ")
 
 
-def ulid() -> str:
-    crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-    ms = int(utc_now().timestamp() * 1000)
-    ts_chars = []
-    for _ in range(10):
-        ts_chars.append(crockford[ms & 31])
-        ms >>= 5
-    ts_part = "".join(reversed(ts_chars))
-    rand_part = "".join(crockford[random.getrandbits(5)] for _ in range(16))
-    return ts_part + rand_part
+def gen_ulid() -> str:
+    alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+    ts_ms = int(utc_now().timestamp() * 1000)
+    rand = os.urandom(10)
+    value = (ts_ms << 80) | int.from_bytes(rand, "big")
+    chars: list[str] = []
+    for _ in range(26):
+        chars.append(alphabet[value & 31])
+        value >>= 5
+    return "".join(reversed(chars))
 
 
-def json_dumps(obj: Any) -> str:
-    return json.dumps(obj, indent=2, sort_keys=True) + "\n"
-
-
-def bus_root(raw: str | None) -> Path:
-    value = raw or os.environ.get("AGENTCOMMS_BUS") or os.environ.get("AGENT_COMMS_BASE") or "fs://.agent-comms"
-    if value.startswith("fs://"):
-        value = value[5:]
-    elif value.startswith("file://"):
-        value = value[7:]
-    return Path(value).expanduser().resolve()
-
-
-def current_agent_id(raw: str | None) -> str:
-    return raw or os.environ.get("AGENTCOMMS_AGENT_ID") or "codex"
-
-
-def peer_agent_id(agent_id: str) -> str:
-    base, sep, host = agent_id.partition("@")
-    if base == "codex":
-        other = "claude"
-    elif base == "claude":
-        other = "codex"
-    else:
-        other = "claude"
-    if sep:
-        return f"{other}@{host}"
-    return other
-
-
-def short_agent_id(agent_id: str) -> str:
-    return agent_id.split("@", 1)[0]
+def bus_root(bus: str | None = None) -> Path:
+    if bus:
+        if bus.startswith("fs://"):
+            return Path(bus.removeprefix("fs://")).expanduser().resolve()
+        if bus.startswith("file://"):
+            return Path(bus.removeprefix("file://")).expanduser().resolve()
+        return Path(bus).expanduser().resolve()
+    return Path(__file__).resolve().parents[1]
 
 
 def ensure_dirs(root: Path) -> None:
-    for rel in ("inbox/claude", "inbox/codex", "processed", "registry"):
+    for rel in [
+        "inbox/claude",
+        "inbox/codex",
+        "processed",
+        "registry",
+        "audit",
+    ]:
         (root / rel).mkdir(parents=True, exist_ok=True)
 
 
-def message_filename(ts: str, msg_id: str) -> str:
-    safe_ts = ts.replace(":", "-")
-    return f"{safe_ts}-{msg_id}.json"
+def current_agent_id(args: Any) -> str:
+    return getattr(args, "agent_id", None) or os.environ.get("AGENTCOMMS_AGENT_ID", "claude")
 
 
-def audit_path(root: Path) -> Path:
-    return root / "audit.jsonl"
+def peer_agent_id(agent_id: str) -> str:
+    return "codex" if agent_id == "claude" else "claude"
 
 
-def lessons_path(root: Path) -> Path:
-    return root / "lessons.jsonl"
-
-
-def registry_path(root: Path, agent_id: str) -> Path:
-    return root / "registry" / f"{agent_id}.json"
+def short_agent_id(agent_id: str) -> str:
+    return agent_id.split("/", 1)[-1]
 
 
 def inbox_dir(root: Path, agent_id: str) -> Path:
@@ -134,763 +159,610 @@ def processed_dir(root: Path) -> Path:
     return root / "processed"
 
 
+def audit_path(root: Path) -> Path:
+    return root / "audit.jsonl"
+
+
+def lessons_path(root: Path) -> Path:
+    return root / "lessons.json"
+
+
+def registry_path(root: Path, agent_id: str) -> Path:
+    return root / "registry" / f"{short_agent_id(agent_id)}.json"
+
+
 def write_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = Path(tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))[1])
+    fd, tmp = None, None
     try:
-        tmp.write_text(content, encoding="utf-8")
+        fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
     finally:
-        if tmp.exists():
+        if tmp and os.path.exists(tmp):
             try:
-                tmp.unlink()
+                os.unlink(tmp)
             except FileNotFoundError:
                 pass
 
 
 def append_locked(path: Path, line: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        fh.write(line)
-        if not line.endswith("\n"):
-            fh.write("\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-        fcntl.flock(fh, fcntl.LOCK_UN)
+    with open(path, "a", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            fh.write(line)
+            if not line.endswith("\n"):
+                fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
-def load_json(path: Path) -> dict[str, Any] | None:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return data if isinstance(data, dict) else None
+def load_json(path: Path) -> dict[str, Any] | list[Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
+def iter_message_files(directory: Path) -> Iterable[Path]:
+    if not directory.exists():
         return []
-    out: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for raw in fh:
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                obj = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict):
-                out.append(obj)
-    return out
+    return sorted(p for p in directory.iterdir() if p.suffix == ".json" and p.is_file())
 
 
-def iter_message_files(root: Path) -> Iterable[Path]:
-    for rel in ("inbox/claude", "inbox/codex", "processed"):
-        directory = root / rel
-        if not directory.exists():
+def validate_kind(kind: str) -> bool:
+    return kind in KIND_VALUES or kind in LEGACY_KIND_VALUES
+
+
+def validate_message(msg: dict[str, Any]) -> tuple[bool, str]:
+    required = ["id", "proto_version", "from", "to", "ts", "seq", "kind", "refs", "body"]
+    for field in required:
+        if field not in msg:
+            return False, f"missing required field: {field}"
+    if not ULID_RE.match(str(msg.get("id", ""))):
+        return False, f"invalid id format: {msg.get('id')}"
+    if msg.get("proto_version") != PROTO_VERSION:
+        return False, f"proto_version mismatch: expected {PROTO_VERSION}, got {msg.get('proto_version')}"
+    if msg.get("from") not in WHO_VALUES:
+        return False, f"invalid from: {msg.get('from')}"
+    if msg.get("to") not in WHO_VALUES:
+        return False, f"invalid to: {msg.get('to')}"
+    if not ISO_RE.match(str(msg.get("ts", ""))):
+        return False, f"invalid ts format: {msg.get('ts')}"
+    if not isinstance(msg.get("seq"), int) or msg["seq"] < 1:
+        return False, "seq must be >= 1"
+    if not validate_kind(str(msg.get("kind"))):
+        return False, f"invalid kind: {msg.get('kind')}"
+    if not isinstance(msg.get("refs"), list):
+        return False, "refs must be an array"
+    if not isinstance(msg.get("body"), str):
+        return False, "body must be a string"
+    if msg.get("in_reply_to") is not None and not ULID_RE.match(str(msg.get("in_reply_to"))):
+        return False, f"invalid in_reply_to format: {msg.get('in_reply_to')}"
+    if msg.get("hmac") is not None and not isinstance(msg.get("hmac"), str):
+        return False, "hmac must be a string or null"
+    return True, ""
+
+
+def find_message(bus: str, msg_id: str) -> Path | None:
+    root = bus_root(bus)
+    for sub in [root / "inbox" / "claude", root / "inbox" / "codex", root / "processed"]:
+        if not sub.exists():
             continue
-        for path in sorted(directory.glob("*.json")):
-            yield path
+        for path in sub.iterdir():
+            if path.is_file() and msg_id in path.name:
+                return path
+    return None
 
 
-def load_message(path: Path) -> dict[str, Any] | None:
-    msg = load_json(path)
-    if msg is None:
-        return None
-    msg["_file"] = str(path)
-    return msg
-
-
-def validate_message(msg: dict[str, Any], allow_legacy: bool = True) -> list[str]:
-    errors: list[str] = []
-
-    for key in ("id", "from", "to", "ts", "kind", "refs", "body"):
-        if key not in msg:
-            errors.append(f"missing required field: {key}")
-
-    if "id" in msg:
-        msg_id = msg.get("id")
-        if not (isinstance(msg_id, str) and len(msg_id) == 26 and msg_id.isascii()):
-            errors.append("id must be a 26-character ULID")
-
-    from_val = msg.get("from")
-    if from_val is not None and not isinstance(from_val, str):
-        errors.append("from must be a string")
-    elif isinstance(from_val, str):
-        base = short_agent_id(from_val)
-        if base not in WHO_VALUES:
-            errors.append(f"invalid from: {from_val}")
-
-    to_val = msg.get("to")
-    if to_val is not None and not (isinstance(to_val, str) or isinstance(to_val, list)):
-        errors.append("to must be a string or array")
-
-    ts_val = parse_ts(msg.get("ts"))
-    if msg.get("ts") is not None and ts_val is None:
-        errors.append("ts must be ISO-8601 UTC")
-
-    refs_val = msg.get("refs")
-    if refs_val is not None and not isinstance(refs_val, list):
-        errors.append("refs must be an array")
-
-    body_val = msg.get("body")
-    if body_val is not None and not isinstance(body_val, str):
-        errors.append("body must be a string")
-
-    kind_val = msg.get("kind")
-    if kind_val is not None:
-        if not isinstance(kind_val, str):
-            errors.append("kind must be a string")
-        else:
-            allowed = KIND_VALUES
-            if allow_legacy and "proto_version" not in msg:
-                allowed = allowed | LEGACY_KIND_VALUES
-            if kind_val not in allowed:
-                errors.append(f"invalid kind: {kind_val}")
-
-    proto = msg.get("proto_version")
-    if proto is not None:
-        if proto != PROTO_VERSION:
-            errors.append(f"proto_version_mismatch: expected {PROTO_VERSION}, got {proto}")
-        if not isinstance(msg.get("seq"), int):
-            errors.append("missing required field: seq")
-        elif msg["seq"] < 1:
-            errors.append("seq must be >= 1")
-        if msg.get("in_reply_to") is not None and not isinstance(msg.get("in_reply_to"), str):
-            errors.append("in_reply_to must be a string or null")
-        if msg.get("hmac") is not None and not isinstance(msg.get("hmac"), str):
-            errors.append("hmac must be a string or null")
-
-    if msg.get("body") == "" and kind_val in {"ack", "heartbeat"}:
-        pass
-
-    return errors
-
-
-def load_registry(root: Path, agent_id: str) -> dict[str, Any]:
-    path = registry_path(root, agent_id)
-    data = load_json(path)
-    if data is None:
-        data = {
-            "agent_id": agent_id,
-            "last_sent_seq": 0,
-            "last_seen_seq": {},
-            "profile": None,
-        }
-    data.setdefault("agent_id", agent_id)
-    data.setdefault("last_sent_seq", 0)
-    data.setdefault("last_seen_seq", {})
-    data.setdefault("profile", None)
-    return data
-
-
-def save_registry(root: Path, agent_id: str, registry: dict[str, Any]) -> None:
-    path = registry_path(root, agent_id)
-    registry["agent_id"] = agent_id
-    write_atomic(path, json_dumps(registry))
-
-
-def next_seq(root: Path, agent_id: str) -> int:
-    registry = load_registry(root, agent_id)
-    seq = int(registry.get("last_sent_seq") or 0) + 1
-    registry["last_sent_seq"] = seq
-    save_registry(root, agent_id, registry)
-    return seq
-
-
-def record_seen_seq(root: Path, sender: str, seq: int) -> None:
-    registry = load_registry(root, sender)
-    seen = registry.setdefault("last_seen_seq", {})
-    if not isinstance(seen, dict):
-        seen = {}
-        registry["last_seen_seq"] = seen
-    current = seen.get("seq")
-    if isinstance(current, int):
-        seen["seq"] = max(current, seq)
-    else:
-        seen["seq"] = seq
-    save_registry(root, sender, registry)
-
-
-def append_audit(root: Path, action: str, msg: dict[str, Any]) -> None:
-    row = {
-        "ts": iso_ts(),
-        "msg_id": msg.get("id"),
-        "kind": msg.get("kind"),
-        "from": msg.get("from"),
-        "to": msg.get("to"),
-        "action": action,
-        "notes": "",
-    }
-    append_locked(audit_path(root), json.dumps(row, sort_keys=True))
+def gh_issue_edit(repo: str, issue: int, add: list[str] | None = None, remove: list[str] | None = None) -> None:
+    cmd = ["gh", "issue", "edit", str(issue), "-R", repo]
+    for label in add or []:
+        cmd.extend(["--add-label", label])
+    for label in remove or []:
+        cmd.extend(["--remove-label", label])
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
 def send_message(
     root: Path,
+    *,
     sender: str,
-    recipient: str | list[str],
+    recipient: str,
     kind: str,
     body: str,
-    *,
-    reply_to: str | None = None,
     refs: list[str] | None = None,
-    seq: int | None = None,
+    reply: str | None = None,
+    seq: int = 1,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    ensure_dirs(root)
-    msg = {
-        "id": ulid(),
-        "proto_version": PROTO_VERSION,
-        "from": sender,
-        "to": recipient,
-        "ts": iso_ts(),
-        "seq": seq if seq is not None else next_seq(root, sender),
-        "kind": kind,
-        "in_reply_to": reply_to,
-        "refs": refs or [],
-        "body": body,
-        "hmac": None,
-    }
+    msg = Message(
+        id=gen_ulid(),
+        proto_version=PROTO_VERSION,
+        sender=sender,
+        recipient=recipient,
+        ts=iso_ts_z(),
+        seq=seq,
+        kind=kind,
+        refs=refs or [],
+        body=body,
+        in_reply_to=reply,
+    )
+    payload = msg.to_dict()
     if extra:
-        msg.update(extra)
+        payload.update(extra)
+    ok, err = validate_message(payload)
+    if not ok:
+        raise ValueError(err)
 
-    errors = validate_message(msg, allow_legacy=False)
-    if errors:
-        raise ValueError("; ".join(errors))
+    ensure_dirs(root)
+    filename = f"{iso_ts_filename()}-{payload['id']}.json"
+    path = inbox_dir(root, recipient) / filename
+    write_atomic(path, json.dumps(payload, ensure_ascii=False))
+    append_locked(
+        audit_path(root),
+        json.dumps(
+            {
+                "ts": iso_ts_z(),
+                "msg_id": payload["id"],
+                "kind": payload["kind"],
+                "from": payload["from"],
+                "to": payload["to"],
+                "action": "written",
+                "notes": "",
+            }
+        ),
+    )
+    return payload
 
-    recipients = recipient if isinstance(recipient, list) else [recipient]
-    out_path: Path | None = None
-    for target in recipients:
-        target_dir = inbox_dir(root, target)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        out_path = target_dir / message_filename(msg["ts"], msg["id"])
-        write_atomic(out_path, json_dumps(msg))
 
-    append_audit(root, "written", msg)
-    return msg
+def read_messages(
+    root: Path,
+    *,
+    inbox_name: str | None = None,
+    kind: str | None = None,
+    from_agent: str | None = None,
+) -> list[dict[str, Any]]:
+    inboxes = [inbox_name] if inbox_name else ["claude", "codex"]
+    messages: list[dict[str, Any]] = []
+    for inbox in inboxes:
+        for path in iter_message_files(root / "inbox" / inbox):
+            try:
+                msg = load_json(path)
+            except Exception:
+                continue
+            if kind and msg.get("kind") != kind:
+                continue
+            if from_agent and msg.get("from") != from_agent:
+                continue
+            messages.append(msg)
+    return messages
 
 
-def send_ack_for(root: Path, sender: str, target_msg: dict[str, Any], body: str = "Acknowledged.") -> dict[str, Any]:
-    target = target_msg.get("from")
-    if not isinstance(target, str):
-        raise ValueError("target message missing sender")
-    return send_message(
+def cmd_send(args) -> int:
+    root = bus_root(args.bus)
+    sender = getattr(args, "from_sender", None) or current_agent_id(args)
+    recipient = args.to
+    if sender not in WHO_VALUES:
+        raise ValueError(f"invalid sender: {sender}")
+    if recipient not in WHO_VALUES:
+        raise ValueError(f"invalid recipient: {recipient}")
+    payload = send_message(
         root,
         sender=sender,
-        recipient=target,
-        kind="ack",
-        body=body,
-        reply_to=target_msg.get("id"),
-        refs=[f"msg:{target_msg.get('id')}"],
+        recipient=recipient,
+        kind=args.kind,
+        body=args.body,
+        refs=[r for r in (args.refs.split(",") if args.refs else []) if r],
+        reply=args.reply,
     )
+    print(payload["id"])
+    return 0
 
 
-def find_message(root: Path, msg_id: str) -> tuple[Path, dict[str, Any]] | None:
-    for path in iter_message_files(root):
-        msg = load_message(path)
-        if msg and msg.get("id") == msg_id:
-            return path, msg
-    return None
+def cmd_read(args) -> int:
+    root = bus_root(args.bus)
+    inbox = getattr(args, "inbox", None) or current_agent_id(args)
+    messages = read_messages(root, inbox_name=short_agent_id(inbox), kind=getattr(args, "kind", None), from_agent=getattr(args, "from_", None))
+    if getattr(args, "raw", False):
+        for msg in messages:
+            print(json.dumps(msg))
+    else:
+        print(json.dumps(messages, indent=2))
+    return 0
 
 
-def resolve_repo(explicit: str | None) -> str:
-    if explicit:
-        return explicit
-    env = os.environ.get("AGENTCOMMS_REPO")
-    if env:
-        return env
+def cmd_ack(args) -> int:
+    root = bus_root(args.bus)
+    orig_file = find_message(args.bus, args.msg_id)
+    if not orig_file:
+        print(json.dumps({"error": f"message not found: {args.msg_id}"}), file=sys.stderr)
+        return 1
+    orig_msg = load_json(orig_file)
+    sender = getattr(args, "from_sender", None) or current_agent_id(args)
+    recipient = orig_msg.get("from")
+    ack = send_message(
+        root,
+        sender=sender,
+        recipient=recipient,
+        kind="ack",
+        body=args.body or "Acknowledged.",
+        refs=[f"msg:{args.msg_id}"],
+        reply=args.msg_id,
+    )
+    return 0
+
+
+def cmd_nack(args) -> int:
+    root = bus_root(args.bus)
+    orig_file = find_message(args.bus, args.msg_id)
+    if not orig_file:
+        print(json.dumps({"error": f"message not found: {args.msg_id}"}), file=sys.stderr)
+        return 1
+    orig_msg = load_json(orig_file)
+    sender = getattr(args, "from_sender", None) or current_agent_id(args)
+    send_message(
+        root,
+        sender=sender,
+        recipient=orig_msg.get("from"),
+        kind="nack",
+        body=args.body or "Rejected.",
+        refs=[f"msg:{args.msg_id}"],
+        reply=args.msg_id,
+    )
+    return 0
+
+
+def cmd_heartbeat(args) -> int:
+    root = bus_root(args.bus)
+    sender = current_agent_id(args)
+    recipient = peer_agent_id(sender)
+    send_message(
+        root,
+        sender=sender,
+        recipient=recipient,
+        kind="heartbeat",
+        body=args.body or "heartbeat",
+        refs=[],
+    )
+    return 0
+
+
+def cmd_progress(args) -> int:
+    root = bus_root(args.bus)
+    refs = [r for r in (args.refs.split(",") if getattr(args, "refs", None) else []) if r]
+    send_message(
+        root,
+        sender=current_agent_id(args),
+        recipient="claude",
+        kind="progress",
+        body=args.body,
+        refs=refs,
+    )
+    return 0
+
+
+def cmd_archive(args) -> int:
+    root = bus_root(args.bus)
+    msg_file = find_message(args.bus, args.msg_id)
+    if not msg_file:
+        print(json.dumps({"error": f"message not found: {args.msg_id}"}), file=sys.stderr)
+        return 1
+    dest = processed_dir(root) / msg_file.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    msg_file.rename(dest)
+    append_locked(
+        audit_path(root),
+        json.dumps(
+            {
+                "ts": iso_ts_z(),
+                "msg_id": args.msg_id,
+                "kind": "archive",
+                "from": current_agent_id(args),
+                "to": "system",
+                "action": "archived",
+                "notes": getattr(args, "reason", "") or "",
+            }
+        ),
+    )
+    return 0
+
+
+def cmd_health(args) -> int:
+    root = bus_root(args.bus)
+    ensure_dirs(root)
+    schema_valid = (root / "schema.json").exists()
+    latest_hb = None
+    heartbeats = read_messages(root, kind="heartbeat", from_agent="codex", inbox_name="claude")
+    if heartbeats:
+        latest_hb = heartbeats[-1]
+    unacked_orders = []
+    orders = read_messages(root, kind="order", from_agent="claude", inbox_name="codex")
+    acks = read_messages(root, kind="ack")
+    acked_ids = {ack.get("in_reply_to") for ack in acks}
+    for order in orders:
+        if order.get("id") not in acked_ids:
+            unacked_orders.append(order.get("id"))
+    dormant = True
+    if latest_hb:
+        hb_ts = dt.datetime.fromisoformat(latest_hb["ts"].replace("Z", "+00:00"))
+        dormant = (utc_now() - hb_ts).total_seconds() > 7 * 60
+    findings = {
+        "schema_valid": schema_valid,
+        "watchdog_installed": (root / "bin" / "watchdog.py").exists(),
+        "last_heartbeat": latest_hb.get("ts") if latest_hb else None,
+        "dormant": dormant,
+        "unacked_orders": unacked_orders,
+        "errors": [],
+    }
+    print(json.dumps(findings))
+    return 1 if (not schema_valid or dormant or unacked_orders) else 0
+
+
+def gh_issue_list(repo: str, label: str) -> list[dict[str, Any]]:
     result = subprocess.run(
-        ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        [
+            "gh",
+            "issue",
+            "list",
+            "-R",
+            repo,
+            "--label",
+            label,
+            "--state",
+            "open",
+            "--json",
+            "number,title,labels,updatedAt",
+            "--limit",
+            "100",
+        ],
         capture_output=True,
         text=True,
-        check=False,
+        check=True,
     )
-    if result.returncode != 0:
-        raise RuntimeError("unable to resolve repo; set AGENTCOMMS_REPO or pass --repo")
-    return result.stdout.strip()
+    return json.loads(result.stdout or "[]")
 
 
-def gh_issue_edit(repo: str, issue: int, *, add: list[str] | None = None, remove: list[str] | None = None) -> None:
-    cmd = ["gh", "issue", "edit", str(issue), "-R", repo]
-    for label in add or []:
-        cmd += ["--add-label", label]
-    for label in remove or []:
-        cmd += ["--remove-label", label]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "gh issue edit failed")
-
-
-def cmd_send(args: argparse.Namespace) -> int:
-    root = bus_root(args.bus)
-    sender = args.from_sender or current_agent_id(args.agent_id)
-    recipient = args.to
-
-    # Invert routing: if --from codex, message lands in recipient's inbox
-    # and the "from" field is codex, but it actually goes to their inbox
-    if sender != "claude":
-        recipient = peer_agent_id(sender)
-
-    refs = args.refs or []
-    try:
-        msg = send_message(
-            root,
-            sender=sender,
-            recipient=recipient,
-            kind=args.kind,
-            body=args.body,
-            reply_to=args.reply,
-            refs=refs,
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print(msg["id"])
-    return 0
-
-
-def cmd_read(args: argparse.Namespace) -> int:
-    root = bus_root(args.bus)
-    agent = current_agent_id(args.agent_id)
-    ensure_dirs(root)
-    messages: list[dict[str, Any]] = []
-    for path in sorted(inbox_dir(root, agent).glob("*.json")):
-        msg = load_message(path)
-        if not msg:
-            continue
-        if args.kind and msg.get("kind") != args.kind:
-            continue
-        if args.from_ and short_agent_id(str(msg.get("from", ""))) != args.from_:
-            continue
-        messages.append(msg)
-    if args.raw:
-        for message in messages:
-            print(json.dumps(message, sort_keys=True))
-    else:
-        print(json_dumps(messages), end="")
-    return 0
-
-
-def cmd_ack(args: argparse.Namespace) -> int:
-    root = bus_root(args.bus)
-    sender = args.from_sender or current_agent_id(args.agent_id)
-    found = find_message(root, args.msg_id)
-    if not found:
-        print("message not found", file=sys.stderr)
-        return 1
-    _, target = found
-    try:
-        # When --from codex, reply goes to the peer (claude)
-        recipient = target.get("from")
-        if sender != "claude":
-            recipient = peer_agent_id(sender)
-
-        msg = send_message(
-            root,
-            sender=sender,
-            recipient=recipient,
-            kind="ack",
-            body=args.body,
-            reply_to=args.msg_id,
-            refs=[f"msg:{args.msg_id}"],
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print(msg["id"])
-    return 0
-
-
-def cmd_heartbeat(args: argparse.Namespace) -> int:
-    root = bus_root(args.bus)
-    sender = args.from_sender or current_agent_id(args.agent_id)
-    recipient = peer_agent_id(sender)
-    body = args.body or "idle"
-    try:
-        msg = send_message(root, sender=sender, recipient=recipient, kind="heartbeat", body=body)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print(msg["id"])
-    return 0
-
-
-def cmd_archive(args: argparse.Namespace) -> int:
-    root = bus_root(args.bus)
-    found = find_message(root, args.msg_id)
-    if not found:
-        print("message not found", file=sys.stderr)
-        return 1
-    src_path, msg = found
-    dst = processed_dir(root) / src_path.name
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(src_path), str(dst))
-    append_audit(root, "archived", msg)
-    if args.reason:
-        append_locked(audit_path(root), json.dumps({
-            "ts": iso_ts(),
-            "msg_id": msg.get("id"),
-            "kind": msg.get("kind"),
-            "from": msg.get("from"),
-            "to": msg.get("to"),
-            "action": "archived_reason",
-            "notes": args.reason,
-        }, sort_keys=True))
-    print(args.msg_id)
-    return 0
-
-
-def message_violations(root: Path) -> list[str]:
-    problems: list[str] = []
-    for path in iter_message_files(root):
-        msg = load_message(path)
-        if not msg:
-            problems.append(f"{path}: malformed json")
-            continue
-        errs = validate_message(msg, allow_legacy=True)
-        if errs:
-            problems.append(f"{path}: " + "; ".join(errs))
-    return problems
-
-
-def detect_seq_gaps(messages: list[dict[str, Any]]) -> list[str]:
-    by_sender: dict[str, list[dict[str, Any]]] = {}
-    for msg in messages:
-        sender = msg.get("from")
-        if not isinstance(sender, str) or not isinstance(msg.get("seq"), int):
-            continue
-        if "proto_version" not in msg:
-            continue
-        by_sender.setdefault(sender, []).append(msg)
-
-    gaps: list[str] = []
-    for sender, msgs in by_sender.items():
-        msgs.sort(key=lambda m: int(m["seq"]))
-        expected = 1
-        for msg in msgs:
-            seq = int(msg["seq"])
-            if seq < expected:
-                expected = seq
-            if seq > expected:
-                gaps.append(f"{sender}: expected seq {expected}, saw {seq}")
-            expected = seq + 1
-    return gaps
-
-
-def detect_unacked_orders(messages: list[dict[str, Any]]) -> list[str]:
-    unacked: list[str] = []
-    by_id = {m.get("id"): m for m in messages if isinstance(m.get("id"), str)}
-    acked = {m.get("in_reply_to") for m in messages if m.get("kind") == "ack"}
-    now = utc_now()
-    for msg in messages:
-        if msg.get("from") != "claude":
-            continue
-        if msg.get("kind") not in {"order", "nudge", "answer"}:
-            continue
-        if msg.get("id") in acked:
-            continue
-        ts = parse_ts(msg.get("ts"))
-        if ts and (now - ts) > dt.timedelta(minutes=15):
-            unacked.append(str(msg.get("id")))
-    return unacked
-
-
-def latest_heartbeat(messages: list[dict[str, Any]], who: str) -> dict[str, Any] | None:
-    latest: dict[str, Any] | None = None
-    latest_ts: dt.datetime | None = None
-    for msg in messages:
-        if short_agent_id(str(msg.get("from", ""))) != who:
-            continue
-        if msg.get("kind") != "heartbeat":
-            continue
-        ts = parse_ts(msg.get("ts"))
-        if ts and (latest_ts is None or ts > latest_ts):
-            latest_ts = ts
-            latest = msg
-    return latest
-
-
-def cmd_health(args: argparse.Namespace) -> int:
-    root = bus_root(args.bus)
-    ensure_dirs(root)
-    messages = [m for m in (load_message(p) for p in iter_message_files(root)) if m]
-    violations = message_violations(root)
-    gaps = detect_seq_gaps(messages)
-    unacked = detect_unacked_orders(messages)
-    status = {
-        "ok": not (violations or gaps or unacked),
-        "violations": violations,
-        "seq_gaps": gaps,
-        "unacked_orders": unacked,
-        "last_heartbeat": {
-            "codex": latest_heartbeat(messages, "codex"),
-            "claude": latest_heartbeat(messages, "claude"),
-        },
-        "message_count": len(messages),
-    }
-    print(json_dumps(status), end="")
-    return 0 if status["ok"] else 1
-
-
-def cmd_claim(args: argparse.Namespace) -> int:
-    root = bus_root(args.bus)
-    sender = current_agent_id(args.agent_id)
-    issue = args.issue
-    repo = resolve_repo(args.repo)
-    try:
-        gh_issue_edit(repo, issue, add=["agent/codex/working"], remove=["agent/codex"])
-    except Exception as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    try:
-        msg = send_message(
-            root,
-            sender=sender,
-            recipient=peer_agent_id(sender),
-            kind="claim",
-            body=f"claiming #{issue}",
-            refs=[f"#{issue}"],
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print(msg["id"])
-    return 0
-
-
-def cmd_handoff(args: argparse.Namespace) -> int:
-    root = bus_root(args.bus)
-    sender = current_agent_id(args.agent_id)
-    issue = args.issue
-    repo = resolve_repo(args.repo)
-    try:
-        gh_issue_edit(repo, issue, remove=["agent/codex/working"])
-    except Exception as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    try:
-        msg = send_message(
-            root,
-            sender=sender,
-            recipient=peer_agent_id(sender),
-            kind="handoff",
-            body=f"completed #{issue} at {args.commit}",
-            refs=[f"#{issue}", f"commit:{args.commit}"],
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print(msg["id"])
-    return 0
-
-
-def cmd_block(args: argparse.Namespace) -> int:
-    root = bus_root(args.bus)
-    sender = current_agent_id(args.agent_id)
-    try:
-        msg = send_message(
-            root,
-            sender=sender,
-            recipient=peer_agent_id(sender),
-            kind="block",
-            body=args.reason,
-            refs=args.refs or [],
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print(msg["id"])
-    return 0
-
-
-def cmd_question(args: argparse.Namespace) -> int:
-    root = bus_root(args.bus)
-    sender = current_agent_id(args.agent_id)
-    try:
-        msg = send_message(
-            root,
-            sender=sender,
-            recipient=peer_agent_id(sender),
-            kind="question",
-            body=args.body,
-            refs=args.refs or [],
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print(msg["id"])
-    return 0
-
-
-def gather_capability_profile(agent_id: str) -> dict[str, Any]:
-    host = os.uname().nodename
-    go_version = subprocess.run(["go", "version"], capture_output=True, text=True, check=False)
-    py_version = subprocess.run(["python3", "--version"], capture_output=True, text=True, check=False)
-    nvidia = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True, check=False)
-
-    gpus = []
-    if nvidia.returncode == 0 and nvidia.stdout.strip():
-        for line in nvidia.stdout.splitlines():
-            line = line.strip()
-            if line:
-                gpus.append({"model": line, "vram_gb": None, "count": 1})
-
-    return {
-        "agent_id": agent_id,
-        "host": host,
+def gather_capability_profile(args) -> dict[str, Any]:
+    profile = {
+        "agent_id": current_agent_id(args),
+        "host": platform.node(),
         "hardware": {
-            "cpu_model": os.uname().machine,
-            "ram_gb": None,
-            "gpus": gpus,
+            "machine": platform.machine(),
+            "platform": platform.platform(),
         },
-        "languages": [
-            {"name": "go", "version": go_version.stdout.strip() or go_version.stderr.strip() or None},
-            {"name": "python", "version": py_version.stdout.strip() or py_version.stderr.strip() or None},
-        ],
+        "languages": [],
         "models": [],
-        "skills": ["factvault-migration", "go-implementation", "python-implementation"],
-        "endpoints": [{"name": "agentcomms-cli", "url": "local", "protocol": "fs"}],
-        "load": {"cpu": 0, "ram": 0, "gpu": 0, "queue_depth": 0},
-        "last_published_ts": iso_ts(),
+        "skills": [],
+        "endpoints": [],
+        "load": {},
+        "last_published_ts": iso_ts_z(),
         "health": "ok",
         "trusted": True,
     }
+    return profile
 
 
-def cmd_capability_publish(args: argparse.Namespace) -> int:
+def cmd_claim(args) -> int:
+    repo = args.repo
+    gh_issue_edit(repo, int(args.issue), add=["agent/codex/working"], remove=["agent/codex"])
     root = bus_root(args.bus)
-    sender = current_agent_id(args.agent_id)
-    profile = gather_capability_profile(sender)
-    registry = load_registry(root, sender)
-    registry["profile"] = profile
-    registry["last_sent_seq"] = int(registry.get("last_sent_seq") or 0)
-    save_registry(root, sender, registry)
-    try:
-        msg = send_message(
-            root,
-            sender=sender,
-            recipient=peer_agent_id(sender),
-            kind="capability_publish",
-            body=json.dumps(profile, sort_keys=True),
-            refs=[],
-            extra={"profile_hash": args.profile_hash} if args.profile_hash else None,
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print(msg["id"])
+    send_message(
+        root,
+        sender=current_agent_id(args),
+        recipient="claude",
+        kind="claim",
+        body=f"claimed issue #{args.issue}",
+        refs=[f"#{args.issue}"],
+    )
     return 0
 
 
-def cmd_lessons(args: argparse.Namespace) -> int:
+def cmd_handoff(args) -> int:
+    repo = args.repo
+    gh_issue_edit(repo, int(args.issue), remove=["agent/codex/working"])
     root = bus_root(args.bus)
-    entries = load_jsonl(lessons_path(root))
-    since = parse_ts(args.since) if args.since else None
-    out: list[dict[str, Any]] = []
-    for entry in entries:
-        if args.subject and entry.get("subject") != args.subject:
-            continue
-        if since:
-            ts = parse_ts(entry.get("ts"))
-            if not ts or ts < since:
-                continue
-        if not args.include_superseded and entry.get("superseded_by"):
-            continue
-        out.append(entry)
-    print(json_dumps(out), end="")
+    send_message(
+        root,
+        sender=current_agent_id(args),
+        recipient="claude",
+        kind="handoff",
+        body=f"handoff issue #{args.issue} commit {args.commit}",
+        refs=[f"#{args.issue}", f"commit:{args.commit}"],
+    )
     return 0
+
+
+def cmd_block(args) -> int:
+    root = bus_root(args.bus)
+    send_message(
+        root,
+        sender=current_agent_id(args),
+        recipient="claude",
+        kind="block",
+        body=args.body,
+        refs=[f"code:{args.code}", f"severity:{args.severity}"],
+    )
+    return 0
+
+
+def cmd_question(args) -> int:
+    root = bus_root(args.bus)
+    send_message(
+        root,
+        sender=current_agent_id(args),
+        recipient="claude",
+        kind="question",
+        body=args.body,
+        refs=[],
+    )
+    return 0
+
+
+def cmd_capability_publish(args) -> int:
+    root = bus_root(args.bus)
+    profile = gather_capability_profile(args)
+    payload = {
+        "agent_id": current_agent_id(args),
+        "profile_hash": args.profile_hash,
+        "profile": profile,
+    }
+    write_atomic(registry_path(root, current_agent_id(args)), json.dumps(payload, indent=2))
+    send_message(
+        root,
+        sender=current_agent_id(args),
+        recipient="claude",
+        kind="capability_publish",
+        body="capability registry updated",
+        refs=[],
+        extra={"profile_hash": args.profile_hash},
+    )
+    return 0
+
+
+def lessons_load(root: Path) -> list[dict[str, Any]]:
+    path = lessons_path(root)
+    if not path.exists():
+        return []
+    data = load_json(path)
+    return data if isinstance(data, list) else []
+
+
+def lessons_save(root: Path, entries: list[dict[str, Any]]) -> None:
+    write_atomic(lessons_path(root), json.dumps(entries, indent=2))
+
+
+def cmd_lessons(args) -> int:
+    root = bus_root(args.bus)
+    ensure_dirs(root)
+    action = getattr(args, "action", None)
+    if action == "list":
+        entries = lessons_load(root)
+        if not getattr(args, "include_superseded", False):
+            entries = [e for e in entries if not e.get("superseded_by")]
+        print(json.dumps(entries, indent=2))
+        return 0
+    if action == "get":
+        subject = args.subject
+        entries = [e for e in lessons_load(root) if e.get("subject") == subject]
+        print(json.dumps(entries, indent=2))
+        return 0
+    if action == "propose":
+        entries = lessons_load(root)
+        entry = {
+            "subject": args.subject,
+            "body": args.body,
+            "since": args.since or iso_ts_z(),
+            "superseded_by": None,
+        }
+        entries.append(entry)
+        lessons_save(root, entries)
+        print(json.dumps(entry, indent=2))
+        return 0
+    raise ValueError("unknown lessons action")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agentcomms")
-    parser.add_argument("--bus", help="Filesystem bus location, e.g. fs:///home/.../.agent-comms")
-    parser.add_argument("--agent-id", help="Agent identity for this CLI instance")
-    parser.add_argument("--repo", help="GitHub repository owner/name, defaults to gh repo view")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    parser = argparse.ArgumentParser(description="Agent communications CLI")
+    parser.add_argument("--bus", dest="bus", default=None, help="Filesystem bus location, e.g. fs:///home/.../.agent-comms")
+    parser.add_argument("--agent-id", dest="agent_id", default=os.environ.get("AGENTCOMMS_AGENT_ID", "claude"))
+    parser.add_argument("--repo", dest="repo", default=None, help="GitHub repository owner/name, defaults to gh repo view")
+    sub = parser.add_subparsers(dest="command", required=True)
 
-    send = sub.add_parser("send")
-    send.add_argument("--kind", required=True, choices=sorted(KIND_VALUES))
-    send.add_argument("--to", required=True)
-    send.add_argument("--from", dest="from_sender", default=os.environ.get("AGENTCOMMS_FROM", "claude"), choices=["claude", "codex"], help="Sender agent (default: claude or AGENTCOMMS_FROM env)")
-    send.add_argument("--reply")
-    send.add_argument("--refs", nargs="*")
-    send.add_argument("--body", required=True)
-    send.set_defaults(func=cmd_send)
+    p = sub.add_parser("send")
+    p.add_argument("--kind", required=True)
+    p.add_argument("--to", required=True)
+    p.add_argument("--from", dest="from_sender", default=os.environ.get("AGENTCOMMS_FROM", "claude"))
+    p.add_argument("--reply")
+    p.add_argument("--refs")
+    p.add_argument("--body", required=True)
+    p.set_defaults(func=cmd_send)
 
-    read = sub.add_parser("read")
-    read.add_argument("--unread", action="store_true")
-    read.add_argument("--kind", choices=sorted(KIND_VALUES))
-    read.add_argument("--from", dest="from_", help="Filter by sender")
-    read.add_argument("--raw", action="store_true")
-    read.set_defaults(func=cmd_read)
+    p = sub.add_parser("read")
+    p.add_argument("--unread", action="store_true")
+    p.add_argument("--kind")
+    p.add_argument("--from", dest="from_", help="Filter by sender")
+    p.add_argument("--inbox", choices=["claude", "codex"])
+    p.add_argument("--raw", action="store_true")
+    p.set_defaults(func=cmd_read)
 
-    read_inbox = sub.add_parser("read-inbox")
-    read_inbox.add_argument("--unread", action="store_true")
-    read_inbox.add_argument("--kind", choices=sorted(KIND_VALUES))
-    read_inbox.add_argument("--from", dest="from_", help="Filter by sender")
-    read_inbox.add_argument("--raw", action="store_true")
-    read_inbox.set_defaults(func=cmd_read)
+    p = sub.add_parser("ack")
+    p.add_argument("msg_id")
+    p.add_argument("--from", dest="from_sender", default=os.environ.get("AGENTCOMMS_FROM", "claude"))
+    p.add_argument("--body", default="Acknowledged.")
+    p.set_defaults(func=cmd_ack)
 
-    ack = sub.add_parser("ack")
-    ack.add_argument("msg_id")
-    ack.add_argument("--from", dest="from_sender", default=os.environ.get("AGENTCOMMS_FROM", "claude"), choices=["claude", "codex"], help="Sender agent (default: claude or AGENTCOMMS_FROM env)")
-    ack.add_argument("--body", default="Acknowledged.")
-    ack.set_defaults(func=cmd_ack)
+    p = sub.add_parser("nack")
+    p.add_argument("msg_id")
+    p.add_argument("--from", dest="from_sender", default=os.environ.get("AGENTCOMMS_FROM", "claude"))
+    p.add_argument("--body", default="Rejected.")
+    p.set_defaults(func=cmd_nack)
 
-    heartbeat = sub.add_parser("heartbeat")
-    heartbeat.add_argument("--from", dest="from_sender", default=os.environ.get("AGENTCOMMS_FROM", "claude"), choices=["claude", "codex"], help="Sender agent (default: claude or AGENTCOMMS_FROM env)")
-    heartbeat.add_argument("--body", default="idle")
-    heartbeat.set_defaults(func=cmd_heartbeat)
+    p = sub.add_parser("heartbeat")
+    p.add_argument("--from", dest="from_sender", default=os.environ.get("AGENTCOMMS_FROM", "claude"))
+    p.add_argument("--body", default="heartbeat")
+    p.set_defaults(func=cmd_heartbeat)
 
-    archive = sub.add_parser("archive")
-    archive.add_argument("msg_id")
-    archive.add_argument("--reason")
-    archive.set_defaults(func=cmd_archive)
+    p = sub.add_parser("progress")
+    p.add_argument("--body", required=True)
+    p.add_argument("--refs")
+    p.set_defaults(func=cmd_progress)
 
-    health = sub.add_parser("health")
-    health.set_defaults(func=cmd_health)
+    p = sub.add_parser("archive")
+    p.add_argument("msg_id")
+    p.add_argument("--reason", default="")
+    p.set_defaults(func=cmd_archive)
 
-    claim = sub.add_parser("claim")
-    claim.add_argument("issue", type=int)
-    claim.set_defaults(func=cmd_claim)
+    p = sub.add_parser("health")
+    p.set_defaults(func=cmd_health)
 
-    handoff = sub.add_parser("handoff")
-    handoff.add_argument("issue", type=int)
-    handoff.add_argument("commit")
-    handoff.set_defaults(func=cmd_handoff)
+    p = sub.add_parser("claim")
+    p.add_argument("issue")
+    p.set_defaults(func=cmd_claim)
 
-    block = sub.add_parser("block")
-    block.add_argument("reason")
-    block.add_argument("--refs", nargs="*")
-    block.set_defaults(func=cmd_block)
+    p = sub.add_parser("handoff")
+    p.add_argument("issue")
+    p.add_argument("--commit", required=True)
+    p.set_defaults(func=cmd_handoff)
 
-    question = sub.add_parser("question")
-    question.add_argument("body")
-    question.add_argument("--refs", nargs="*")
-    question.set_defaults(func=cmd_question)
+    p = sub.add_parser("block")
+    p.add_argument("--code", required=True)
+    p.add_argument("--severity", default="error")
+    p.add_argument("--body", required=True)
+    p.set_defaults(func=cmd_block)
 
-    capability = sub.add_parser("capability_publish")
-    capability.add_argument("--profile-hash")
-    capability.set_defaults(func=cmd_capability_publish)
+    p = sub.add_parser("question")
+    p.add_argument("--body", required=True)
+    p.set_defaults(func=cmd_question)
+
+    p = sub.add_parser("capability_publish")
+    p.add_argument("--profile-hash", dest="profile_hash", required=True)
+    p.set_defaults(func=cmd_capability_publish)
 
     lessons = sub.add_parser("lessons")
-    lessons.add_argument("--subject")
-    lessons.add_argument("--since")
-    lessons.add_argument("--include-superseded", action="store_true")
-    lessons.set_defaults(func=cmd_lessons)
+    lessons_sub = lessons.add_subparsers(dest="action", required=True)
+    p = lessons_sub.add_parser("list")
+    p.add_argument("--include-superseded", action="store_true")
+    p.set_defaults(func=cmd_lessons)
+    p = lessons_sub.add_parser("get")
+    p.add_argument("subject")
+    p.set_defaults(func=cmd_lessons)
+    p = lessons_sub.add_parser("propose")
+    p.add_argument("subject")
+    p.add_argument("body")
+    p.add_argument("--since", default=None)
+    p.set_defaults(func=cmd_lessons)
 
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main() -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
-    try:
-        return int(args.func(args))
-    except BrokenPipeError:
-        return 0
+    args = parser.parse_args()
+    return int(args.func(args))
 
 
 if __name__ == "__main__":
