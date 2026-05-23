@@ -66,6 +66,24 @@ You are the execution engine. The coordinator (Claude) opens GitHub Issues descr
 - Use `--no-verify` or bypass any safety check
 - Edit `AGENTS.md`, `CLAUDE.md`, `.mcp.json`, or anything under `.github/` unless the issue explicitly requests it
 
+## Required reading
+
+Before claiming any issue:
+1. `docs/codex/onboarding.md` — full execution loop protocol
+2. `docs/codex/toolchain.md` — mandatory Go toolchain + invocation order
+3. `.agent-comms/README.md` — message bus schema and semantics
+
+## Protected files
+
+The following files are part of the coordinator-executor contract. Do
+not modify them unless the issue explicitly authorizes it:
+- `.golangci.yml`
+- `AGENTS.md`
+- `CLAUDE.md` (if present)
+- `docs/codex/onboarding.md`
+- `.github/**`
+- `.agent-comms/README.md`, `.agent-comms/schema.json`
+
 ## Test-before-commit
 
 Before any commit, run:
