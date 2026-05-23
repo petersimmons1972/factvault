@@ -530,17 +530,16 @@ Narrow scope — do not exceed:
 - **`capability_query` round-trip**: NOT implemented. Defer to v1.1.
 - **Trust upgrades**: NOT implemented. v0 defaults sufficient.
 
-### 15.7 Open Design Questions (Needs Founder Input)
+### 15.7 Design Decisions & Open Questions
 
-1. **Registry write ownership**: When multiple agents publish concurrently, who is authoritative writer to `.agent-comms/registry.json`?
-   - **Option A**: Each agent writes its own entry under `.agent-comms/registry/<agent_id>.json`, principal aggregates on read. Simpler, no lock contention.
-   - **Option B**: Single `registry.json` file; all writers use `flock`. Matches §8 audit pattern but creates a contention point.
-   - **Recommendation**: Option A for v0 (per-agent files), aggregate at read time. Switch to a service in v1+.
+**Registry write ownership (DECIDED 2026-05-23):** Per-agent files at `.agent-comms/registry/<agent_id>.json`. Each agent owns its own profile file exclusively. No locking required since no two agents write the same file. Aggregate view (if needed) is computed by readers via directory scan + JSON merge.
 
-2. **Trust bootstrap for first remote agent**: When Hermes on `artemis` first publishes, no human is watching. Should the principal auto-trust based on a pre-shared secret (HMAC, see §11 v1.1) or always require explicit founder upgrade?
+**Open Design Questions (Needs Founder Input)**
+
+1. **Trust bootstrap for first remote agent**: When Hermes on `artemis` first publishes, no human is watching. Should the principal auto-trust based on a pre-shared secret (HMAC, see §11 v1.1) or always require explicit founder upgrade?
    - **Recommendation**: Require explicit founder upgrade until v1.1 HMAC ships.
 
-3. **Capability staleness threshold**: Currently set at 1 hour. Should an agent be marked `health: degraded` if its `last_published_ts` is stale even though heartbeats are fresh? (Capability rot vs. liveness are distinct.)
+2. **Capability staleness threshold**: Currently set at 1 hour. Should an agent be marked `health: degraded` if its `last_published_ts` is stale even though heartbeats are fresh? (Capability rot vs. liveness are distinct.)
    - **Recommendation**: Yes — surface as `degraded` after 1 hour stale profile, even if heartbeats are current. Logged warning, not a routing exclusion.
 
 ---
@@ -782,7 +781,7 @@ When agent A observes agent B doing something expensively:
    - `ack` — acknowledged, will adopt
    - `negotiate` — counter-position with evidence (threaded via `in_reply_to`)
    - Escalation: B emits `question` to principal requesting `decision`
-3. If multi-turn `negotiate` exchange stalls (>3 round-trips with no convergence), either side escalates to principal via `question`
+3. **Negotiation round-trip cap (DECIDED 2026-05-23):** 3 round-trips maximum. After the 3rd reply with no convergence, the principal MUST issue a `decision` message that ends the negotiation. Either party may request founder escalation via `question` before the cap is hit if the disagreement is structural rather than tactical.
 4. **Principal emits `decision`** referencing the thread; both agents `ack` the decision
 5. **Decision is appended to `lessons.jsonl`** by the principal (§18)
 
