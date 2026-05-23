@@ -21,18 +21,18 @@ This is the most consequential choice a factvault user makes at query time. It d
 
 ## One assembler, two invocations
 
-Both dossiers and stories are produced by the same `bundle_assembler` function in `factvault/assembler/bundle.py`:
+Both dossiers and stories are produced by the same Go assembler function in `internal/assembler/bundle.go`:
 
-```python
-def assemble(
-    entity_ids: list[str],
-    depth: int,
-    tenant_id: str,
-    query: str | None = None,
-    max_facts: int | None = None,
-    min_confidence: float = 0.0,
-) -> dict:
+```go
+func Assemble(
+    ctx context.Context,
+    tx pgx.Tx,
+    entityIDs []string,
+    depth int,
+    tenantID string,
+) (*Bundle, error) {
     ...
+}
 ```
 
 The `depth` parameter is the only structural difference:
@@ -47,7 +47,7 @@ Every bundle, regardless of depth, carries the same structure: entities, stateme
 ## Dossier use cases
 
 **VC associate monitoring 200 AI startups.**
-The associate pre-registers each company as an entity with `type_uri: "https://schema.org/Organization"`. Each night the dossier worker calls `assemble(entity_id, depth=0)` for all 200 entities and caches the result. The bundle for each company contains funding rounds (amount, round type, lead investor, date, source), headcount statements, product announcements, SEC/EDGAR filings, founders, and press coverage. The LLM receives the pre-assembled bundle, has complete sourcing for every claim, and generates a weekly portfolio digest that cites each number back to the verbatim excerpt that produced it.
+The associate pre-registers each company as an entity with `type_uri: "https://schema.org/Organization"`. Each night the dossier worker opens a tenant-scoped `pgx.Tx` and calls `assembler.Assemble(ctx, tx, []string{entityID}, 0, tenantID)` for all 200 entities and caches the result. The bundle for each company contains funding rounds (amount, round type, lead investor, date, source), headcount statements, product announcements, SEC/EDGAR filings, founders, and press coverage. The LLM receives the pre-assembled bundle, has complete sourcing for every claim, and generates a weekly portfolio digest that cites each number back to the verbatim excerpt that produced it.
 
 The dossier pattern works here because the set of entities is known and stable. The nightly cache means the query is instant. The `GET /entities/{id}/dossier` URL is stable and can be linked in Slack or embedded in a dashboard.
 
@@ -67,7 +67,7 @@ A journalist asks: "Which biotechs lost a CFO in the last 18 months, and which o
 This is not a dossier use case because the entity set is not known in advance. The analyst does not have a list of biotechs to pre-register; the point of the query is to discover which entities satisfy the criteria.
 
 **Acquisition chain narrative.**
-A researcher asks about a three-party sequence: "Acme acquires DataCo → FTC review → MegaCorp layoffs." These are three entities connected by event-typed relations. The story endpoint calls `assemble(seed_ids, depth=3)` — the recursive CTE traverses: Acme → acquisition relation → DataCo → FTC review relation → regulatory entity, and separately DataCo → related-company relation → MegaCorp → layoff event relation. The bundle stitches the three-entity narrative with full sourcing at every node: the Reuters press release excerpt for the acquisition, the FTC docket source for the review, the Bloomberg news source for the layoffs. The LLM writes a coherent timeline that names sources at each step.
+A researcher asks about a three-party sequence: "Acme acquires DataCo → FTC review → MegaCorp layoffs." These are three entities connected by event-typed relations. The story endpoint calls `assembler.Assemble(ctx, tx, seedIDs, 3, tenantID)` — the recursive CTE traverses: Acme → acquisition relation → DataCo → FTC review relation → regulatory entity, and separately DataCo → related-company relation → MegaCorp → layoff event relation. The bundle stitches the three-entity narrative with full sourcing at every node: the Reuters press release excerpt for the acquisition, the FTC docket source for the review, the Bloomberg news source for the layoffs. The LLM writes a coherent timeline that names sources at each step.
 
 **State AI legislation and PAC donors.**
 A policy analyst asks: "Which states passed AI legislation since 2024, and which bill sponsors received donations from AI PACs?" The story endpoint resolves "AI legislation" entities from the bills subgraph (embedding cosine > 0.6), then expands to sponsor entities (depth 2), then expands to donor relationships (depth 3). The bundle contains state entities, bill entities with vote counts and passage dates, sponsor entities with FEC donor statements, and PAC entities identified by description embedding similarity. Every donation figure and vote count is backed by a verbatim excerpt from FEC data or state legislature records.
@@ -108,8 +108,8 @@ CREATE TABLE dossiers (
 );
 ```
 
-The dossier worker calls `assemble(entity_id, depth=0)` for each entity and upserts the result into `dossiers`. A GET request to `GET /entities/{id}/dossier` returns the cached bundle if `assembled_at > now() - interval '24 hours'`; otherwise, it recomputes on demand.
+The dossier worker opens a tenant-scoped `pgx.Tx` and calls `assembler.Assemble(ctx, tx, []string{entityID}, 0, tenantID)` for each entity and upserts the result into `dossiers`. A GET request to `GET /entities/{id}/dossier` returns the cached bundle if `assembled_at > now() - interval '24 hours'`; otherwise, it recomputes on demand.
 
-The story endpoint (`POST /stories`) accepts a query body, runs embedding similarity search against `entities.embedding` to find seed entities (cosine threshold 0.6), and calls `assemble(seed_ids, depth=2)` — adjustable to `depth=3` for deeper traversal. The recursive CTE that expands the graph gates each edge traversal at a minimum confidence of 0.4 to prevent low-confidence synthetic edges from polluting story results.
+The story endpoint (`POST /stories`) accepts a query body, runs embedding similarity search against `entities.embedding` to find seed entities (cosine threshold 0.6), and calls `assembler.Assemble(ctx, tx, seedIDs, 2, tenantID)` — adjustable to `depth=3` for deeper traversal. The recursive CTE that expands the graph gates each edge traversal at a minimum confidence of 0.4 to prevent low-confidence synthetic edges from polluting story results.
 
 Both paths return identical bundle JSON structure. The calling LLM does not need to distinguish them.

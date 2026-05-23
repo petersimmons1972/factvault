@@ -1,0 +1,90 @@
+openapi: 3.1.0
+info:
+  title: factvault API
+  version: 0.1.0
+paths:
+  /healthz:
+    get:
+      responses:
+        "200":
+          description: service health
+  /readyz:
+    get:
+      responses:
+        "200":
+          description: database readiness
+  /entities/{id}/dossier:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: entity dossier bundle
+        "401":
+          description: missing or invalid JWT
+        "404":
+          description: entity not found
+  /stories:
+    post:
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoryRequest"
+      responses:
+        "200":
+          description: graph-expanded story bundle
+  /facts/query:
+    post:
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FactsQueryRequest"
+      responses:
+        "200":
+          description: fact query bundle
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    StoryRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        depth:
+          type: integer
+          minimum: 1
+          maximum: 3
+        max_facts:
+          type: integer
+        min_confidence:
+          type: number
+    FactsQueryRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        max_facts:
+          type: integer
+        min_confidence:
+          type: number

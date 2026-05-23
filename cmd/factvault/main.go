@@ -17,6 +17,9 @@ func main() {
 	}
 	root.AddCommand(newMigrateCmd())
 	root.AddCommand(newWorkerCmd())
+	root.AddCommand(newAuthCmd())
+	root.AddCommand(newAPICmd())
+	root.AddCommand(newMCPCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
