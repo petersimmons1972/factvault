@@ -3,6 +3,7 @@ package extractors
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/petersimmons1972/factvault/internal/db"
 )
 
@@ -26,8 +27,16 @@ type Extractor interface {
 
 // SourceRawText returns the archived raw text for a source when it is present.
 func SourceRawText(source *db.Source) (string, bool) {
-	if source == nil || !source.RawText.Valid {
+	if source == nil {
 		return "", false
 	}
-	return source.RawText.String, true
+	return TextValue(source.RawText)
+}
+
+// TextValue returns the string content of a nullable pgtype.Text when present.
+func TextValue(value pgtype.Text) (string, bool) {
+	if !value.Valid {
+		return "", false
+	}
+	return value.String, true
 }
