@@ -38,7 +38,7 @@ The worker processes are polling loops that fan out concurrent HTTP fetches, dat
 
 ### 2.3 Type Safety on a Security Boundary
 
-Multi-tenant isolation is enforced at the database layer via Postgres RLS, but the application layer is the trust boundary: the code that sets `app.current_tenant_id` on every database connection before executing a query. A type error at this boundary (a `nil` UUID, a wrong-type assertion, a silent string conversion) could cause a tenant bleed. Go's compile-time type system, combined with `pgx`'s typed scan targets, eliminates entire classes of type-coercion bugs that are silent in Python. The `tenant_id` is a `pgtype.UUID` from the moment it leaves the JWT verifier to the moment it is written to `SET LOCAL app.current_tenant_id`. There is no stringly-typed path.
+Multi-tenant isolation is enforced at the database layer via Postgres RLS, but the application layer is the trust boundary: the code that sets `app.tenant_id` on every database connection before executing a query. A type error at this boundary (a `nil` UUID, a wrong-type assertion, a silent string conversion) could cause a tenant bleed. Go's compile-time type system, combined with `pgx`'s typed scan targets, eliminates entire classes of type-coercion bugs that are silent in Python. The `tenant_id` is a `pgtype.UUID` from the moment it leaves the JWT verifier to the moment it is written to `SET LOCAL app.tenant_id`. There is no stringly-typed path.
 
 ### 2.4 Founder's Broader Stack
 
@@ -214,7 +214,7 @@ factvault/
 │   ├── auth/                            # JWT verification + dev key issuance
 │   ├── db/
 │   │   ├── conn.go                      # pgx pool constructor + pgvector type registration
-│   │   ├── rls.go                       # SET LOCAL app.current_tenant_id helper (replaces rls.py)
+│   │   ├── rls.go                       # SET LOCAL app.tenant_id helper (replaces rls.py)
 │   │   └── queries/                     # *.sql files consumed by sqlc codegen
 │   ├── config/                          # YAML config loader (collector schedules, LLM endpoint, etc.)
 │   └── embedclient/                     # HTTP client for the Python embedder microservice
@@ -276,7 +276,7 @@ factvault/
 **Go rewrite scope:**
 - `alembic/versions/*.py` → `migrations/*.sql` (goose format). The SQL itself is copied verbatim; only the Python wrapper and Alembic history table are replaced.
 - `factvault/db/models.py` (SQLAlchemy ORM models) → deleted. `sqlc` generates typed structs from `internal/db/queries/*.sql`; no ORM layer.
-- `factvault/db/rls.py` (RLS session helper) → `internal/db/rls.go`. Same semantics: `SET LOCAL app.current_tenant_id = $1` wrapped in a helper that takes a `pgx.Tx` and a `pgtype.UUID`.
+- `factvault/db/rls.py` (RLS session helper) → `internal/db/rls.go`. Same semantics: `SET LOCAL app.tenant_id = $1` wrapped in a helper that takes a `pgx.Tx` and a `pgtype.UUID`.
 - `conftest.py` (testcontainers-python setup) → `internal/db/testhelper_test.go` using dockertest. The helper spins up a Postgres container, runs `factvault migrate up`, and returns a connection string for test use.
 - `factvault/db/session.py` (asyncpg/SQLAlchemy connection pool) → `internal/db/conn.go` (pgx pool + pgvector type registration, as shown in §4.4).
 
@@ -362,7 +362,7 @@ The following are language-agnostic and are not affected by the Go transition:
 - **The database schema.** SQL is portable. The DDL in `migrations/` is identical to the Alembic-generated SQL, modulo formatting.
 - **The bundle JSON contract.** The canonical bundle JSON shape (§3.4 of the design spec) is unchanged. Downstream LLM consumers, the MCP tools, and the REST API all produce and consume the same JSON structure.
 - **The source-existence guarantee.** `raw_text` + `archive_url` + `content_hash` as the evidentiary record; `source_verifications` as the append-only audit log; `raw_html` zlib-compressed; excerpt-offset check before every `statement_sources` INSERT.
-- **The tenant isolation guarantees.** RLS policies are SQL; they are unchanged. The Go application layer enforces the same `SET LOCAL app.current_tenant_id` contract as the Python layer.
+- **The tenant isolation guarantees.** RLS policies are SQL; they are unchanged. The Go application layer enforces the same `SET LOCAL app.tenant_id` contract as the Python layer.
 - **The six-stage pipeline.** Collect → Archive → Extract → Corroborate → Verify → Relate. Stage boundaries, status transitions, and invariants are unchanged.
 - **The example domains and YAML formats.** `examples/ai-startup-tracking/`, `political-research/`, `pharma-trial-monitoring/`, `investigative-journalism/` and their fixture formats are unchanged.
 - **The Wayback SPN2 submission behavior.** Best-effort, 3 retries, archive failure is not a blocker.
