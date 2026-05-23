@@ -34,12 +34,29 @@ One independent source: ceiling 0.50. Two: 0.85. Three or more: 0.95. Independen
 ## Quickstart
 
 ```bash
-git clone https://github.com/your-org/factvault
+git clone https://github.com/petersimmons1972/factvault
 cd factvault
-docker-compose up -d          # postgres+pgvector, api, workers, ollama
+cp .env.example .env
+
+# Host-run commands use localhost, not the in-compose service name.
+export FACTVAULT_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
+
+docker compose up -d postgres embedder
+go build -o bin/factvault ./cmd/factvault
+./bin/factvault migrate
+
+# Load a bundled example and assemble its first dossier.
+./bin/factvault example load ai-startup-tracking \
+  --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker dossier \
+  --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --limit 10
 
 # Verify the stack is ready
-factvault doctor
+./bin/factvault doctor \
+  --embedder-url http://localhost:8081 \
+  --llm-url http://localhost:11434/v1
 ```
 
 Current supported Python versions for local development are 3.12 and 3.13. Python 3.14 is temporarily excluded because `pytest-asyncio` still emits an upstream deprecation warning there during test runs.
@@ -55,6 +72,8 @@ The `doctor` command runs seven checks — database reachability, RLS policies, 
 [6/7] LLM endpoint responding ................ OK (http://localhost:11434/v1)
 [7/7] Canary fact ingest end-to-end .......... OK
 ```
+
+For the full five-minute path from clone to a JWT-authenticated dossier query, see [docs/getting-started.md](docs/getting-started.md). For day-two operations, see [docs/operator-guide.md](docs/operator-guide.md).
 
 ---
 
@@ -166,12 +185,15 @@ The controlled vocabulary is not bureaucracy — it prevents `founded_in`, `foun
 | [Dossiers vs. Stories](docs/concepts/dossiers-vs-stories.md) | Full treatment of both modes including all worked examples |
 | [Confidence and Corroboration](docs/concepts/confidence-and-corroboration.md) | The deterministic confidence formula; what independence means; how to read `v_conflicts` |
 | [Defining Properties](docs/guides/defining-properties.md) | The one mandatory authoring task before first ingest |
+| [5-Minute Getting Started](docs/getting-started.md) | Clone-to-dossier walkthrough for a fresh local operator |
+| [Operator Guide](docs/operator-guide.md) | Runtime components, configuration, health checks, backups, upgrades, and troubleshooting |
+| [Frontier Models](docs/guides/frontier-models.md) | Explicit opt-in path and guardrails for hosted LLM extraction |
 
 ---
 
 ## Status
 
-**Pre-implementation.** The design spec is complete and approved. No code has been written. The four pillars, six pipeline stages, full DDL, bundle JSON shape, and retrieval API are specified in the design doc above. Implementation begins from that spec.
+**Active Go implementation.** The repository now includes the Go CLI, migrations, workers, REST API, MCP server, doctor checks, example loader, Postgres store interfaces, and deploy scaffolding. Open issues continue to track the remaining backend and Tier 1 compose polish.
 
 ---
 
