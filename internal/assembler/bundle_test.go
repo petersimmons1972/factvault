@@ -42,7 +42,6 @@ func TestAssembleDossier(t *testing.T) {
 
 	// Test: Assemble dossier for the entity (depth=0)
 	bundle, err := Assemble(ctx, tx, []string{entityID}, 0, tenantID)
-
 	if err != nil {
 		t.Errorf("Assemble failed: %v", err)
 	}
