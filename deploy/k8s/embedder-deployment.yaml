@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: factvault-embedder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: factvault-embedder
+  template:
+    metadata:
+      labels:
+        app: factvault-embedder
+    spec:
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: embedder
+          image: factvault-embedder:latest
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: factvault-embedder
+spec:
+  selector:
+    app: factvault-embedder
+  ports:
+    - port: 8080
+      targetPort: 8080

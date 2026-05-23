@@ -1,0 +1,4 @@
+- ext_id: pharma-trial-monitoring-entity-1
+  label: pharma trial monitoring Example Entity
+  type_uri: https://schema.org/Organization
+  description: Fictional seed entity for the pharma trial monitoring example.

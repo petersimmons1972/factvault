@@ -1,0 +1,4 @@
+- ext_id: ai-startup-tracking-entity-1
+  label: ai startup tracking Example Entity
+  type_uri: https://schema.org/Organization
+  description: Fictional seed entity for the ai startup tracking example.

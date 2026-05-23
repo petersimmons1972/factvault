@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: factvault-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: factvault-api
+  template:
+    metadata:
+      labels:
+        app: factvault-api
+    spec:
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: factvault
+          image: factvault-app:latest
+          args: ["factvault", "api", "--addr", ":8080"]
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: factvault-config
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: factvault-api
+spec:
+  selector:
+    app: factvault-api
+  ports:
+    - port: 8080
+      targetPort: 8080

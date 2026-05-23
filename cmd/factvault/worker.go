@@ -72,6 +72,12 @@ func newWorkerCmd() *cobra.Command {
 		defer cancel()
 		return p.VerifyOnce(ctx, tenantID, ageDays, limit)
 	})
+	cmd.AddCommand(&cobra.Command{Use: "extract", Short: "Run extract worker once", RunE: func(cmd *cobra.Command, args []string) error {
+		return workers.ExtractOnce(cmd.Context(), nil)
+	}})
+	cmd.AddCommand(&cobra.Command{Use: "corroborate", Short: "Run corroborate worker once", RunE: func(cmd *cobra.Command, args []string) error {
+		return workers.CorroborateOnce(cmd.Context(), nil)
+	}})
 	cmd.AddCommand(&cobra.Command{
 		Use:   "dossier",
 		Short: "Precompute dossier bundles",

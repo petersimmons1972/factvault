@@ -1,0 +1,8 @@
+- slug: founded_in
+  label: Founded in
+  value_type: date
+  description: Date the entity was founded or formed.
+- slug: source_note
+  label: Source note
+  value_type: string
+  description: Short sourced note for the example domain.
