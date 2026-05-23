@@ -9,24 +9,27 @@ linters:
     - staticcheck
     - gosec
     - revive
-    - gci
-    - gofumpt
     - bodyclose
     - contextcheck
     - modernize
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    gosec:
+      excludes:
+        - G404
 
-linters-settings:
-  gci:
-    sections:
-      - standard
-      - default
-      - prefix(github.com/petersimmons1972/factvault)
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-  gosec:
-    excludes:
-      - G404
+formatters:
+  enable:
+    - gci
+    - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/petersimmons1972/factvault)
 
 issues:
   max-issues-per-linter: 50
