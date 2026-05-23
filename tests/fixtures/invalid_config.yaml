@@ -1,5 +1,0 @@
-tenants: "not-a-list"
-
-archive_worker:
-  interval_seconds: "not-an-int"
-  batch_size: 50
