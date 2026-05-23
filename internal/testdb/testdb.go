@@ -100,6 +100,14 @@ func New(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// Setup initializes the test database container and returns a connection pool.
+// This is a convenience wrapper that calls StartContainer once and New for each test.
+func Setup(ctx context.Context, t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	StartContainer()
+	return New(t)
+}
+
 func migrationsPath() string {
 	cwd, _ := os.Getwd()
 	for i := 0; i < 8; i++ {
