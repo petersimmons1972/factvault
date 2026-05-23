@@ -7,8 +7,30 @@ on:
     branches: ["**"]
 
 jobs:
-  test:
-    name: pytest (postgres + pgvector)
+  go:
+    name: go test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1
+
+  embedder:
+    name: embedder pytest
     runs-on: ubuntu-latest
 
     steps:
@@ -17,24 +39,13 @@ jobs:
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install package + dev dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Run pytest
-        run: pytest tests/ -v --tb=short
         env:
-          # testcontainers-python spins up the container using the published pgvector image.
-          # The FACTVAULT_TEST_POSTGRES_IMAGE env var allows overriding the default image.
-          # CI uses the published image directly — no local Dockerfile build required.
-          FACTVAULT_TEST_POSTGRES_IMAGE: pgvector/pgvector:pg16
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+      - name: Install embedder deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn pytest httpx
+
+      - name: Run embedder tests
+        run: pytest services/embedder/tests -v --tb=short
