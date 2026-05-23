@@ -3,6 +3,8 @@
 **Date:** 2026-05-22
 **Status:** Draft (pending founder review)
 
+> **Language migration note (2026-05-22):** This spec was originally written assuming Python (Plans 1+2 merged to main). The project has migrated to Go for workers, API, MCP, and CLI — effective Phase 1. See `2026-05-22-go-transition.md` for the full transition spec, locked stack decisions, and migration sequencing. The database schema, bundle JSON contract, and pipeline architecture described here are language-agnostic and unchanged.
+
 ---
 
 ## Pitch
@@ -1042,27 +1044,31 @@ CREATE POLICY entities_tenant_isolation ON entities
 -- SET LOCAL app.current_tenant_id = '<tenant_uuid>';
 ```
 
-Every database connection acquired by the API or workers must set `app.current_tenant_id` before executing any query. Connection pooling (PgBouncer or built-in asyncpg pooling) is configured to reset this setting between connections.
+Every database connection acquired by the API or workers must set `app.current_tenant_id` before executing any query. Connection pooling is handled by the pgx connection pool (`pgxpool.Pool`). The `internal/db/rls.go` helper wraps `SET LOCAL app.current_tenant_id = $1` and is called on every transaction before executing queries. pgx pools reset session state between acquisitions.
 
 ### Container Standard
 
 All images follow the Chainguard base image standard:
 
-**Workers and API:**
+**Go binary (workers, API, MCP, CLI — single image):**
 ```dockerfile
-# Build stage
-FROM cgr.dev/chainguard/python:latest-dev AS builder
+# Build stage: compile Go binary
+FROM cgr.dev/chainguard/go:latest AS builder
 WORKDIR /app
-COPY pyproject.toml .
-RUN pip install --prefix=/install .
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o factvault ./cmd/factvault
 
-# Runtime stage
+# Runtime stage: minimal wolfi-base, no runtime interpreter
 FROM cgr.dev/chainguard/wolfi-base AS runtime
-COPY --from=builder /install /usr/local
-COPY --from=builder /usr/bin/tini /sbin/tini
+COPY --from=builder /app/factvault /usr/local/bin/factvault
+COPY --from=builder /sbin/tini /sbin/tini
 USER 65532
 ENTRYPOINT ["/sbin/tini", "--"]
 ```
+
+**Python embedder microservice** (see §6.1 below for the full pattern).
 
 **Kubernetes security context (applied to all Deployments and CronJobs):**
 
@@ -1085,11 +1091,11 @@ securityContext:
 
 ### Embedding Model
 
-- Default: BGE-M3, 1024 dimensions.
-- Loaded locally via `sentence-transformers`. The model weights are downloaded at build time and baked into the image (or mounted as a read-only PVC).
+- Model: BGE-M3, 1024 dimensions (unchanged).
+- **Computed by the Python embedder microservice** (`services/embedder/`), not inline in the worker process. Go workers call `POST /embed` on the embedder service via the `internal/embedclient` package. See §6.1 for the full microservice contract.
 - Embeddings are computed for: `entities.embedding` (label + description), `statements.embedding` (textual representation of subject + property + value), `relations.embedding` (description), `sources.embedding` (raw_text[:4096]).
 - HNSW indices on all four tables use `vector_cosine_ops` with `m=16, ef_construction=64`.
-- Embedding computation is CPU-only by default. GPU acceleration is opt-in via `FACTVAULT_EMBEDDING_DEVICE=cuda` env var; the same model weights are used.
+- Embedding computation is CPU-only by default. GPU acceleration is opt-in at the embedder microservice layer via `EMBEDDER_DEVICE=cuda`; the Go workers are unaffected.
 
 ### LLM Backend
 
@@ -1128,72 +1134,106 @@ MIT.
 
 ---
 
+## 6.1 Embedder Microservice
+
+The Python embedder microservice is the single Python component in the deploy stack. It is a narrow FastAPI service at `services/embedder/` that loads `BAAI/bge-m3` via `sentence-transformers` and exposes a `POST /embed` endpoint.
+
+**Why Python is retained here:** BGE-M3 via `sentence-transformers` provides exact control over model weights and tokenizer behavior. A divergence in tokenization produces a divergence in embedding space, which silently corrupts similarity search across stored embeddings. Locking to the reference implementation is the right trade for one additional container in the deploy stack.
+
+**Contract (stable — do not change without a versioned protocol bump):**
+
+| | |
+|---|---|
+| Embed endpoint | `POST /embed` with `{"texts": [...]}` → `{"vectors": [[1024 floats], ...]}` |
+| Health endpoint | `GET /healthz` → `{"status": "ok", "model": "BAAI/bge-m3"}` (200) or `{"status": "loading"}` (503 during startup) |
+| Dimension | 1024 (matches `vector(1024)` schema columns) |
+| Max batch | 64 texts per request |
+| Go client | `internal/embedclient/client.go` — injected into workers via config |
+
+**Full contract, environment variables, Dockerfile pattern, and K8s resource specs** are in `2026-05-22-go-transition.md` §8.
+
+---
+
 ## 7. Repository Layout
 
 ```
 factvault/
-├── factvault/                  # Main Python package
-│   ├── api/                    # FastAPI application; routes, auth, request models
-│   ├── mcp/                    # MCP server; tool definitions, auth middleware
-│   ├── workers/                # Pipeline stage workers (collect, archive, extract, corroborate, verify, relate)
-│   ├── collectors/             # Collector implementations (rss, sitemap, searxng, wayback_cdx, http, upload)
-│   ├── extractors/             # Extraction logic
-│   │   ├── deterministic/      # Regex/pattern extractors (funding, dates, identifiers, entities)
-│   │   └── llm.py              # LLM extractor with structured output schema
-│   ├── assembler/              # Bundle assembly (bundle.py, confidence.py)
-│   ├── db/                     # Database layer (migrations via Alembic, connection pool, RLS helpers)
-│   └── cli/                    # CLI commands (doctor, props, ingest, verify-now)
-│
-├── docs/                       # All documentation
-│   ├── concepts/               # Mental model docs (facts-and-sources, dossiers-vs-stories,
-│   │   │                       #   confidence-and-corroboration, source-existence)
-│   ├── guides/                 # How-to guides for operators and developers
-│   │   └── defining-properties.md  # The one mandatory authoring task
-│   ├── api/                    # Generated API reference (OpenAPI spec + rendered)
+├── cmd/
+│   └── factvault/
+│       └── main.go                      # Cobra root + subcommand registration
+├── internal/
+│   ├── api/                             # chi HTTP server + routes
+│   ├── workers/                         # archive, verify, extract, corroborate, dossier, relate
+│   ├── collectors/                      # rss, http, sitemap, searxng, wayback_cdx, upload
+│   ├── archiving/                       # wayback submission, htmlextract (go-readability), hash
+│   ├── extractors/                      # deterministic (identifiers, money, dates, gazetteer) + llm
+│   ├── vocabulary/                      # property resolver (strict + permissive modes)
+│   ├── assembler/                       # bundle building + confidence computation
+│   ├── mcp/                             # MCP server tools (entity_lookup, story_query, fact_query)
+│   ├── doctor/                          # first-boot health checks (7 checks)
+│   ├── examples/                        # example domain YAML loader
+│   ├── auth/                            # JWT verification + dev key issuance
+│   ├── db/
+│   │   ├── conn.go                      # pgx pool constructor + pgvector type registration
+│   │   ├── rls.go                       # SET LOCAL app.current_tenant_id helper
+│   │   └── queries/                     # *.sql files consumed by sqlc codegen
+│   ├── config/                          # YAML config loader (collector schedules, LLM endpoint, etc.)
+│   └── embedclient/                     # HTTP client for the Python embedder microservice
+├── migrations/                          # *.sql goose migration files
+├── services/
+│   └── embedder/                        # Python sentence-transformers microservice (stays Python)
+│       ├── app.py                       # FastAPI app (POST /embed, GET /healthz)
+│       ├── pyproject.toml               # sentence-transformers, fastapi, uvicorn
+│       └── Dockerfile                   # Chainguard python:latest-dev build → wolfi-base runtime
+├── deploy/
+│   ├── docker/                          # Dockerfile for the Go binary (multi-stage, wolfi-base)
+│   └── k8s/                             # K8s manifests: Deployment, CronJob, Service, PVC, ConfigMap
+├── docs/                                # All project documentation
+│   ├── concepts/                        # Mental model docs (language-agnostic)
+│   ├── guides/                          # Operator how-tos; defining-properties.md is the first task
+│   ├── api/                             # OpenAPI spec + rendered reference (hand-maintained)
 │   └── superpowers/
-│       └── specs/              # Design specs (this file)
-│
-├── examples/                   # Runnable example deployments with realistic fixtures
-│   ├── ai-startup-tracking/    # VC monitoring use case; 10 fictional AI startups, 3 funding rounds each
-│   ├── political-research/     # Journalist use case; 5 fictional politicians, votes + donors
-│   ├── pharma-trial-monitoring/ # Pharma analyst use case; 3 fictional drugs, Phase II/III trials
-│   └── investigative-journalism/ # Cross-entity story use case; acquisition + regulatory chain
-│
-├── tests/                      # Test suite
-│   ├── unit/                   # Unit tests per module
-│   ├── integration/            # Integration tests (require live DB; use testcontainers-python)
-│   └── e2e/                    # End-to-end pipeline tests using example fixtures
-│
+│       └── specs/                       # Design specs (this file + go-transition.md)
+├── examples/                            # Runnable example domains (YAML fixtures, unchanged)
+│   ├── ai-startup-tracking/
+│   ├── political-research/
+│   ├── pharma-trial-monitoring/
+│   └── investigative-journalism/
+├── tests/
+│   ├── unit/                            # stdlib testing; fast, no external deps
+│   ├── integration/                     # dockertest Postgres; goose migrations applied before test
+│   └── e2e/                             # end-to-end pipeline tests using example fixtures
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml              # Lint, type-check, unit tests on every PR
-│       ├── integration.yml     # Integration tests on merge to main
-│       └── release.yml         # Container image build + push to GHCR on tag
-│
-├── k8s/                        # Kubernetes manifests (Deployment, CronJob, Service, PVC, RLS migrations)
-├── docker-compose.yml          # Local development stack (postgres+pgvector, api, worker, ollama)
-├── pyproject.toml              # Package metadata, dependencies, entry points
-├── alembic.ini                 # Alembic migration configuration
-└── .gitignore
+│       ├── ci.yml                       # go vet, go test ./..., sqlc diff on every PR
+│       ├── integration.yml              # integration tests on merge to main
+│       └── release.yml                  # docker build + push to GHCR on tag
+├── go.mod                               # module declaration + dependency pins
+├── go.sum                               # dependency checksums
+├── Makefile                             # dev tasks: build, test, migrate, generate, lint
+└── README.md
 ```
 
 **Top-level directory purposes:**
 
-| Directory              | Purpose                                                                    |
-|------------------------|----------------------------------------------------------------------------|
-| `factvault/api/`       | FastAPI routes, request/response models, auth middleware                   |
-| `factvault/mcp/`       | MCP server and tool definitions for Claude Desktop / agent stack           |
-| `factvault/workers/`   | One file per pipeline stage; run as separate processes or K8s CronJobs     |
-| `factvault/collectors/`| Pluggable document collectors; each implements `BaseCollector`             |
-| `factvault/extractors/`| Deterministic and LLM extractors; excerpt-offset check lives here         |
-| `factvault/assembler/` | `bundle.assemble()` and `confidence.compute_confidence()` — single source of truth for output |
-| `factvault/db/`        | Alembic migrations, connection pool, RLS session helpers, query functions  |
-| `factvault/cli/`       | `factvault doctor`, `factvault props review`, `factvault ingest <url>`    |
-| `docs/concepts/`       | Mental model documentation; read before API reference                      |
-| `docs/guides/`         | Operator how-tos; `defining-properties.md` is the first authoring task    |
-| `examples/`            | Four fully runnable examples with realistic fixture data and expected output |
-| `tests/`               | Unit, integration, and end-to-end test suites                             |
-| `k8s/`                 | Kubernetes manifests for production deployment                             |
+| Directory                | Purpose                                                                         |
+|--------------------------|---------------------------------------------------------------------------------|
+| `cmd/factvault/`         | Cobra root; registers all subcommands (worker, api, mcp, doctor, auth, example, migrate) |
+| `internal/api/`          | chi routes, request/response models, JWT middleware, tenant context injection   |
+| `internal/mcp/`          | MCP server tools for Claude Desktop / agent stack (go-sdk)                      |
+| `internal/workers/`      | One file per pipeline stage; run as separate processes or K8s CronJobs          |
+| `internal/collectors/`   | Pluggable document collectors; each implements the `Collector` interface         |
+| `internal/extractors/`   | Deterministic and LLM extractors; excerpt-offset check lives here               |
+| `internal/assembler/`    | `bundle.Assemble()` and `confidence.Compute()` — single source of truth for output |
+| `internal/db/`           | pgx pool, RLS helper, sqlc-generated query functions                            |
+| `internal/embedclient/`  | HTTP client for the Python embedder microservice (`POST /embed`)                |
+| `migrations/`            | goose SQL migration files (replaces Alembic)                                    |
+| `services/embedder/`     | Python BGE-M3 microservice — the one Python component in the stack              |
+| `docs/concepts/`         | Mental model documentation; read before API reference                           |
+| `docs/guides/`           | Operator how-tos; `defining-properties.md` is the first authoring task          |
+| `examples/`              | Four fully runnable examples with realistic fixture data and expected output     |
+| `tests/`                 | Unit (stdlib), integration (dockertest), and end-to-end test suites             |
+| `deploy/k8s/`            | Kubernetes manifests for production deployment                                  |
 
 ---
 
