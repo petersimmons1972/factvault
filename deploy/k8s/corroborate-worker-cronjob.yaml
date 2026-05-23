@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: factvault-verify
+  name: factvault-corroborate
 spec:
   schedule: "*/15 * * * *"
   jobTemplate:
@@ -12,9 +12,9 @@ spec:
           securityContext:
             fsGroup: 65532
           containers:
-            - name: factvault-verify
+            - name: factvault-corroborate
               image: factvault-app:latest
-              args: ["factvault", "worker", "verify"]
+              args: ["factvault", "worker", "corroborate"]
               envFrom:
                 - configMapRef:
                     name: factvault-config

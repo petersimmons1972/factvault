@@ -1,0 +1,4 @@
+- ext_id: political-research-entity-1
+  label: political research Example Entity
+  type_uri: https://schema.org/Organization
+  description: Fictional seed entity for the political research example.

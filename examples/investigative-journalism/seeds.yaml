@@ -1,0 +1,4 @@
+- ext_id: investigative-journalism-entity-1
+  label: investigative journalism Example Entity
+  type_uri: https://schema.org/Organization
+  description: Fictional seed entity for the investigative journalism example.

@@ -15,5 +15,37 @@ services:
       timeout: 5s
       retries: 10
 
+  embedder:
+    build:
+      context: services/embedder
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080/health\")' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  factvault:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+    image: factvault-app:latest
+    command: ["factvault", "api", "--addr", ":8080"]
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      FACTVAULT_DATABASE_URL: "postgres://factvault:factvault@postgres:5432/factvault?sslmode=disable"
+      FACTVAULT_EMBEDDER_URL: "http://embedder:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embedder:
+        condition: service_healthy
+    user: "65532:65532"
+
 volumes:
   pgdata:

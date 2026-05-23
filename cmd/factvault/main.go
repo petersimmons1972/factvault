@@ -20,6 +20,8 @@ func main() {
 	root.AddCommand(newAuthCmd())
 	root.AddCommand(newAPICmd())
 	root.AddCommand(newMCPCmd())
+	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newExampleCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
