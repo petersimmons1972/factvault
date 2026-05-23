@@ -1,12 +1,12 @@
 services:
   postgres:
-    build:
-      context: .
-      dockerfile: docker/postgres/Dockerfile
+    image: pgvector/pgvector:pg16
     ports:
-      - "5432:5432"
-    env_file:
-      - .env
+      - "${FACTVAULT_POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-factvault}"
+      POSTGRES_USER: "${POSTGRES_USER:-factvault}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-factvault}"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -17,35 +17,123 @@ services:
 
   embedder:
     build:
-      context: services/embedder
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: deploy/docker/embedder.Dockerfile
+    image: factvault-embedder:latest
     ports:
-      - "8081:8080"
+      - "${FACTVAULT_EMBEDDER_PORT:-8081}:8080"
+    volumes:
+      - embedder-cache:/home/nonroot/.cache
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080/health\")' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
 
-  factvault:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "${FACTVAULT_OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  factvault-migrate:
     build:
       context: .
       dockerfile: deploy/docker/Dockerfile
     image: factvault-app:latest
-    command: ["factvault", "api", "--addr", ":8080"]
-    ports:
-      - "8080:8080"
-    env_file:
-      - .env
+    command: ["factvault", "migrate"]
     environment:
-      FACTVAULT_DATABASE_URL: "postgres://factvault:factvault@postgres:5432/factvault?sslmode=disable"
-      FACTVAULT_EMBEDDER_URL: "http://embedder:8080"
+      FACTVAULT_DATABASE_URL: "${FACTVAULT_DATABASE_URL:-postgres://factvault:factvault@postgres:5432/factvault?sslmode=disable}"
+      FACTVAULT_AUTH_DIR: "/var/lib/factvault/auth"
+    volumes:
+      - factvault-auth:/var/lib/factvault/auth
     depends_on:
       postgres:
         condition: service_healthy
+    user: "65532:65532"
+    restart: "no"
+
+  factvault-api:
+    image: factvault-app:latest
+    command: ["factvault", "api", "--addr", ":8080"]
+    ports:
+      - "${FACTVAULT_API_PORT:-8080}:8080"
+    environment: &factvault-env
+      FACTVAULT_DATABASE_URL: "${FACTVAULT_DATABASE_URL:-postgres://factvault:factvault@postgres:5432/factvault?sslmode=disable}"
+      FACTVAULT_AUTH_DIR: "/var/lib/factvault/auth"
+      FACTVAULT_DEV_TENANT_ID: "${FACTVAULT_DEV_TENANT_ID:-11111111-1111-1111-1111-111111111111}"
+      FACTVAULT_EMBEDDER_URL: "${FACTVAULT_EMBEDDER_URL:-http://embedder:8080}"
+      FACTVAULT_LLM_URL: "${FACTVAULT_LLM_URL:-http://ollama:11434/v1}"
+      FACTVAULT_LLM_MODEL: "${FACTVAULT_LLM_MODEL:-qwen3:32b}"
+      FACTVAULT_WAYBACK_URL: "${FACTVAULT_WAYBACK_URL:-https://web.archive.org}"
+      FACTVAULT_WORKER_LIMIT: "${FACTVAULT_WORKER_LIMIT:-100}"
+      FACTVAULT_VERIFY_AGE_DAYS: "${FACTVAULT_VERIFY_AGE_DAYS:-7}"
+    volumes:
+      - factvault-auth:/var/lib/factvault/auth
+    depends_on:
+      factvault-migrate:
+        condition: service_completed_successfully
       embedder:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "factvault doctor || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+    user: "65532:65532"
+
+  factvault-workers:
+    image: factvault-app:latest
+    command:
+      - /bin/sh
+      - -c
+      - |
+        touch /tmp/factvault-workers.ready
+        while true; do
+          factvault worker collect --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
+          factvault worker archive --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
+          factvault worker verify --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" --age-days "$$FACTVAULT_VERIFY_AGE_DAYS"
+          factvault worker extract --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
+          factvault worker corroborate --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
+          factvault worker dossier --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
+          sleep "$${FACTVAULT_WORKER_INTERVAL_SECONDS:-300}"
+        done
+    environment: *factvault-env
+    volumes:
+      - factvault-auth:/var/lib/factvault/auth
+    depends_on:
+      factvault-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/factvault-workers.ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    user: "65532:65532"
+
+  factvault-mcp:
+    image: factvault-app:latest
+    command: ["factvault", "mcp"]
+    environment: *factvault-env
+    volumes:
+      - factvault-auth:/var/lib/factvault/auth
+    depends_on:
+      factvault-migrate:
+        condition: service_completed_successfully
+    stdin_open: true
+    tty: true
     user: "65532:65532"
 
 volumes:
   pgdata:
+  embedder-cache:
+  ollama:
+  factvault-auth:
