@@ -43,6 +43,29 @@ Closes #42
 
 If your task doesn't correspond to a GitHub Issue, omit the `Closes` line.
 
+## Codex Execution Loop
+
+You are the execution engine. The coordinator (Claude) opens GitHub Issues describing work; you pick them up and ship PRs that close them.
+
+**Queue contract:**
+- Watch for open issues labeled `agent/codex` in this repo
+- Pick one at a time. Do not work multiple issues in parallel.
+- Read the issue body in full before starting. If the brief is ambiguous, comment on the issue with your question and stop — do not guess.
+- Open a PR that closes the issue. The PR's last commit MUST end with `Closes #<N>` on its own line. The PR body should also reference `Closes #<N>` for auto-close on merge.
+- After your PR is merged (or closed), pick the next issue.
+
+**What the coordinator guarantees in every issue:**
+- Exact file paths to create or modify
+- Acceptance criteria (tests to write, behaviors to verify)
+- Pointers to relevant spec/plan sections
+- Any non-obvious dependencies or constraints
+
+**What you do NOT do:**
+- Pick up issues without the `agent/codex` label
+- Push directly to `main` (use a feature branch + PR)
+- Use `--no-verify` or bypass any safety check
+- Edit `AGENTS.md`, `CLAUDE.md`, `.mcp.json`, or anything under `.github/` unless the issue explicitly requests it
+
 ## Test-before-commit
 
 Before any commit, run:
