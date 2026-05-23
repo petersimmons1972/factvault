@@ -928,6 +928,171 @@ Narrow scope:
 
 ---
 
+## 20. Queue Semantics (Anti-Jam)
+
+As the cluster grows beyond bilateral Claude↔Codex communication toward multi-agent topologies, message queues must provide backpressure, fairness, and recovery without deadlock. This section defines the anti-jam properties enforced at the transport layer.
+
+### 20.1 Atomic Writes
+
+Senders MUST use a two-phase write pattern to prevent readers from observing partial or corrupted messages:
+
+1. **Write to `.tmp` file**: Sender writes message JSON to a temporary file in the target inbox with name `{ISO-8601-Z-timestamp}.{pid}.tmp`
+2. **Fsync before rename**: Sender calls `fsync()` to force the OS to durably persist the file to disk
+3. **Atomic rename**: Sender atomically renames `.tmp` to the final filename `{ISO-8601-Z-timestamp}-{ULID}.json`
+
+Readers MUST ignore all `.tmp` files — they are work-in-progress and never valid messages.
+
+**Rationale**: In distributed systems, a sender crash mid-write can leave truncated or invalid JSON. Atomic rename ensures readers see either the full message or nothing.
+
+### 20.2 Bounded Queue Depth
+
+Per-recipient inbox depth is capped to prevent unbounded disk growth and enforce backpressure:
+
+- **Soft cap**: 256 messages per recipient. Senders observing a queue at soft cap SHOULD back off 30 seconds before sending non-priority messages (see §20.3).
+- **Hard cap**: 1024 messages per recipient. Senders attempting to write when the queue is at hard cap MUST `nack` their own send with reason `queue_overflow` and emit a `block` message to the principal with details.
+
+**Configuration**: Caps are configurable via future `.agent-comms/queue-config.json` (v1.1+). v0 uses hardcoded values above.
+
+**Soft-cap signal**: Senders SHOULD monitor queue depth in heartbeat `load` field (§4) and throttle opportunistically, but lack of throttle is not a protocol violation.
+
+### 20.3 Priority Lanes
+
+Not all messages are equally urgent. The receiver MUST drain high-priority messages before routine ones to prevent critical signals from being starved:
+
+**High-priority kinds**:
+- `block` — agent blocked, requires immediate principal intervention
+- `error` with `severity: fatal` — agent failure, principal needs to know
+- `nack` — protocol violation detected
+- `decision` — principal arbitration outcome, both agents must process
+
+**Routine kinds**:
+- `heartbeat` — liveness signal, low urgency
+- `progress` — status update, informational
+- Ordinary `nudge` messages — work redirection, non-blocking
+
+**Reader implementation**: Per-agent reader processes high-priority messages from its inbox first (in FIFO order per sender), then routine messages.
+
+### 20.4 Consumer Cursor
+
+To avoid re-processing messages on agent restart, receivers maintain a cursor file tracking the highest sequence number processed from each sender:
+
+**Cursor file**: `.agent-comms/cursors/{agent_id}.json`
+
+**Schema**:
+```json
+{
+  "agent_id": "codex",
+  "last_processed_seq": {
+    "claude": 42,
+    "hermes": 0
+  },
+  "last_updated_ts": "2026-05-23T14:35:30Z"
+}
+```
+
+**Usage**:
+1. On startup, receiver reads its cursor file
+2. Receiver scans inbox for messages with `seq > last_processed_seq[sender]`
+3. Receiver processes those messages in sequence order
+4. After processing, receiver increments `last_processed_seq[sender]` and writes cursor atomically (rename `.tmp`)
+
+**Recovery semantics**: Cursor ensures exactly-once processing under agent restarts without requiring a distributed log.
+
+### 20.5 Dead-Letter Queue
+
+When a message cannot be processed (schema validation failure, JSON parse error, repeated transient failures), it must not block the receiver or be retried forever. Failed messages move to a dead-letter directory:
+
+**Dead-letter path**: `.agent-comms/dead-letter/{timestamp}-{ULID}.json` (same filename as original)
+
+**Sidecar error file**: `.agent-comms/dead-letter/{timestamp}-{ULID}.error.json`
+
+**Sidecar schema**:
+```json
+{
+  "msg_id": "01HXYZABCDEFGHIJKLMNOPQRST",
+  "reason": "schema_validation_failed",
+  "detail": "Missing required field: 'seq'",
+  "attempt_count": 3,
+  "first_seen_ts": "2026-05-23T14:30:00Z",
+  "final_error_ts": "2026-05-23T14:35:30Z"
+}
+```
+
+**Retry logic**:
+- First two failures: receiver retries processing
+- After 3 failures: receiver moves message + sidecar to dead-letter/
+- Dead-lettered messages are NEVER re-read on restart
+
+**Blocking signal**: When a message is dead-lettered, receiver MUST emit a `block` message to the principal citing the dead-lettered message ID so the sender knows to investigate.
+
+### 20.6 Concurrent Processing
+
+Correctness under concurrent reads requires careful ordering discipline:
+
+**Per-sender FIFO**: All messages from the same sender MUST be processed sequentially, in sequence order. This preserves causal ordering for that sender's work (see §6).
+
+**Cross-sender ordering**: Messages from different senders MAY be processed concurrently. No ordering is defined across senders.
+
+**Idempotency prerequisite**: Concurrent processing is safe only because every message is idempotent (see §6). Re-delivery of the same `id` has no side effect.
+
+**Audit-log serialization**: The `.agent-comms/audit.jsonl` file is shared — both agents append to it. Appends MUST be serialized with file locking (see §8) to prevent interleaved corruption.
+
+### 20.7 Backpressure via Heartbeat Load
+
+Senders cannot always observe the receiver's queue depth instantly. The heartbeat `load` field (§4) carries the receiver's current queue depth as a soft signal:
+
+**Heartbeat load schema** (reminder from §4):
+```json
+{
+  "cpu": 23,
+  "ram": 41,
+  "gpu": 0,
+  "queue_depth": 12
+}
+```
+
+**Sender throttling heuristic**:
+- When a sender's heartbeat from recipient shows `load.queue_depth > 200`, the sender SHOULD throttle non-priority sends (delay 30s before next routine message)
+- Throttling is advisory; lack of throttle does not violate the protocol
+- Throttling is per-sender; if sender A sees high queue depth, sender A throttles; sender B is unaffected
+
+### 20.8 Watchdog Sweep
+
+The principal's watchdog periodically scans inbox state and surfaces queue health anomalies:
+
+**Scan interval**: Every 5 minutes (aligned with liveness detection, §4)
+
+**Detected anomalies**:
+
+1. **Stale messages** — Any message in inbox older than 24 hours (not yet processed) triggers `error` message with `severity: warn code: stale_message` and citation of the message ID
+2. **Queue overflow** — Inbox depth continuously > soft cap (256) for > 10 minutes triggers `error` with `severity: error code: queue_backed_up` and recommended actions (check receiver health, increase hard cap)
+3. **Dead-letter accumulation** — Dead-letter directory grows > 50 files without decay triggers `error` with `severity: warn code: dead_letter_accumulation` suggesting human review
+
+All detected anomalies are surfaced to principal via `error` messages (§16.2) and logged for observability.
+
+### 20.9 v0 Implementation Surface (Tonight)
+
+Not all anti-jam properties are enforced in v0. The following are mandatory tonight; the rest are staged for v1+:
+
+**Mandatory (v0)**:
+- **§20.1 Atomic writes**: REQUIRED. Senders MUST use `.tmp` + rename. Readers MUST ignore `.tmp` files.
+- **§20.2 Hard cap enforcement**: REQUIRED. Senders MUST `nack` and `block` when target inbox reaches 1024 messages.
+
+**Recommended (v0)**:
+- **§20.4 Consumer cursor**: RECOMMENDED. Receivers implementing cursor avoid re-processing on restart; receivers omitting cursor accept replay risk.
+- **§20.5 Dead-letter directory**: REQUIRED for routing. Directory is created on first error; sidecars are informational (not re-read); routing to dead-letter is implemented.
+
+**Advisory (v0)**:
+- **§20.2 Soft cap throttling**: Senders MAY throttle at soft cap; throttle is not enforced.
+- **§20.3 Priority lanes**: Readers SHOULD drain high-priority messages first; single-threaded readers processing FIFO is acceptable.
+- **§20.7 Backpressure via heartbeat load**: Heartbeats MUST include `queue_depth`; senders do not yet throttle on this signal.
+
+**Not implemented (v0)**:
+- **§20.6 Concurrent processing**: v0 assumes single-threaded readers. Concurrent reader logic is v1.1+.
+- **§20.8 Watchdog sweep anomaly detection**: Watchdog liveness checks are in place; anomaly-specific errors (stale, overflow, accumulation) are v1.1+.
+
+---
+
 ## 19. Access Asymmetry
 
 Currently both agents run as the same user on `leviathan` and share filesystem, gitconfig, network egress, and secrets. That will not hold as the cluster grows. This section reserves the protocol fields needed to route correctly under asymmetric access without forcing v0 enforcement.
