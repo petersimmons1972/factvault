@@ -1,7 +1,12 @@
 package workers
 
 import (
+	"context"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/petersimmons1972/factvault/internal/testdb"
 )
 
 func TestVerifyExcerptOffset_MatchesExactSubstring(t *testing.T) {
@@ -194,5 +199,38 @@ func TestVerifyExcerptOffset_WhitespaceMatters(t *testing.T) {
 	verified = VerifyExcerptOffset(rawText, "Hello world", 0, 12)
 	if verified {
 		t.Errorf("expected rejection due to whitespace mismatch")
+	}
+}
+
+func TestFactPipelineExtractOnce_InsertsStatements(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	defer pool.Close()
+	tenantID := uuid.NewString()
+	sourceID := uuid.NewString()
+	rawText := "Apple Inc. reported $1.2M on 2024-05-23."
+	_, err := pool.Exec(ctx, `
+		INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status, title)
+		VALUES ($1, $2, 'https://example.com/source', 'hash', $3, 'archived', 'Example source')
+	`, sourceID, tenantID, rawText)
+	if err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	if err := (&FactPipeline{DB: pool}).ExtractOnce(ctx, tenantID, 10); err != nil {
+		t.Fatalf("ExtractOnce: %v", err)
+	}
+	var statements int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM statements WHERE tenant_id=$1`, tenantID).Scan(&statements); err != nil {
+		t.Fatalf("count statements: %v", err)
+	}
+	if statements == 0 {
+		t.Fatal("expected extracted statements")
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM sources WHERE id=$1`, sourceID).Scan(&status); err != nil {
+		t.Fatalf("source status: %v", err)
+	}
+	if status != "extracted" {
+		t.Fatalf("status=%q want extracted", status)
 	}
 }
