@@ -84,6 +84,23 @@ Quick rules:
 If **any** of these are missing, write a `question` to the coordinator inbox
 and apply `agent/codex/needs-input`. Do not proceed on incomplete briefs.
 
+## Pre-ship QA — MANDATORY
+
+Before closing any issue that touches user-facing code, CLI, API, or
+documentation, run the six-persona fault-finder sweep:
+
+```
+docs/codex/qa-personas/runbook.md
+```
+
+**Two-round methodology:** Round 1 → fix blockers → Round 2 → only mark done
+when Round 2 returns no `blocker` or `critical` findings.
+
+Non-blocking findings (`serious`, `friction`, `nitpick`) must be filed as
+GitHub Issues before closing the primary issue.
+
+For dispatch commands, see `docs/codex/qa-personas/invocation-codex.md`.
+
 ## Stuck or blocked?
 
 - **Ambiguous brief:** write a `question` to `.agent-comms/inbox/claude/`,
