@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Codex queued-issue runner every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=1min
+Persistent=true
+Unit=codex-runner.service
+
+[Install]
+WantedBy=timers.target
