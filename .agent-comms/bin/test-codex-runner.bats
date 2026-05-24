@@ -9,6 +9,7 @@ setup() {
   export QUEUE_STATE_DIR="${HOME}/.local/state/codex-agent-codex-queue"
   export QUEUE_FILE="${QUEUE_STATE_DIR}/latest.tsv"
   export RUNNER_SCRIPT="${BATS_TEST_DIRNAME}/codex-runner.sh"
+  export RUNNER_SERVICE="${BATS_TEST_DIRNAME}/../systemd/codex-runner.service"
   export PROJECTS_ROOT="${HOME}/projects"
   export STUB_LOG="${TEST_ROOT}/stub.log"
   export RUNNER_WAIT_FOR_CHILD=1
@@ -133,6 +134,26 @@ EOF
   grep -q 'codex exec --cd .*/projects/factvault .*issue #113' "${STUB_LOG}"
   ! grep -q 'issue #114' "${STUB_LOG}"
   ! grep -q 'issue #115' "${STUB_LOG}"
+}
+
+@test "defaults to repo-local mailbox even when shared root exists" {
+  mkdir -p "${HOME}/.local/share/agent-comms"
+  cat > "${QUEUE_FILE}" <<'EOF'
+agent/codex sweep at 2026-05-24T05:40:01Z
+petersimmons1972/factvault	#113	2026-05-24T05:40:46Z	codex runner	https://github.com/petersimmons1972/factvault/issues/113
+EOF
+
+  run "${RUNNER_SCRIPT}"
+
+  [ "$status" -eq 0 ]
+  grep -q "AGENT_COMMS_ROOT=${HOME}/projects/factvault/.agent-comms" "${STUB_LOG}"
+  ! grep -q "AGENT_COMMS_ROOT=${HOME}/.local/share/agent-comms" "${STUB_LOG}"
+}
+
+@test "systemd unit points at committed runner path" {
+  run grep -q 'ExecStart=%h/projects/factvault/.agent-comms/bin/codex-runner.sh' "${RUNNER_SERVICE}"
+
+  [ "$status" -eq 0 ]
 }
 
 @test "duplicate suppression skips issue with active run and same-minute rerun" {

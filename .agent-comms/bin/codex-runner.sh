@@ -46,16 +46,10 @@ issue_slug() {
 }
 
 agent_comms_root_for_repo() {
-  local repo_path shared_root
+  local repo_path
   repo_path="$1"
   if [[ -n "${AGENT_COMMS_ROOT:-}" ]]; then
     printf '%s\n' "${AGENT_COMMS_ROOT}"
-    return
-  fi
-
-  shared_root="${HOME}/.local/share/agent-comms"
-  if [[ -d "${shared_root}" ]]; then
-    printf '%s\n' "${shared_root}"
     return
   fi
 
