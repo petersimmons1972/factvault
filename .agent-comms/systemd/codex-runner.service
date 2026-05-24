@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=%h/scripts/codex-runner.sh
+ExecStart=%h/projects/factvault/.agent-comms/bin/codex-runner.sh
 
 [Install]
 WantedBy=default.target
