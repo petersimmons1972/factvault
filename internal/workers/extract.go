@@ -2,16 +2,20 @@ package workers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/db"
 	"github.com/petersimmons1972/factvault/internal/extractors"
 	"github.com/petersimmons1972/factvault/internal/extractors/deterministic"
+	"github.com/petersimmons1972/factvault/internal/vocabulary"
 )
 
 // VerifyExcerptOffset validates that the excerpt appears at the claimed offsets in the source text.
@@ -31,10 +35,18 @@ func VerifyExcerptOffset(rawText, excerpt string, offsetStart, offsetEnd int) bo
 }
 
 type FactPipeline struct {
-	DB            *pgxpool.Pool
-	Deterministic extractors.Extractor
-	LLM           *extractors.LLMClient
-	Logger        *slog.Logger
+	DB                     *pgxpool.Pool
+	Deterministic          extractors.Extractor
+	LLM                    LLMExtractor
+	LLMProvider            string
+	CostGuardrailThreshold int
+	ConfirmCost            bool
+	VocabularyMode         vocabulary.Mode
+	Logger                 *slog.Logger
+}
+
+type LLMExtractor interface {
+	Extract(ctx context.Context, source *db.Source, rawText string) ([]extractors.StatementProposal, error)
 }
 
 func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit int) error {
@@ -47,11 +59,14 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 	if limit <= 0 {
 		limit = 100
 	}
+	if err := p.costGuardrail(limit); err != nil {
+		return err
+	}
 	logger := p.logger()
 	rows, err := p.DB.Query(ctx, `
 		SELECT id, tenant_id, url, fetched_at, content_hash, raw_html, raw_text, archive_url, publisher, title, published_at, last_verified_at, status, created_at
 		FROM sources
-		WHERE tenant_id = $1::uuid AND raw_text IS NOT NULL AND status IN ('archived', 'verified', 'content-changed')
+		WHERE tenant_id = $1::uuid AND raw_text IS NOT NULL AND status = 'archived'
 		ORDER BY fetched_at ASC
 		LIMIT $2
 	`, tenantID, limit)
@@ -128,9 +143,12 @@ func (p *FactPipeline) insertFact(ctx context.Context, tenantID, sourceID string
 	if err != nil {
 		return err
 	}
-	propertyID, valueType, err := p.ensureProperty(ctx, tenantID, fact.PropertySlug, fact.ValueType)
+	propertyID, valueType, shouldWrite, err := p.ensureProperty(ctx, tenantID, sourceID, fact)
 	if err != nil {
 		return err
+	}
+	if !shouldWrite {
+		return nil
 	}
 	statementID := uuid.NewString()
 	confidence := 0.5
@@ -152,30 +170,73 @@ func (p *FactPipeline) ensureEntity(ctx context.Context, tenantID, label string)
 	if label == "" {
 		label = "unknown subject"
 	}
-	extID := "extracted:" + label
 	var id string
 	err := p.DB.QueryRow(ctx, `
-		INSERT INTO entities (id, tenant_id, ext_id, label, type_uri)
-		VALUES ($1, $2, $3, $4, 'https://schema.org/Thing')
-		ON CONFLICT (tenant_id, ext_id) DO UPDATE SET label = EXCLUDED.label
+		SELECT id::text
+		FROM entities
+		WHERE tenant_id = $1 AND label = $2
+		ORDER BY created_at ASC
+		LIMIT 1
+	`, tenantID, label).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	err = p.DB.QueryRow(ctx, `
+		INSERT INTO entities (id, tenant_id, label, type_uri)
+		VALUES ($1, $2, $3, NULL)
 		RETURNING id::text
-	`, uuid.NewString(), tenantID, extID, label).Scan(&id)
+	`, uuid.NewString(), tenantID, label).Scan(&id)
 	return id, err
 }
 
-func (p *FactPipeline) ensureProperty(ctx context.Context, tenantID, slug, valueType string) (string, string, error) {
-	if slug == "" {
-		slug = "extracted_fact"
+func (p *FactPipeline) ensureProperty(ctx context.Context, tenantID, sourceID string, fact extractors.ExtractedFact) (string, string, bool, error) {
+	resolver := vocabulary.NewResolver(p.vocabularyMode())
+	result := resolver.Resolve(fact.PropertySlug, fact.ValueType, fact.Excerpt)
+	slug := result.Property.Slug
+	valueType := normalizeValueType(result.Property.ValueType)
+	if valueType == "" {
+		return "", "", false, fmt.Errorf("unsupported property value type %q", result.Property.ValueType)
 	}
-	valueType = normalizeValueType(valueType)
 	var id string
 	err := p.DB.QueryRow(ctx, `
+		SELECT id::text
+		FROM properties
+		WHERE slug = $1 AND (tenant_id = $2 OR tenant_id IS NULL)
+		ORDER BY tenant_id NULLS LAST
+		LIMIT 1
+	`, slug, tenantID).Scan(&id)
+	if err == nil {
+		return id, valueType, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, err
+	}
+
+	if !result.Known && p.vocabularyMode() == vocabulary.ModeStrict {
+		_, err := p.DB.Exec(ctx, `
+			INSERT INTO proposed_properties (
+				id, tenant_id, proposed_slug, proposed_value_type, proposed_by,
+				example_excerpt, example_source_id
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT DO NOTHING
+		`, uuid.NewString(), tenantID, slug, valueType, "extract:strict", fact.Excerpt, sourceID)
+		return "", valueType, false, err
+	}
+
+	label := result.Property.Label
+	if !result.Known {
+		label = slug
+	}
+	err = p.DB.QueryRow(ctx, `
 		INSERT INTO properties (id, tenant_id, slug, label, value_type)
-		VALUES ($1, $2, $3, $3, $4)
-		ON CONFLICT (tenant_id, slug) DO UPDATE SET value_type = EXCLUDED.value_type
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id::text
-	`, uuid.NewString(), tenantID, slug, valueType).Scan(&id)
-	return id, valueType, err
+	`, uuid.NewString(), tenantID, slug, label, valueType).Scan(&id)
+	return id, valueType, true, err
 }
 
 func insertStatementQuery(statementID, tenantID, subjectID, propertyID, valueType, value string, confidence float64) (string, []any) {
@@ -194,12 +255,48 @@ func insertStatementQuery(statementID, tenantID, subjectID, propertyID, valueTyp
 }
 
 func normalizeValueType(valueType string) string {
-	switch valueType {
+	switch strings.ToLower(strings.TrimSpace(valueType)) {
 	case "entity_ref", "string", "number", "date", "url":
-		return valueType
+		return strings.ToLower(strings.TrimSpace(valueType))
 	default:
 		return "string"
 	}
+}
+
+func (p *FactPipeline) vocabularyMode() vocabulary.Mode {
+	if p == nil || p.VocabularyMode == "" {
+		return vocabulary.ModeStrict
+	}
+	return p.VocabularyMode
+}
+
+func (p *FactPipeline) costGuardrail(limit int) error {
+	if p == nil || p.LLM == nil {
+		return nil
+	}
+	provider := strings.ToLower(strings.TrimSpace(p.LLMProvider))
+	switch provider {
+	case "", "local", "ollama":
+		return nil
+	case "anthropic", "openai":
+	default:
+		return nil
+	}
+
+	threshold := p.CostGuardrailThreshold
+	if threshold == 0 {
+		threshold = 1000
+	}
+	if threshold < 100 || threshold > 10000 {
+		return fmt.Errorf("invalid cost guardrail threshold %d: must be between 100 and 10000", threshold)
+	}
+	if p.ConfirmCost || os.Getenv("FACTVAULT_CONFIRM_COST") == "1" {
+		return nil
+	}
+	if limit > threshold {
+		return fmt.Errorf("cost guardrail blocked: provider=%s limit=%d threshold=%d; set --confirm-cost or FACTVAULT_CONFIRM_COST=1", provider, limit, threshold)
+	}
+	return nil
 }
 
 func (p *FactPipeline) logger() *slog.Logger {
