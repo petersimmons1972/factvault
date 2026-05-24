@@ -6,8 +6,25 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/petersimmons1972/factvault/internal/db"
+	"github.com/petersimmons1972/factvault/internal/extractors"
 	"github.com/petersimmons1972/factvault/internal/testdb"
+	"github.com/petersimmons1972/factvault/internal/vocabulary"
 )
+
+type stubLLM struct {
+	proposals []extractors.StatementProposal
+}
+
+func (s stubLLM) Extract(context.Context, *db.Source, string) ([]extractors.StatementProposal, error) {
+	return s.proposals, nil
+}
+
+type emptyExtractor struct{}
+
+func (emptyExtractor) Extract(context.Context, *db.Source, string) ([]extractors.ExtractedFact, error) {
+	return nil, nil
+}
 
 func TestVerifyExcerptOffset_MatchesExactSubstring(t *testing.T) {
 	rawText := "The quick brown fox jumps over the lazy dog"
@@ -232,5 +249,159 @@ func TestFactPipelineExtractOnce_InsertsStatements(t *testing.T) {
 	}
 	if status != "extracted" {
 		t.Fatalf("status=%q want extracted", status)
+	}
+}
+
+func TestFactPipelineExtractOnce_StrictQueuesUnknownProperty(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	tenantID := uuid.NewString()
+	sourceID := uuid.NewString()
+	rawText := "Acme Corp launched on 2024-03-01."
+	_, err := pool.Exec(ctx, `
+		INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status, title)
+		VALUES ($1, $2, 'https://example.com/strict', 'hash', $3, 'archived', 'Acme Corp')
+	`, sourceID, tenantID, rawText)
+	if err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+
+	p := &FactPipeline{
+		DB:            pool,
+		Deterministic: emptyExtractor{},
+		LLM: stubLLM{proposals: []extractors.StatementProposal{
+			{
+				SubjectText:        "Acme Corp",
+				PropertySlug:       "Launch Date",
+				Value:              "2024-03-01",
+				ValueType:          "date",
+				Excerpt:            "launched on 2024-03-01.",
+				ExcerptOffsetStart: 10,
+				ExcerptOffsetEnd:   33,
+			},
+		}},
+		VocabularyMode: vocabulary.ModeStrict,
+	}
+	if err := p.ExtractOnce(ctx, tenantID, 10); err != nil {
+		t.Fatalf("ExtractOnce: %v", err)
+	}
+
+	var statements, proposals int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM statements WHERE tenant_id=$1`, tenantID).Scan(&statements); err != nil {
+		t.Fatalf("count statements: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM proposed_properties WHERE tenant_id=$1`, tenantID).Scan(&proposals); err != nil {
+		t.Fatalf("count proposed properties: %v", err)
+	}
+	if statements != 0 {
+		t.Fatalf("statements=%d want 0", statements)
+	}
+	if proposals != 1 {
+		t.Fatalf("proposals=%d want 1", proposals)
+	}
+}
+
+func TestFactPipelineExtractOnce_PermissiveRegistersUnknownProperty(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	tenantID := uuid.NewString()
+	sourceID := uuid.NewString()
+	rawText := "Acme Corp launched on 2024-03-01."
+	_, err := pool.Exec(ctx, `
+		INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status, title)
+		VALUES ($1, $2, 'https://example.com/permissive', 'hash', $3, 'archived', 'Acme Corp')
+	`, sourceID, tenantID, rawText)
+	if err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+
+	p := &FactPipeline{
+		DB:            pool,
+		Deterministic: emptyExtractor{},
+		LLM: stubLLM{proposals: []extractors.StatementProposal{
+			{
+				SubjectText:        "Acme Corp",
+				PropertySlug:       "Launch Date",
+				Value:              "2024-03-01",
+				ValueType:          "date",
+				Excerpt:            "launched on 2024-03-01.",
+				ExcerptOffsetStart: 10,
+				ExcerptOffsetEnd:   33,
+			},
+		}},
+		VocabularyMode: vocabulary.ModePermissive,
+	}
+	if err := p.ExtractOnce(ctx, tenantID, 10); err != nil {
+		t.Fatalf("ExtractOnce: %v", err)
+	}
+
+	var statements, proposals, properties int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM statements WHERE tenant_id=$1`, tenantID).Scan(&statements); err != nil {
+		t.Fatalf("count statements: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM proposed_properties WHERE tenant_id=$1`, tenantID).Scan(&proposals); err != nil {
+		t.Fatalf("count proposed properties: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM properties WHERE tenant_id=$1 AND slug='launch_date'`, tenantID).Scan(&properties); err != nil {
+		t.Fatalf("count properties: %v", err)
+	}
+	if statements != 1 {
+		t.Fatalf("statements=%d want 1", statements)
+	}
+	if proposals != 0 {
+		t.Fatalf("proposals=%d want 0", proposals)
+	}
+	if properties != 1 {
+		t.Fatalf("properties=%d want 1", properties)
+	}
+}
+
+func TestFactPipelineExtractOnce_CostGuardrailBlocksFrontierProviders(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	tenantID := uuid.NewString()
+
+	p := &FactPipeline{
+		DB:                     pool,
+		LLM:                    stubLLM{},
+		LLMProvider:            "openai",
+		CostGuardrailThreshold: 1000,
+	}
+	err := p.ExtractOnce(ctx, tenantID, 1001)
+	if err == nil {
+		t.Fatal("expected cost guardrail error")
+	}
+}
+
+func TestFactPipelineExtractOnce_CostGuardrailAllowsLocalProvider(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	tenantID := uuid.NewString()
+
+	p := &FactPipeline{
+		DB:                     pool,
+		LLM:                    stubLLM{},
+		LLMProvider:            "local",
+		CostGuardrailThreshold: 1000,
+	}
+	if err := p.ExtractOnce(ctx, tenantID, 1001); err != nil {
+		t.Fatalf("ExtractOnce: %v", err)
+	}
+}
+
+func TestFactPipelineExtractOnce_CostGuardrailBypassesWithConfirm(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	tenantID := uuid.NewString()
+
+	p := &FactPipeline{
+		DB:                     pool,
+		LLM:                    stubLLM{},
+		LLMProvider:            "anthropic",
+		ConfirmCost:            true,
+		CostGuardrailThreshold: 1000,
+	}
+	if err := p.ExtractOnce(ctx, tenantID, 1001); err != nil {
+		t.Fatalf("ExtractOnce: %v", err)
 	}
 }
