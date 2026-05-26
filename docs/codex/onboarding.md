@@ -11,8 +11,9 @@ PRs that close them.
 1. Check `.agent-comms/inbox/codex/` — read and process any pending messages
    in `ts` order before doing anything else. See the **Message bus** section
    below and `.agent-comms/README.md` for full semantics.
-2. Poll for open GitHub Issues labeled `agent/codex`, sorted by creation date
-   ascending (oldest first).
+2. Poll for open GitHub Issues labeled `agent/codex`, sorted by priority label
+   (`priority/p0` highest, then `priority/p1`, `priority/p2`, `priority/p3`,
+   then unlabeled) and then by creation date ascending within each priority.
 3. If the queue is empty, wait and re-poll. Do not idle into unrelated work.
 4. Claim the oldest available issue by:
    - Applying the `agent/codex/working` label
@@ -31,6 +32,10 @@ PRs that close them.
 9. On merge, return to step 1.
 
 **One issue at a time.** Do not claim a second issue while one is in progress.
+
+Hermes-owned issues use the `agent/hermes` label family and are dispatched by
+the Hermes GitHub webhook flow documented in aifleet's
+`docs/hermes/onboarding.md`, not by this Codex polling loop.
 
 ## Label state machine
 
