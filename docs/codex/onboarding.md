@@ -8,9 +8,11 @@ PRs that close them.
 
 ## Loop
 
-1. Check `.agent-comms/inbox/codex/` — read and process any pending messages
-   in `ts` order before doing anything else. See the **Message bus** section
-   below and `.agent-comms/README.md` for full semantics.
+1. Check `${AGENT_COMMS_ROOT:-~/.local/share/agent-comms}/inbox/codex/` —
+   read and process any pending messages in `ts` order before doing anything
+   else. `.agent-comms/` is a back-compat symlink to that shared bus. See the
+   **Message bus** section below and the shared bus `README.md` for full
+   semantics.
 2. Poll for open GitHub Issues labeled `agent/codex`, sorted by priority label
    (`priority/p0` highest, then `priority/p1`, `priority/p2`, `priority/p3`,
    then unlabeled) and then by creation date ascending within each priority.
@@ -18,8 +20,8 @@ PRs that close them.
 4. Claim the oldest available issue by:
    - Applying the `agent/codex/working` label
    - Removing the `agent/codex` label
-   - Writing a `handoff` message to `.agent-comms/inbox/claude/` referencing
-     the issue (e.g. `refs: ["#N"]`)
+   - Writing a `handoff` message to the shared bus `inbox/claude/` referencing
+     the issue with cross-repo refs (e.g. `refs: ["factvault#N"]`)
 5. Read the issue body in full. Every coordinator-authored issue guarantees
    exact file paths, acceptance criteria, spec pointers, and constraints. If
    any of these are missing, write a `question` to the coordinator inbox and
@@ -55,7 +57,9 @@ Transitions:
 
 ## Message bus
 
-See `.agent-comms/README.md` for the full schema and semantics.
+See `${AGENT_COMMS_ROOT:-~/.local/share/agent-comms}/README.md` for the full
+schema and semantics. The repo-local `.agent-comms/` path is preserved only as
+a back-compat symlink to the shared bus.
 
 Quick rules:
 - Check the inbox **between every Issue-queue poll** (step 1 of the loop above)
@@ -108,10 +112,10 @@ For dispatch commands, see `docs/codex/qa-personas/invocation-codex.md`.
 
 ## Stuck or blocked?
 
-- **Ambiguous brief:** write a `question` to `.agent-comms/inbox/claude/`,
+- **Ambiguous brief:** write a `question` to the shared bus `inbox/claude/`,
   apply `agent/codex/needs-input`, stop work on that issue
 - **Tooling/environment failure you cannot resolve:** write a `block` to
-  `.agent-comms/inbox/claude/`, apply `agent/codex/blocked`, stop the loop
+  the shared bus `inbox/claude/`, apply `agent/codex/blocked`, stop the loop
   on that issue
 - **Test failure you cannot fix in ~10 minutes:** STOP, report BLOCKED with
   verbatim failure output. Do not commit a known-failing test
