@@ -14,6 +14,17 @@ spec:
     spec:
       securityContext:
         fsGroup: 65532
+      initContainers:
+        - name: factvault-migrate
+          image: factvault-app:latest
+          args: ["factvault", "migrate"]
+          envFrom:
+            - configMapRef:
+                name: factvault-config
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
       containers:
         - name: factvault
           image: factvault-app:latest

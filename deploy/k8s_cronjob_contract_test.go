@@ -30,3 +30,34 @@ func TestK8sWorkerCronJobsIncludeTenantArg(t *testing.T) {
 		}
 	}
 }
+
+func TestK8sWorkerCronJobsIncludeMigrationInitContainer(t *testing.T) {
+	files := []string{
+		"k8s/collect-worker-cronjob.yaml",
+		"k8s/archive-worker-cronjob.yaml",
+		"k8s/extract-worker-cronjob.yaml",
+		"k8s/corroborate-worker-cronjob.yaml",
+		"k8s/verify-worker-cronjob.yaml",
+		"k8s/dossier-worker-cronjob.yaml",
+	}
+
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		manifest := string(data)
+		if !strings.Contains(manifest, "initContainers:") {
+			t.Fatalf("%s is missing initContainers", path)
+		}
+		if !strings.Contains(manifest, "name: factvault-migrate") {
+			t.Fatalf("%s is missing factvault-migrate init container", path)
+		}
+		if !strings.Contains(manifest, "args: [\"factvault\", \"migrate\"]") {
+			t.Fatalf("%s is missing migrate init args", path)
+		}
+		if !strings.Contains(manifest, "name: factvault-config") {
+			t.Fatalf("%s is missing factvault-config env source", path)
+		}
+	}
+}
