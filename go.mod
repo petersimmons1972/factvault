@@ -31,8 +31,8 @@ require (
 	github.com/Nvveen/Gotty v0.0.0-20120604004816-cd527374f1e5 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/containerd/continuity v0.4.5 // indirect
-	github.com/docker/cli v28.5.1+incompatible // indirect
-	github.com/docker/docker v28.5.1+incompatible // indirect; indirect // known-vuln-awaiting-upstream
+	github.com/docker/cli v28.5.2+incompatible // indirect
+	github.com/docker/docker v28.5.2+incompatible // indirect; indirect // known-vuln-awaiting-upstream
 	github.com/docker/go-connections v0.6.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.3.0 // indirect
