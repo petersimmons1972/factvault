@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/petersimmons1972/factvault/internal/collectors"
 	"github.com/petersimmons1972/factvault/internal/testdb"
@@ -73,6 +74,40 @@ WHERE tenant_id = $1 AND url = 'https://example.com/b'
 	}
 	if rawText == "" {
 		t.Fatal("raw_text should not be empty after archive")
+	}
+}
+
+func TestCollectOnce_IdempotentAndMetadata(t *testing.T) {
+	pool := testdb.New(t)
+	p := &workers.SourcePipeline{DB: pool}
+	ts := time.Now().UTC().Truncate(time.Second)
+	c := collectors.StaticCollector{
+		CollectorName: "test",
+		Items: []collectors.Item{{
+			URL:   "https://example.com/c",
+			HTML:  []byte("<html><body>c</body></html>"),
+			Title: "Title C", Publisher: "Pub", PublishedAt: &ts, Topic: "topic", Tags: []string{"x", "y"},
+		}},
+	}
+	if err := p.CollectOnce(context.Background(), tenantID, c); err != nil {
+		t.Fatalf("CollectOnce #1: %v", err)
+	}
+	if err := p.CollectOnce(context.Background(), tenantID, c); err != nil {
+		t.Fatalf("CollectOnce #2: %v", err)
+	}
+	var count int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM sources WHERE tenant_id=$1 AND url='https://example.com/c'`, tenantID).Scan(&count); err != nil {
+		t.Fatalf("count sources: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count=%d want 1", count)
+	}
+	var title, publisher string
+	if err := pool.QueryRow(context.Background(), `SELECT title, publisher FROM sources WHERE tenant_id=$1 AND url='https://example.com/c'`, tenantID).Scan(&title, &publisher); err != nil {
+		t.Fatalf("select metadata: %v", err)
+	}
+	if title != "Title C" || !strings.Contains(publisher, "topic=topic") {
+		t.Fatalf("unexpected metadata title=%q publisher=%q", title, publisher)
 	}
 }
 
