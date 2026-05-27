@@ -38,6 +38,7 @@ jobs:
         with:
           version: v2.12.2
           args: --timeout=5m
+          only-new-issues: true
 
       # Blocking gate: runtime source graph only (no -test).
       # This preserves signal for real shipped vulnerabilities.

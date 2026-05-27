@@ -27,10 +27,10 @@ const (
 
 // GenerateRequest carries all inputs needed to generate and store a brief.
 type GenerateRequest struct {
-	SourceKind SourceKind
-	EntityID   *string
-	Query      *string
-	Bundle     *assembler.Bundle
+	SourceKind SourceKind        `json:"source_kind"`
+	EntityID   *string           `json:"entity_id,omitempty"`
+	Query      *string           `json:"query,omitempty"`
+	Bundle     *assembler.Bundle `json:"bundle"`
 }
 
 // ListOptions controls which briefs are returned from List.
@@ -269,7 +269,7 @@ type Service struct {
 
 // tenantTx begins a transaction with the app.tenant_id session variable set
 // so that RLS policies on evidence_briefs allow access only to the given tenant.
-func (s *Service) tenantTx(ctx context.Context, tenantID string) (pgx.Tx, error) {
+func (s Service) tenantTx(ctx context.Context, tenantID string) (pgx.Tx, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("briefs: begin tx: %w", err)
@@ -283,7 +283,7 @@ func (s *Service) tenantTx(ctx context.Context, tenantID string) (pgx.Tx, error)
 
 // GenerateAndStore generates a brief from req.Bundle and inserts it into evidence_briefs.
 // Returns the stored Brief record with its database-assigned ID.
-func (s *Service) GenerateAndStore(ctx context.Context, tenantID string, req GenerateRequest) (Brief, error) {
+func (s Service) GenerateAndStore(ctx context.Context, tenantID string, req GenerateRequest) (Brief, error) {
 	g := BriefGenerator{}
 	payload, err := g.Generate(req.Bundle)
 	if err != nil {
@@ -320,7 +320,7 @@ func (s *Service) GenerateAndStore(ctx context.Context, tenantID string, req Gen
 
 // List returns briefs for tenantID, applying optional SourceKind and EntityID filters.
 // Results are ordered by created_at DESC, limited to opts.Limit rows.
-func (s *Service) List(ctx context.Context, tenantID string, opts ListOptions) ([]Brief, error) {
+func (s Service) List(ctx context.Context, tenantID string, opts ListOptions) ([]Brief, error) {
 	tx, err := s.tenantTx(ctx, tenantID)
 	if err != nil {
 		return nil, err
@@ -389,7 +389,7 @@ func (s *Service) List(ctx context.Context, tenantID string, opts ListOptions) (
 
 // Get retrieves a single brief by ID under tenantID. Cross-tenant access returns an error
 // because RLS filters the row out, resulting in pgx.ErrNoRows (wrapped).
-func (s *Service) Get(ctx context.Context, tenantID, id string) (Brief, error) {
+func (s Service) Get(ctx context.Context, tenantID, id string) (Brief, error) {
 	tx, err := s.tenantTx(ctx, tenantID)
 	if err != nil {
 		return Brief{}, err
