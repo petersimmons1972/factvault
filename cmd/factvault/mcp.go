@@ -17,6 +17,7 @@ func newMCPCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the factvault MCP server over stdio",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")

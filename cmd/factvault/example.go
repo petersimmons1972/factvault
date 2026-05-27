@@ -18,6 +18,7 @@ func newExampleCmd() *cobra.Command {
 	cmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List examples",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			names, err := fvexamples.List(root)
 			if err != nil {

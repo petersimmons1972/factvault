@@ -17,6 +17,7 @@ func newAPICmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "api",
 		Short: "Run the factvault HTTP API",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
