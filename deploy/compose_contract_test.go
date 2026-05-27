@@ -36,9 +36,20 @@ func TestDockerComposeTier1Contract(t *testing.T) {
 		"\"factvault\", \"migrate\"",
 		"factvault doctor",
 		"/var/lib/factvault/auth",
+		"status_file=/tmp/factvault-workers.status",
+		"grep -q '^ok ' /tmp/factvault-workers.status",
+		"FACTVAULT_WORKER_FAILURE_RETRY_SECONDS:-30",
 	} {
 		if !strings.Contains(compose, expected) {
 			t.Fatalf("docker-compose.yml missing %q", expected)
+		}
+	}
+	for _, unexpected := range []string{
+		"/tmp/factvault-workers.ready",
+		"test -f /tmp/factvault-workers.ready",
+	} {
+		if strings.Contains(compose, unexpected) {
+			t.Fatalf("docker-compose.yml contains deprecated false-green health sentinel %q", unexpected)
 		}
 	}
 	if strings.Contains(compose, "pgvector/pgvector") {

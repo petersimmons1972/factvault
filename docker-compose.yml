@@ -99,15 +99,22 @@ services:
       - /bin/sh
       - -c
       - |
-        touch /tmp/factvault-workers.ready
+        status_file=/tmp/factvault-workers.status
+        echo "starting" > "$$status_file"
         while true; do
-          factvault worker collect --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
-          factvault worker archive --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
-          factvault worker verify --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" --age-days "$$FACTVAULT_VERIFY_AGE_DAYS"
-          factvault worker extract --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
-          factvault worker corroborate --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
-          factvault worker dossier --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
-          sleep "$${FACTVAULT_WORKER_INTERVAL_SECONDS:-300}"
+          echo "running" > "$$status_file"
+          if factvault worker collect --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" && \
+             factvault worker archive --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" && \
+             factvault worker verify --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" --age-days "$$FACTVAULT_VERIFY_AGE_DAYS" && \
+             factvault worker extract --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" && \
+             factvault worker corroborate --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" && \
+             factvault worker dossier --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"; then
+            echo "ok $$(date -u +%FT%TZ)" > "$$status_file"
+            sleep "$${FACTVAULT_WORKER_INTERVAL_SECONDS:-300}"
+          else
+            echo "error $$(date -u +%FT%TZ)" > "$$status_file"
+            sleep "$${FACTVAULT_WORKER_FAILURE_RETRY_SECONDS:-30}"
+          fi
         done
     environment: *factvault-env
     volumes:
@@ -116,7 +123,7 @@ services:
       factvault-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/factvault-workers.ready"]
+      test: ["CMD-SHELL", "grep -q '^ok ' /tmp/factvault-workers.status"]
       interval: 30s
       timeout: 5s
       retries: 5
