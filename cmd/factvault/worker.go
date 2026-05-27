@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -22,6 +23,9 @@ func newWorkerCmd() *cobra.Command {
 		ageDays        int
 		vocabularyMode string
 		llmProvider    string
+		llmModel       string
+		llmBaseURL     string
+		llmAPIKey      string
 		confirmCost    bool
 		costThreshold  int
 	)
@@ -35,7 +39,10 @@ func newWorkerCmd() *cobra.Command {
 	cmd.PersistentFlags().IntVar(&limit, "limit", 100, "Maximum rows per run")
 	cmd.PersistentFlags().IntVar(&ageDays, "age-days", 7, "Verify threshold in days")
 	cmd.PersistentFlags().StringVar(&vocabularyMode, "vocabulary-mode", string(vocabulary.ModeStrict), "Property vocabulary mode: strict or permissive")
-	cmd.PersistentFlags().StringVar(&llmProvider, "llm-provider", "local", "LLM provider for extraction: local, anthropic, or openai")
+	cmd.PersistentFlags().StringVar(&llmProvider, "llm-provider", "", "LLM provider for extraction: local or openai")
+	cmd.PersistentFlags().StringVar(&llmModel, "llm-model", "", "LLM model for extraction")
+	cmd.PersistentFlags().StringVar(&llmBaseURL, "llm-base-url", "", "LLM base URL")
+	cmd.PersistentFlags().StringVar(&llmAPIKey, "llm-api-key", "", "LLM API key")
 	cmd.PersistentFlags().BoolVar(&confirmCost, "confirm-cost", false, "Confirm frontier-model extraction batches above the guardrail threshold")
 	cmd.PersistentFlags().IntVar(&costThreshold, "llm-cost-guardrail-threshold", 1000, "Frontier-model extraction batch guardrail threshold")
 
@@ -77,10 +84,15 @@ func newWorkerCmd() *cobra.Command {
 		return p.ArchiveOnce(ctx, tenantID, limit)
 	})
 	addRun("extract", func(ctx context.Context, p *workers.SourcePipeline) error {
+		extractor, provider, err := workers.BuildLLMExtractor(resolveLLMRuntimeConfig(llmProvider, llmModel, llmBaseURL, llmAPIKey))
+		if err != nil {
+			return err
+		}
 		factPipeline := &workers.FactPipeline{
 			DB:                     p.DB,
 			VocabularyMode:         vocabulary.Mode(vocabularyMode),
-			LLMProvider:            llmProvider,
+			LLM:                    extractor,
+			LLMProvider:            provider,
 			ConfirmCost:            confirmCost,
 			CostGuardrailThreshold: costThreshold,
 		}
@@ -135,4 +147,22 @@ func newWorkerCmd() *cobra.Command {
 		},
 	})
 	return cmd
+}
+
+func resolveLLMRuntimeConfig(provider, model, baseURL, apiKey string) workers.LLMRuntimeConfig {
+	return workers.LLMRuntimeConfig{
+		Provider: provider,
+		Model:    firstNonEmpty(model, os.Getenv("FACTVAULT_LLM_MODEL")),
+		BaseURL:  firstNonEmpty(baseURL, os.Getenv("FACTVAULT_LLM_BASE_URL"), os.Getenv("FACTVAULT_LLM_URL")),
+		APIKey:   firstNonEmpty(apiKey, os.Getenv("FACTVAULT_LLM_API_KEY")),
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
