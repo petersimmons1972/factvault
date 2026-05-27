@@ -98,9 +98,9 @@ func (p *SourcePipeline) VerifyOnce(ctx context.Context, tenantID string, ageDay
 		limit = 100
 	}
 	rows, err := p.DB.Query(ctx, `
-SELECT id, url, content_hash FROM sources
+SELECT id, url, content_hash, status FROM sources
 WHERE tenant_id = $1
-  AND status IN ('archived', 'verified', 'content-changed')
+  AND status IN ('archived', 'extracted', 'verified', 'content-changed')
   AND (last_verified_at IS NULL OR last_verified_at < $2)
 ORDER BY fetched_at ASC
 LIMIT $3
@@ -111,8 +111,8 @@ LIMIT $3
 	defer rows.Close()
 
 	for rows.Next() {
-		var id, url, oldHash string
-		if err := rows.Scan(&id, &url, &oldHash); err != nil {
+		var id, url, oldHash, oldStatus string
+		if err := rows.Scan(&id, &url, &oldHash, &oldStatus); err != nil {
 			return err
 		}
 		status, newHash, notes := p.verifySource(ctx, url, oldHash)
@@ -127,7 +127,7 @@ VALUES ($1, $2, $3, $4, $5, $6)
 UPDATE sources
 SET status = $1, last_verified_at = now()
 WHERE id = $2
-`, mapSourceStatus(status), id)
+`, mapSourceStatus(status, oldStatus), id)
 		if err != nil {
 			return err
 		}
@@ -162,9 +162,13 @@ func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) 
 	return "live", newHash, ""
 }
 
-func mapSourceStatus(verificationStatus string) string {
+func mapSourceStatus(verificationStatus, currentStatus string) string {
 	switch verificationStatus {
 	case "live":
+		// Keep extracted sources extracted after successful re-verification.
+		if currentStatus == "extracted" {
+			return "extracted"
+		}
 		return "verified"
 	case "content-changed":
 		return "content-changed"
