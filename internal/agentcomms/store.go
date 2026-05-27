@@ -273,7 +273,8 @@ func (s *Store) Archive(msgID, reason string) error {
 			if strings.HasSuffix(name, ".tmp") || !strings.HasSuffix(name, ".json") {
 				continue
 			}
-			if !strings.Contains(name, msgID) {
+			fileMsgID, ok := messageIDFromFilename(name)
+			if !ok || fileMsgID != msgID {
 				continue
 			}
 			src := filepath.Join(dir, name)
@@ -291,4 +292,16 @@ func (s *Store) Archive(msgID, reason string) error {
 		}
 	}
 	return fmt.Errorf("archive: message %s not found in any inbox", msgID)
+}
+
+func messageIDFromFilename(name string) (string, bool) {
+	if !strings.HasSuffix(name, ".json") {
+		return "", false
+	}
+	base := strings.TrimSuffix(name, ".json")
+	i := strings.LastIndex(base, "-")
+	if i <= 0 || i >= len(base)-1 {
+		return "", false
+	}
+	return base[i+1:], true
 }
