@@ -2,7 +2,9 @@ package workers
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -24,6 +26,25 @@ type emptyExtractor struct{}
 
 func (emptyExtractor) Extract(context.Context, *db.Source, string) ([]extractors.ExtractedFact, error) {
 	return nil, nil
+}
+
+type scriptedExtractor struct {
+	factsBySource map[string][]extractors.ExtractedFact
+}
+
+func (s scriptedExtractor) Extract(_ context.Context, source *db.Source, _ string) ([]extractors.ExtractedFact, error) {
+	if source == nil {
+		return nil, nil
+	}
+	return s.factsBySource[source.ID.String()], nil
+}
+
+type fixedExtractor struct {
+	facts []extractors.ExtractedFact
+}
+
+func (s fixedExtractor) Extract(context.Context, *db.Source, string) ([]extractors.ExtractedFact, error) {
+	return s.facts, nil
 }
 
 func TestVerifyExcerptOffset_MatchesExactSubstring(t *testing.T) {
@@ -263,6 +284,72 @@ func TestFactPipelineExtractOnce_InvalidTenantID(t *testing.T) {
 	}
 }
 
+func TestFactPipelineExtractOnce_EntityExtIDStrategyAvoidsNullCollision(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	defer pool.Close()
+
+	tenantID := uuid.NewString()
+	sourceID := uuid.NewString()
+	rawText := "Acme raised funds. Globex raised funds. Acme raised funds again."
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status, title)
+		VALUES ($1, $2, 'https://example.com/entities', 'hash-entities', $3, 'archived', 'entities')
+	`, sourceID, tenantID, rawText); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+
+	p := &FactPipeline{
+		DB: pool,
+		Deterministic: fixedExtractor{facts: []extractors.ExtractedFact{
+			mustFactFromExcerpt(t, rawText, "Acme", "raised funds", "Acme raised funds"),
+			mustFactFromExcerpt(t, rawText, "Globex", "raised funds", "Globex raised funds"),
+			mustFactFromExcerpt(t, rawText, "Acme", "raised funds again", "Acme raised funds again"),
+		}},
+	}
+
+	if err := p.ExtractOnce(ctx, tenantID, 10); err != nil {
+		t.Fatalf("ExtractOnce: %v", err)
+	}
+
+	var entities int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM entities WHERE tenant_id = $1`, tenantID).Scan(&entities); err != nil {
+		t.Fatalf("count entities: %v", err)
+	}
+	if entities != 2 {
+		t.Fatalf("entities=%d want 2", entities)
+	}
+
+	var nullExtID int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM entities WHERE tenant_id = $1 AND ext_id IS NULL`, tenantID).Scan(&nullExtID); err != nil {
+		t.Fatalf("count null ext_id entities: %v", err)
+	}
+	if nullExtID != 0 {
+		t.Fatalf("null ext_id entities=%d want 0", nullExtID)
+	}
+}
+
+func mustFactFromExcerpt(t *testing.T, rawText, subject, value, excerpt string) extractors.ExtractedFact {
+	t.Helper()
+	byteStart := strings.Index(rawText, excerpt)
+	if byteStart < 0 {
+		t.Fatalf("excerpt %q not found in raw text", excerpt)
+	}
+	offsetStart := len([]rune(rawText[:byteStart]))
+	offsetEnd := offsetStart + len([]rune(excerpt))
+	return extractors.ExtractedFact{
+		SubjectText:        subject,
+		PropertySlug:       "description",
+		Value:              value,
+		ValueType:          "string",
+		Excerpt:            excerpt,
+		ExcerptOffsetStart: offsetStart,
+		ExcerptOffsetEnd:   offsetEnd,
+		ExtractionMethod:   "deterministic:test",
+	}
+}
+
 func TestFactPipelineExtractOnce_StrictQueuesUnknownProperty(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Setup(ctx, t)
@@ -309,6 +396,79 @@ func TestFactPipelineExtractOnce_StrictQueuesUnknownProperty(t *testing.T) {
 	}
 	if proposals != 1 {
 		t.Fatalf("proposals=%d want 1", proposals)
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM sources WHERE id=$1`, sourceID).Scan(&status); err != nil {
+		t.Fatalf("source status: %v", err)
+	}
+	if status != "archived" {
+		t.Fatalf("status=%q want archived", status)
+	}
+}
+
+func TestFactPipelineExtractOnce_StrictUnknownAndKnownAdvancesStatusWhenAnyAccepted(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	tenantID := uuid.NewString()
+	sourceID := uuid.NewString()
+	rawText := "Acme Corp launched on 2024-03-01."
+	rawLen := utf8.RuneCountInString(rawText)
+	_, err := pool.Exec(ctx, `
+		INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status, title)
+		VALUES ($1, $2, 'https://example.com/strict-mixed', 'hash', $3, 'archived', 'Acme Corp')
+	`, sourceID, tenantID, rawText)
+	if err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+
+	p := &FactPipeline{
+		DB:            pool,
+		Deterministic: emptyExtractor{},
+		LLM: stubLLM{proposals: []extractors.StatementProposal{
+			{
+				SubjectText:        "Acme Corp",
+				PropertySlug:       "Launch Date",
+				Value:              "2024-03-01",
+				ValueType:          "date",
+				Excerpt:            rawText,
+				ExcerptOffsetStart: 0,
+				ExcerptOffsetEnd:   rawLen,
+			},
+			{
+				SubjectText:        "Acme Corp",
+				PropertySlug:       "Date",
+				Value:              "2024-03-01",
+				ValueType:          "date",
+				Excerpt:            rawText,
+				ExcerptOffsetStart: 0,
+				ExcerptOffsetEnd:   rawLen,
+			},
+		}},
+		VocabularyMode: vocabulary.ModeStrict,
+	}
+	if err := p.ExtractOnce(ctx, tenantID, 10); err != nil {
+		t.Fatalf("ExtractOnce: %v", err)
+	}
+
+	var statements, proposals int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM statements WHERE tenant_id=$1`, tenantID).Scan(&statements); err != nil {
+		t.Fatalf("count statements: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM proposed_properties WHERE tenant_id=$1`, tenantID).Scan(&proposals); err != nil {
+		t.Fatalf("count proposed properties: %v", err)
+	}
+	if statements != 1 {
+		t.Fatalf("statements=%d want 1", statements)
+	}
+	if proposals != 1 {
+		t.Fatalf("proposals=%d want 1", proposals)
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM sources WHERE id=$1`, sourceID).Scan(&status); err != nil {
+		t.Fatalf("source status: %v", err)
+	}
+	if status != "extracted" {
+		t.Fatalf("status=%q want extracted", status)
 	}
 }
 

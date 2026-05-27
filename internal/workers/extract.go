@@ -2,6 +2,8 @@ package workers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -119,17 +121,24 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 		if err != nil {
 			return err
 		}
+		acceptedFacts := 0
 		for _, fact := range facts {
 			if !VerifyExcerptOffset(rawText, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd) {
 				logger.WarnContext(txCtx, "rejecting fact with invalid excerpt offset", "source_id", source.ID.String(), "property", fact.PropertySlug)
 				continue
 			}
-			if err := p.insertFact(txCtx, tx, tenantID, source.ID.String(), fact); err != nil {
+			inserted, err := p.insertFact(txCtx, tx, tenantID, source.ID.String(), fact)
+			if err != nil {
 				return err
 			}
+			if inserted {
+				acceptedFacts++
+			}
 		}
-		if _, err := tx.Exec(txCtx, "UPDATE sources SET status = 'extracted' WHERE id = $1", source.ID); err != nil {
-			return err
+		if acceptedFacts > 0 {
+			if _, err := tx.Exec(txCtx, "UPDATE sources SET status = 'extracted' WHERE id = $1", source.ID); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit(txCtx)
@@ -166,17 +175,17 @@ func (p *FactPipeline) extractFacts(ctx context.Context, source *db.Source, rawT
 	return facts, nil
 }
 
-func (p *FactPipeline) insertFact(ctx context.Context, exec queryExecutor, tenantID, sourceID string, fact extractors.ExtractedFact) error {
+func (p *FactPipeline) insertFact(ctx context.Context, exec queryExecutor, tenantID, sourceID string, fact extractors.ExtractedFact) (bool, error) {
 	subjectID, err := p.ensureEntity(ctx, exec, tenantID, fact.SubjectText)
 	if err != nil {
-		return err
+		return false, err
 	}
 	propertyID, valueType, shouldWrite, err := p.ensureProperty(ctx, exec, tenantID, sourceID, fact)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !shouldWrite {
-		return nil
+		return false, nil
 	}
 	statementID := uuid.NewString()
 	confidence := 0.5
@@ -185,19 +194,23 @@ func (p *FactPipeline) insertFact(ctx context.Context, exec queryExecutor, tenan
 	}
 	query, args := insertStatementQuery(statementID, tenantID, subjectID, propertyID, valueType, fact.Value, confidence)
 	if _, err := exec.Exec(ctx, query, args...); err != nil {
-		return err
+		return false, err
 	}
 	_, err = exec.Exec(ctx, `
 		INSERT INTO statement_sources (id, statement_id, source_id, excerpt, excerpt_offset_start, excerpt_offset_end, extraction_method, confidence, tenant_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`, uuid.NewString(), statementID, sourceID, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd, fact.ExtractionMethod, confidence, tenantID)
-	return err
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (p *FactPipeline) ensureEntity(ctx context.Context, exec queryExecutor, tenantID, label string) (string, error) {
 	if label == "" {
 		label = "unknown subject"
 	}
+	extID := entityExtIDForLabel(label)
 	var id string
 	err := exec.QueryRow(ctx, `
 		SELECT id::text
@@ -213,11 +226,17 @@ func (p *FactPipeline) ensureEntity(ctx context.Context, exec queryExecutor, ten
 		return "", err
 	}
 	err = exec.QueryRow(ctx, `
-		INSERT INTO entities (id, tenant_id, label, type_uri)
-		VALUES ($1, $2, $3, NULL)
+		INSERT INTO entities (id, tenant_id, ext_id, label, type_uri)
+		VALUES ($1, $2, $3, $4, NULL)
 		RETURNING id::text
-	`, uuid.NewString(), tenantID, label).Scan(&id)
+	`, uuid.NewString(), tenantID, extID, label).Scan(&id)
 	return id, err
+}
+
+func entityExtIDForLabel(label string) string {
+	normalized := strings.TrimSpace(strings.ToLower(label))
+	sum := sha256.Sum256([]byte(normalized))
+	return "extract:subject:" + hex.EncodeToString(sum[:16])
 }
 
 func (p *FactPipeline) ensureProperty(ctx context.Context, exec queryExecutor, tenantID, sourceID string, fact extractors.ExtractedFact) (string, string, bool, error) {
