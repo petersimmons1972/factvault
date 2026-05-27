@@ -39,5 +39,9 @@ func TenantContext(ctx context.Context, tenantID pgtype.UUID) (context.Context, 
 		_ = tx.Rollback(ctx)
 		return ctx, nil, fmt.Errorf("db.TenantContext: SET LOCAL: %w", err)
 	}
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE app_user"); err != nil {
+		_ = tx.Rollback(ctx)
+		return ctx, nil, fmt.Errorf("db.TenantContext: SET LOCAL ROLE: %w", err)
+	}
 	return ctx, tx, nil
 }

@@ -94,6 +94,11 @@ func StartContainer() {
 			startErr = err
 			return
 		}
+		if _, err := sqlDB.ExecContext(context.Background(), "GRANT app_user TO current_user"); err != nil {
+			releaseTestDBStartupLock()
+			startErr = err
+			return
+		}
 	})
 }
 

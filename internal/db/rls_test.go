@@ -35,6 +35,13 @@ func TestTenantContext_GUCIsSet(t *testing.T) {
 	if got != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
 		t.Fatalf("unexpected app.tenant_id: %q", got)
 	}
+	var currentUser string
+	if err := tx.QueryRow(ctx, "SELECT current_user").Scan(&currentUser); err != nil {
+		t.Fatalf("QueryRow current_user: %v", err)
+	}
+	if currentUser != "app_user" {
+		t.Fatalf("expected role app_user, got %q", currentUser)
+	}
 }
 
 func TestTenantContext_RLSFiltersRows(t *testing.T) {
@@ -56,9 +63,6 @@ func TestTenantContext_RLSFiltersRows(t *testing.T) {
 		t.Fatalf("TenantContext: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "SET LOCAL ROLE app_user"); err != nil {
-		t.Fatalf("SET LOCAL ROLE app_user: %v", err)
-	}
 
 	rows, err := tx.Query(ctx, "SELECT label FROM entities ORDER BY label")
 	if err != nil {
