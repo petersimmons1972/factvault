@@ -8,8 +8,8 @@ This runbook covers the current operational surface for factvault on the Go impl
 |---|---|---|
 | Postgres + pgvector | Durable source, fact, vector, dossier, and audit storage | `docker compose up -d postgres` |
 | Embedder | BGE-M3 embedding HTTP service | `docker compose up -d embedder` |
-| API | JWT-protected REST retrieval surface | `factvault api --addr :8080` |
-| MCP server | Stdio MCP tools backed by the same retrieval service | `factvault mcp` |
+| API | JWT-protected REST retrieval surface | `factvault api --addr :8080 --jwt-public-key .local/public.pem` |
+| MCP server | Stdio MCP tools backed by the same retrieval service | `factvault mcp --jwt-public-key .local/public.pem` |
 | Workers | One-shot pipeline stages | `factvault worker <stage>` |
 | Doctor | First-boot and health diagnostics | `factvault doctor` |
 
@@ -47,7 +47,9 @@ Use `.env.example` as the compose-oriented baseline. Use localhost hostnames whe
 6. Run `./bin/factvault doctor` and resolve every failing check that applies to your deployment.
 7. Load an example with `./bin/factvault example load <name>`.
 8. Run `./bin/factvault worker dossier`.
-9. Start `./bin/factvault api` and query `/entities/{id}/dossier` with a tenant-scoped bearer token.
+9. Start `./bin/factvault api --jwt-public-key .local/public.pem` and query `/entities/{id}/dossier` with a tenant-scoped bearer token.
+
+For MCP clients that cannot set per-tool `authorization`, set `FACTVAULT_MCP_AUTH_TOKEN` (or `--auth-token`) so the server has a default bearer token.
 
 The default binary uses the Postgres store and does not require CGO or SQLite
 development headers. The experimental SQLite store is opt-in: build with
