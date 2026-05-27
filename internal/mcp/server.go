@@ -4,35 +4,45 @@ import (
 	"context"
 	"crypto/rsa"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/petersimmons1972/factvault/internal/auth"
 	"github.com/petersimmons1972/factvault/internal/retrieval"
 	"github.com/petersimmons1972/factvault/internal/version"
 )
 
 type Server struct {
-	Service  retrieval.Service
-	TenantID string
+	Service      retrieval.Service
+	Verifier     auth.Verifier
+	DefaultToken string
 }
 
 type EntityLookupArgs struct {
-	EntityID string `json:"entity_id" jsonschema:"entity UUID"`
-	Depth    int    `json:"depth,omitempty" jsonschema:"graph depth, normally 0 for dossier"`
+	Authorization string `json:"authorization" jsonschema:"Bearer token"`
+	EntityID      string `json:"entity_id" jsonschema:"entity UUID"`
+	Depth         int    `json:"depth,omitempty" jsonschema:"graph depth, normally 0 for dossier"`
 }
 
 type StoryQueryArgs struct {
-	Query string `json:"query" jsonschema:"story query text"`
-	Depth int    `json:"depth,omitempty" jsonschema:"graph depth from 1 to 3"`
+	Authorization string `json:"authorization" jsonschema:"Bearer token"`
+	Query         string `json:"query" jsonschema:"story query text"`
+	Depth         int    `json:"depth,omitempty" jsonschema:"graph depth from 1 to 3"`
 }
 
 type FactQueryArgs struct {
-	Query string `json:"query" jsonschema:"fact query text"`
+	Authorization string `json:"authorization" jsonschema:"Bearer token"`
+	Query         string `json:"query" jsonschema:"fact query text"`
 }
 
-func New(pool *pgxpool.Pool, _ *rsa.PublicKey, tenantID string) *Server {
-	return &Server{Service: retrieval.Service{Pool: pool}, TenantID: tenantID}
+func New(pool *pgxpool.Pool, publicKey *rsa.PublicKey, defaultToken string) *Server {
+	return &Server{
+		Service:      retrieval.Service{Pool: pool},
+		Verifier:     auth.Verifier{PublicKey: publicKey},
+		DefaultToken: defaultToken,
+	}
 }
 
 func (s *Server) MCPServer() *mcp.Server {
@@ -47,11 +57,33 @@ func (s *Server) RunStdio(ctx context.Context) error {
 	return s.MCPServer().Run(ctx, &mcp.StdioTransport{})
 }
 
-func (s *Server) entityLookup(ctx context.Context, _ *mcp.CallToolRequest, args EntityLookupArgs) (*mcp.CallToolResult, any, error) {
-	if s.TenantID == "" {
-		return nil, nil, fmt.Errorf("mcp tenant not configured")
+func (s *Server) tenantFromAuthorization(authorization string) (string, error) {
+	token := strings.TrimSpace(authorization)
+	if token == "" {
+		token = strings.TrimSpace(s.DefaultToken)
 	}
-	resp, err := s.Service.Dossier(ctx, s.TenantID, args.EntityID)
+	if token == "" {
+		return "", fmt.Errorf("missing authorization token")
+	}
+	if bearer, ok := auth.BearerToken(token); ok {
+		token = bearer
+	}
+	claims, err := s.Verifier.Verify(token)
+	if err != nil {
+		return "", fmt.Errorf("invalid authorization token: %w", err)
+	}
+	if claims.TenantID == "" {
+		return "", fmt.Errorf("invalid authorization token: missing tenant_id")
+	}
+	return claims.TenantID, nil
+}
+
+func (s *Server) entityLookup(ctx context.Context, _ *mcp.CallToolRequest, args EntityLookupArgs) (*mcp.CallToolResult, any, error) {
+	tenantID, err := s.tenantFromAuthorization(args.Authorization)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := s.Service.Dossier(ctx, tenantID, args.EntityID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -59,10 +91,11 @@ func (s *Server) entityLookup(ctx context.Context, _ *mcp.CallToolRequest, args 
 }
 
 func (s *Server) storyQuery(ctx context.Context, _ *mcp.CallToolRequest, args StoryQueryArgs) (*mcp.CallToolResult, any, error) {
-	if s.TenantID == "" {
-		return nil, nil, fmt.Errorf("mcp tenant not configured")
+	tenantID, err := s.tenantFromAuthorization(args.Authorization)
+	if err != nil {
+		return nil, nil, err
 	}
-	resp, err := s.Service.Story(ctx, s.TenantID, retrieval.StoryRequest{Query: args.Query, Depth: args.Depth})
+	resp, err := s.Service.Story(ctx, tenantID, retrieval.StoryRequest{Query: args.Query, Depth: args.Depth})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -70,10 +103,11 @@ func (s *Server) storyQuery(ctx context.Context, _ *mcp.CallToolRequest, args St
 }
 
 func (s *Server) factQuery(ctx context.Context, _ *mcp.CallToolRequest, args FactQueryArgs) (*mcp.CallToolResult, any, error) {
-	if s.TenantID == "" {
-		return nil, nil, fmt.Errorf("mcp tenant not configured")
+	tenantID, err := s.tenantFromAuthorization(args.Authorization)
+	if err != nil {
+		return nil, nil, err
 	}
-	resp, err := s.Service.FactsQuery(ctx, s.TenantID, retrieval.FactsQueryRequest{Query: args.Query})
+	resp, err := s.Service.FactsQuery(ctx, tenantID, retrieval.FactsQueryRequest{Query: args.Query})
 	if err != nil {
 		return nil, nil, err
 	}

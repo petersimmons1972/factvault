@@ -23,6 +23,9 @@ func newWorkerCmd() *cobra.Command {
 		ageDays        int
 		vocabularyMode string
 		llmProvider    string
+		llmModel       string
+		llmBaseURL     string
+		llmAPIKey      string
 		confirmCost    bool
 		costThreshold  int
 	)
@@ -36,7 +39,10 @@ func newWorkerCmd() *cobra.Command {
 	cmd.PersistentFlags().IntVar(&limit, "limit", 100, "Maximum rows per run")
 	cmd.PersistentFlags().IntVar(&ageDays, "age-days", 7, "Verify threshold in days")
 	cmd.PersistentFlags().StringVar(&vocabularyMode, "vocabulary-mode", string(vocabulary.ModeStrict), "Property vocabulary mode: strict or permissive")
-	cmd.PersistentFlags().StringVar(&llmProvider, "llm-provider", "local", "LLM provider for extraction: local, anthropic, or openai")
+	cmd.PersistentFlags().StringVar(&llmProvider, "llm-provider", "", "LLM provider for extraction: local or openai")
+	cmd.PersistentFlags().StringVar(&llmModel, "llm-model", "", "LLM model for extraction")
+	cmd.PersistentFlags().StringVar(&llmBaseURL, "llm-base-url", "", "LLM base URL")
+	cmd.PersistentFlags().StringVar(&llmAPIKey, "llm-api-key", "", "LLM API key")
 	cmd.PersistentFlags().BoolVar(&confirmCost, "confirm-cost", false, "Confirm frontier-model extraction batches above the guardrail threshold")
 	cmd.PersistentFlags().IntVar(&costThreshold, "llm-cost-guardrail-threshold", 1000, "Frontier-model extraction batch guardrail threshold")
 
@@ -53,10 +59,7 @@ func newWorkerCmd() *cobra.Command {
 					return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
 				}
 				if tenantID == "" {
-					tenantID = os.Getenv("FACTVAULT_DEV_TENANT_ID")
-				}
-				if tenantID == "" {
-					return fmt.Errorf("tenant required: set --tenant or FACTVAULT_DEV_TENANT_ID")
+					return fmt.Errorf("tenant required: set --tenant")
 				}
 				pool, err := db.NewPool(cmd.Context(), dsn)
 				if err != nil {
@@ -81,49 +84,20 @@ func newWorkerCmd() *cobra.Command {
 	addRun("archive", func(ctx context.Context, p *workers.SourcePipeline) error {
 		return p.ArchiveOnce(ctx, tenantID, limit)
 	})
-	cmd.AddCommand(&cobra.Command{
-		Use:   "extract",
-		Short: "Run extract worker once",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			mode, err := parseVocabularyMode(vocabularyMode)
-			if err != nil {
-				return err
-			}
-			provider := strings.ToLower(strings.TrimSpace(llmProvider))
-			switch provider {
-			case "", "local", "ollama":
-			case "anthropic", "openai":
-				return fmt.Errorf("llm provider %q is not wired in this build; use --llm-provider local", provider)
-			default:
-				return fmt.Errorf("invalid llm provider %q: allowed values are local, ollama, openai, anthropic", provider)
-			}
-			if dsn == "" {
-				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
-			}
-			if dsn == "" {
-				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
-			}
-			if tenantID == "" {
-				tenantID = os.Getenv("FACTVAULT_DEV_TENANT_ID")
-			}
-			if tenantID == "" {
-				return fmt.Errorf("tenant required: set --tenant or FACTVAULT_DEV_TENANT_ID")
-			}
-			pool, err := db.NewPool(cmd.Context(), dsn)
-			if err != nil {
-				return err
-			}
-			defer pool.Close()
-			factPipeline := &workers.FactPipeline{
-				DB:                     pool,
-				VocabularyMode:         mode,
-				LLMProvider:            provider,
-				ConfirmCost:            confirmCost,
-				CostGuardrailThreshold: costThreshold,
-			}
-			return factPipeline.ExtractOnce(cmd.Context(), tenantID, limit)
-		},
+	addRun("extract", func(ctx context.Context, p *workers.SourcePipeline) error {
+		extractor, provider, err := workers.BuildLLMExtractor(resolveLLMRuntimeConfig(llmProvider, llmModel, llmBaseURL, llmAPIKey))
+		if err != nil {
+			return err
+		}
+		factPipeline := &workers.FactPipeline{
+			DB:                     p.DB,
+			VocabularyMode:         vocabulary.Mode(vocabularyMode),
+			LLM:                    extractor,
+			LLMProvider:            provider,
+			ConfirmCost:            confirmCost,
+			CostGuardrailThreshold: costThreshold,
+		}
+		return factPipeline.ExtractOnce(ctx, tenantID, limit)
 	})
 	addRun("verify", func(ctx context.Context, p *workers.SourcePipeline) error {
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -142,10 +116,7 @@ func newWorkerCmd() *cobra.Command {
 				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
 			}
 			if tenantID == "" {
-				tenantID = os.Getenv("FACTVAULT_DEV_TENANT_ID")
-			}
-			if tenantID == "" {
-				return fmt.Errorf("tenant required: set --tenant or FACTVAULT_DEV_TENANT_ID")
+				return fmt.Errorf("tenant required: set --tenant")
 			}
 			pool, err := db.NewPool(cmd.Context(), dsn)
 			if err != nil {
@@ -167,10 +138,7 @@ func newWorkerCmd() *cobra.Command {
 				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
 			}
 			if tenantID == "" {
-				tenantID = os.Getenv("FACTVAULT_DEV_TENANT_ID")
-			}
-			if tenantID == "" {
-				return fmt.Errorf("tenant required: set --tenant or FACTVAULT_DEV_TENANT_ID")
+				return fmt.Errorf("tenant required: set --tenant")
 			}
 			pool, err := db.NewPool(cmd.Context(), dsn)
 			if err != nil {
@@ -184,13 +152,20 @@ func newWorkerCmd() *cobra.Command {
 	return cmd
 }
 
-func parseVocabularyMode(raw string) (vocabulary.Mode, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case string(vocabulary.ModeStrict):
-		return vocabulary.ModeStrict, nil
-	case string(vocabulary.ModePermissive):
-		return vocabulary.ModePermissive, nil
-	default:
-		return "", fmt.Errorf("invalid vocabulary mode %q: allowed values are strict or permissive", raw)
+func resolveLLMRuntimeConfig(provider, model, baseURL, apiKey string) workers.LLMRuntimeConfig {
+	return workers.LLMRuntimeConfig{
+		Provider: provider,
+		Model:    firstNonEmpty(model, os.Getenv("FACTVAULT_LLM_MODEL")),
+		BaseURL:  firstNonEmpty(baseURL, os.Getenv("FACTVAULT_LLM_BASE_URL"), os.Getenv("FACTVAULT_LLM_URL")),
+		APIKey:   firstNonEmpty(apiKey, os.Getenv("FACTVAULT_LLM_API_KEY")),
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

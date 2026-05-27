@@ -10,6 +10,15 @@ import (
 )
 
 func main() {
+	root := newRootCmd()
+
+	if err := root.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:     "factvault",
 		Short:   "factvault - verifiable fact database",
@@ -22,9 +31,5 @@ func main() {
 	root.AddCommand(newMCPCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newExampleCmd())
-
-	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	return root
 }

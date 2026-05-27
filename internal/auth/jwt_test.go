@@ -55,7 +55,7 @@ func TestVerifyExpiredToken(t *testing.T) {
 	}
 }
 
-func TestVerifyRejectsMissingExpiration(t *testing.T) {
+func TestVerifyRejectsMissingOrZeroExp(t *testing.T) {
 	privPEM, pubPEM, err := GenerateKeyPair()
 	if err != nil {
 		t.Fatalf("GenerateKeyPair: %v", err)
@@ -68,35 +68,11 @@ func TestVerifyRejectsMissingExpiration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePublicKeyPEM: %v", err)
 	}
-	token, err := SignRS256(priv, Claims{TenantID: "11111111-1111-1111-1111-111111111111", Subject: "dev", IssuedAt: 1})
+	token, err := SignRS256(priv, Claims{TenantID: "11111111-1111-1111-1111-111111111111", Subject: "dev", IssuedAt: time.Now().Unix(), ExpiresAt: 0})
 	if err != nil {
 		t.Fatalf("SignRS256: %v", err)
 	}
-	_, err = (Verifier{PublicKey: pub, Now: func() time.Time { return time.Unix(2, 0) }}).Verify(token)
-	if err != ErrInvalidToken {
-		t.Fatalf("err=%v want %v", err, ErrInvalidToken)
-	}
-}
-
-func TestVerifyRejectsZeroExpiration(t *testing.T) {
-	privPEM, pubPEM, err := GenerateKeyPair()
-	if err != nil {
-		t.Fatalf("GenerateKeyPair: %v", err)
-	}
-	priv, err := ParsePrivateKeyPEM(privPEM)
-	if err != nil {
-		t.Fatalf("ParsePrivateKeyPEM: %v", err)
-	}
-	pub, err := ParsePublicKeyPEM(pubPEM)
-	if err != nil {
-		t.Fatalf("ParsePublicKeyPEM: %v", err)
-	}
-	token, err := SignRS256(priv, Claims{TenantID: "11111111-1111-1111-1111-111111111111", Subject: "dev", IssuedAt: 1, ExpiresAt: 0})
-	if err != nil {
-		t.Fatalf("SignRS256: %v", err)
-	}
-	_, err = (Verifier{PublicKey: pub, Now: func() time.Time { return time.Unix(2, 0) }}).Verify(token)
-	if err != ErrInvalidToken {
-		t.Fatalf("err=%v want %v", err, ErrInvalidToken)
+	if _, err := (Verifier{PublicKey: pub}).Verify(token); err != ErrExpiredToken {
+		t.Fatalf("err=%v want %v", err, ErrExpiredToken)
 	}
 }

@@ -36,16 +36,16 @@ func (c *Corroborator) CorroborateOnce(ctx context.Context, tenantID string) err
 	if tenantID == "" {
 		return fmt.Errorf("tenant id required")
 	}
-	tenantUUID := pgtype.UUID{}
-	if err := tenantUUID.Scan(tenantID); err != nil {
+	var tenant pgtype.UUID
+	if err := tenant.Scan(tenantID); err != nil {
 		return fmt.Errorf("invalid tenant id: %w", err)
 	}
 	txCtx := db.WithPool(ctx, c.DB)
-	txCtx, tx, err := db.TenantContext(txCtx, tenantUUID)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(txCtx) }()
+	defer tx.Rollback(txCtx)
 
 	rows, err := tx.Query(txCtx, `
 		SELECT ss.statement_id::text, ss.source_id::text, s.url, COALESCE(s.publisher, ''), COALESCE(s.raw_text, ''), COALESCE(ss.confidence::float8, 0.5)
@@ -80,10 +80,10 @@ func (c *Corroborator) CorroborateOnce(ctx context.Context, tenantID string) err
 			return err
 		}
 	}
+	c.logger().InfoContext(txCtx, "corroborate worker completed", "statements", len(byStatement))
 	if err := tx.Commit(txCtx); err != nil {
 		return err
 	}
-	c.logger().InfoContext(ctx, "corroborate worker completed", "statements", len(byStatement))
 	return nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/petersimmons1972/factvault/internal/db"
+	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
 type StatementProposal struct {
@@ -119,7 +120,7 @@ func (c *LLMClient) httpClient() *http.Client {
 	if c != nil && c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return netx.NewHTTPClient(30*time.Second, netx.ClientPolicy{AllowPrivateHosts: true})
 }
 
 func parseStatementProposals(content []byte) ([]StatementProposal, error) {

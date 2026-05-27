@@ -1,19 +1,12 @@
-FROM cgr.dev/chainguard/wolfi-base:latest
+FROM cgr.dev/chainguard/postgres:latest-dev
 
-# Install Postgres 16 and pgvector via wolfi apk
-RUN apk add --no-cache \
-    postgresql-16 \
-    postgresql-16-contrib \
-    pgvector-pg16 \
-    tini
+RUN apk add --no-cache pgvector-18
 
-# pgvector is installed as a shared library; register it at container start
+RUN rm -f /var/lib/postgres/initdb/docker-entrypoint.sh \
+    /var/lib/postgres/initdb/docker-ensure-initdb.sh
+
 ENV POSTGRES_DB=factvault \
     POSTGRES_USER=factvault \
     PGDATA=/var/lib/postgresql/data
 
-# Entrypoint: tini supervises postgres
-USER 65532
-
-ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["postgres", "-D", "/var/lib/postgresql/data"]
+CMD ["-c", "listen_addresses=*"]

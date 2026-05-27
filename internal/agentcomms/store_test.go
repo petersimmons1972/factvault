@@ -172,14 +172,60 @@ func TestArchive(t *testing.T) {
 	}
 }
 
-func TestArchiveRejectsPartialID(t *testing.T) {
+func TestArchiveRejectsPartialMessageID(t *testing.T) {
 	s := newStore(t)
 	m := mkMsg(t, KindNudge, AgentClaude, AgentCodex)
 	if err := s.Send(m); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Archive(m.ID[:6], "partial"); err == nil {
-		t.Fatal("expected error for partial id")
+	partial := m.ID[:8]
+	err := s.Archive(partial, "handled")
+	if err == nil {
+		t.Fatalf("expected archive error for partial message id %q", partial)
+	}
+	res, rerr := s.Read(ReadFilter{Inbox: AgentCodex})
+	if rerr != nil {
+		t.Fatalf("Read: %v", rerr)
+	}
+	if len(res.Messages) != 1 {
+		t.Fatalf("expected inbox to remain unchanged, got %d messages", len(res.Messages))
+	}
+	processed, _ := os.ReadDir(filepath.Join(s.Root, "processed"))
+	if len(processed) != 0 {
+		t.Fatalf("processed dir count: %d, want 0", len(processed))
+	}
+}
+
+func TestArchiveRejectsAmbiguousPrefixAcrossMessages(t *testing.T) {
+	s := newStore(t)
+	m1 := mkMsg(t, KindNudge, AgentClaude, AgentCodex)
+	m2 := mkMsg(t, KindAck, AgentClaude, AgentCodex)
+	if m1.ID[10] == 'A' {
+		m2.ID = m1.ID[:10] + "B" + m1.ID[11:]
+	} else {
+		m2.ID = m1.ID[:10] + "A" + m1.ID[11:]
+	}
+	prefixLen := 10
+	if err := s.Send(m1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send(m2); err != nil {
+		t.Fatal(err)
+	}
+	partial := m1.ID[:prefixLen]
+	if err := s.Archive(partial, "handled"); err == nil {
+		t.Fatalf("expected archive error for ambiguous partial id %q", partial)
+	}
+	res, err := s.Read(ReadFilter{Inbox: AgentCodex})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(res.Messages) != 2 {
+		t.Fatalf("expected both messages to remain, got %d", len(res.Messages))
+	}
+	processed, _ := os.ReadDir(filepath.Join(s.Root, "processed"))
+	if len(processed) != 0 {
+		t.Fatalf("processed dir count: %d, want 0", len(processed))
 	}
 }
 

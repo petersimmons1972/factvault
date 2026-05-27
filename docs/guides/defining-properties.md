@@ -139,11 +139,11 @@ CREATE TABLE proposed_properties (
     reviewed_by         TEXT,
     reviewed_at         TIMESTAMPTZ,
     created_at          TIMESTAMPTZ DEFAULT now(),
-    UNIQUE (tenant_id, proposed_slug, status)
+    CONSTRAINT uq_proposed_properties_tenant_slug_status UNIQUE (tenant_id, proposed_slug, status)
 );
 ```
 
-A strict-mode rejection flow looks like this: extraction worker encounters `"yearFounded"` as a slug from an LLM extraction run → checks `properties` table → slug not found → INSERTs into `proposed_properties` with `status = 'pending'` → logs the rejection → statement is not written. The human reviews the queue and either approves (promoting to `properties`) or rejects.
+A strict-mode rejection flow looks like this: extraction worker encounters `"yearFounded"` as a slug from an extraction run -> checks `properties` table -> slug not found -> INSERTs into `proposed_properties` with `status = 'pending'` and `proposed_by = 'extract:strict'` -> logs the rejection -> statement is not written. The human reviews the queue and either approves (promoting to `properties`) or rejects.
 
 ---
 
@@ -152,7 +152,7 @@ A strict-mode rejection flow looks like this: extraction worker encounters `"yea
 ### Inspect pending proposals
 
 ```sql
-SELECT proposed_slug, proposed_value_type, proposed_by, created_at
+SELECT id, proposed_slug, proposed_value_type, proposed_by, created_at
 FROM proposed_properties
 WHERE tenant_id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
   AND status = 'pending'
@@ -166,8 +166,8 @@ Approving promotes the slug to the `properties` table and marks the proposal as 
 ```sql
 BEGIN;
 
-INSERT INTO properties (tenant_id, slug, label, value_type)
-SELECT tenant_id, proposed_slug, proposed_slug, proposed_value_type
+INSERT INTO properties (id, tenant_id, slug, label, value_type)
+SELECT gen_random_uuid(), tenant_id, proposed_slug, proposed_slug, proposed_value_type
 FROM proposed_properties
 WHERE id = 'proposed-prop-uuid'
   AND tenant_id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
@@ -191,7 +191,7 @@ WHERE id = 'proposed-prop-uuid'
   AND tenant_id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 ```
 
-Rejected proposals remain in the table with `status = 'rejected'`. They do not auto-retry. If the LLM proposes the same slug again, it can create a new `pending` row because uniqueness is scoped by `(tenant_id, proposed_slug, status)`.
+Rejected proposals remain in the table with `status = 'rejected'`. They do not auto-retry. A later extraction can create a new `pending` row for the same slug because uniqueness is scoped to `(tenant_id, proposed_slug, status)`.
 
 ---
 

@@ -4,6 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -17,14 +21,22 @@ func TestMigrationsRunClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dockertest.NewPool: %v", err)
 	}
+	releaseLock, err := testDBStartupLock()
+	if err != nil {
+		t.Fatalf("testDBStartupLock: %v", err)
+	}
+	defer releaseLock()
 
+	repository, tag := postgresImage()
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
-		Repository: "pgvector/pgvector",
-		Tag:        "pg16",
+		Repository:   repository,
+		Tag:          tag,
+		ExposedPorts: []string{"5432/tcp"},
 		Env: []string{
 			"POSTGRES_USER=factvault",
 			"POSTGRES_PASSWORD=factvault",
 			"POSTGRES_DB=factvault",
+			"POSTGRES_INITDB_ARGS=--no-sync",
 		},
 	}, func(cfg *docker.HostConfig) {
 		cfg.AutoRemove = true
@@ -101,4 +113,33 @@ func TestMigrationsRunClean(t *testing.T) {
 	if !viewExists {
 		t.Error("v_conflicts view missing")
 	}
+}
+
+func testDBStartupLock() (func(), error) {
+	lockPath := filepath.Join(os.TempDir(), "factvault-testdb-start.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open testdb startup lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("lock testdb startup: %w", err)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
+}
+
+func postgresImage() (repository, tag string) {
+	image := os.Getenv("FACTVAULT_TEST_POSTGRES_IMAGE")
+	if image == "" {
+		image = "factvault-postgres:latest"
+	}
+	slash := strings.LastIndexByte(image, '/')
+	colon := strings.LastIndexByte(image, ':')
+	if colon > slash {
+		return image[:colon], image[colon+1:]
+	}
+	return image, "latest"
 }

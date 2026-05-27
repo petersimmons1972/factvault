@@ -6,18 +6,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	neturl "net/url"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/petersimmons1972/factvault/internal/collectors"
+	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
 type SourcePipeline struct {
@@ -34,9 +32,6 @@ func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c col
 	}
 	for _, item := range items {
 		if strings.TrimSpace(item.URL) == "" || len(item.HTML) == 0 {
-			continue
-		}
-		if err := validateSourceURL(item.URL); err != nil {
 			continue
 		}
 		hash := sha256Hex(item.HTML)
@@ -103,9 +98,9 @@ func (p *SourcePipeline) VerifyOnce(ctx context.Context, tenantID string, ageDay
 		limit = 100
 	}
 	rows, err := p.DB.Query(ctx, `
-SELECT id, url, content_hash FROM sources
+SELECT id, url, content_hash, status FROM sources
 WHERE tenant_id = $1
-  AND status IN ('archived', 'verified', 'content-changed', 'extracted')
+  AND status IN ('archived', 'extracted', 'verified', 'content-changed')
   AND (last_verified_at IS NULL OR last_verified_at < $2)
 ORDER BY fetched_at ASC
 LIMIT $3
@@ -116,8 +111,8 @@ LIMIT $3
 	defer rows.Close()
 
 	for rows.Next() {
-		var id, url, oldHash string
-		if err := rows.Scan(&id, &url, &oldHash); err != nil {
+		var id, url, oldHash, oldStatus string
+		if err := rows.Scan(&id, &url, &oldHash, &oldStatus); err != nil {
 			return err
 		}
 		status, newHash, notes := p.verifySource(ctx, url, oldHash)
@@ -132,7 +127,7 @@ VALUES ($1, $2, $3, $4, $5, $6)
 UPDATE sources
 SET status = $1, last_verified_at = now()
 WHERE id = $2
-`, mapSourceStatus(status), id)
+`, mapSourceStatus(status, oldStatus), id)
 		if err != nil {
 			return err
 		}
@@ -141,16 +136,11 @@ WHERE id = $2
 }
 
 func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) (status, newHash, notes string) {
-	if err := validateSourceURL(url); err != nil {
+	if err := netx.ValidatePublicHTTPURL(ctx, url); err != nil {
 		return "link-rot", "", err.Error()
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	client := p.client()
-	clone := *client
-	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return validateURLObject(req.URL)
-	}
-	resp, err := clone.Do(req)
+	resp, err := p.client().Do(req)
 	if err != nil {
 		return "link-rot", "", err.Error()
 	}
@@ -163,7 +153,7 @@ func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) 
 		return "link-rot", "", err.Error()
 	}
 	if len(body) > maxVerifyBodyBytes {
-		return "link-rot", "", "response body too large"
+		return "link-rot", "", fmt.Sprintf("response too large: max %d bytes", maxVerifyBodyBytes)
 	}
 	newHash = sha256Hex(body)
 	if newHash != oldHash {
@@ -172,9 +162,13 @@ func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) 
 	return "live", newHash, ""
 }
 
-func mapSourceStatus(verificationStatus string) string {
+func mapSourceStatus(verificationStatus, currentStatus string) string {
 	switch verificationStatus {
 	case "live":
+		// Keep extracted sources extracted after successful re-verification.
+		if currentStatus == "extracted" {
+			return "extracted"
+		}
 		return "verified"
 	case "content-changed":
 		return "content-changed"
@@ -187,7 +181,7 @@ func (p *SourcePipeline) client() *http.Client {
 	if p.HTTPClient != nil {
 		return p.HTTPClient
 	}
-	return &http.Client{Timeout: 20 * time.Second}
+	return netx.NewSafeHTTPClient(20 * time.Second)
 }
 
 func sha256Hex(b []byte) string {
@@ -267,54 +261,4 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
-}
-
-func validateSourceURL(raw string) error {
-	u, err := neturl.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("invalid source url: %w", err)
-	}
-	return validateURLObject(u)
-}
-
-func validateURLObject(u *neturl.URL) error {
-	if u == nil {
-		return errors.New("invalid source url")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("unsupported scheme %q", u.Scheme)
-	}
-	if u.Hostname() == "" || u.User != nil {
-		return errors.New("invalid host")
-	}
-	if ip := net.ParseIP(u.Hostname()); ip != nil {
-		if isPrivateOrInternalIP(ip) {
-			return fmt.Errorf("blocked internal address %s", ip.String())
-		}
-		return nil
-	}
-	addrs, err := net.DefaultResolver.LookupIPAddr(context.Background(), u.Hostname())
-	if err != nil {
-		return fmt.Errorf("resolve host: %w", err)
-	}
-	for _, addr := range addrs {
-		if isPrivateOrInternalIP(addr.IP) {
-			return fmt.Errorf("blocked internal address %s", addr.IP.String())
-		}
-	}
-	return nil
-}
-
-func isPrivateOrInternalIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if ip.IsLoopback() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() || ip.IsPrivate() {
-		return true
-	}
-	// Block common cloud metadata endpoint.
-	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 169 && ip4[1] == 254 && ip4[2] == 169 && ip4[3] == 254 {
-		return true
-	}
-	return false
 }

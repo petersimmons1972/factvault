@@ -12,7 +12,7 @@ func TestParseBackend(t *testing.T) {
 	}{
 		{name: "empty defaults to postgres", value: "", want: BackendPostgres},
 		{name: "postgres", value: "postgres", want: BackendPostgres},
-		{name: "sqlite", value: "sqlite", want: BackendSQLite},
+		{name: "sqlite unavailable by default", value: "sqlite", wantErr: true},
 		{name: "invalid", value: "mysql", wantErr: true},
 	}
 	for _, tt := range tests {

@@ -152,12 +152,10 @@ POST /stories
 
 **MCP server** — works with Claude Desktop, Cursor, or any agent stack supporting MCP:
 ```python
-factvault__entity_lookup(entity_name="Acme Corp")
-factvault__story_query(query="acquisition chain narrative", depth=2)
-factvault__fact_query(property_slug="raised_usd", min_confidence=0.5)
+factvault__entity_lookup(entity_id="...", authorization="Bearer <jwt>")
+factvault__story_query(query="acquisition chain narrative", depth=2, authorization="Bearer <jwt>")
+factvault__fact_query(query="raised_usd", authorization="Bearer <jwt>")
 ```
-
-MCP tenant scope is server-configured (`FACTVAULT_MCP_TENANT_ID`), not caller-supplied.
 
 LLM backend is pluggable via OpenAI-compatible API. Default: Ollama at `localhost:11434`. Swap to any hosted provider with `FACTVAULT_LLM_BASE_URL` and `FACTVAULT_LLM_API_KEY`.
 
@@ -169,10 +167,10 @@ Before ingesting your first document, define your property vocabulary:
 
 ```bash
 psql "$FACTVAULT_DATABASE_URL" <<'SQL'
-INSERT INTO properties (tenant_id, slug, label, value_type) VALUES
-  ('$FACTVAULT_DEV_TENANT_ID', 'raised_usd', 'Raised (USD)', 'number'),
-  ('$FACTVAULT_DEV_TENANT_ID', 'ceo', 'Chief Executive Officer', 'entity_ref'),
-  ('$FACTVAULT_DEV_TENANT_ID', 'founded_in', 'Founded', 'date');
+INSERT INTO properties (id, tenant_id, slug, label, value_type) VALUES
+  (gen_random_uuid(), 'YOUR_TENANT_UUID', 'raised_usd', 'Raised (USD)', 'number'),
+  (gen_random_uuid(), 'YOUR_TENANT_UUID', 'ceo', 'Chief Executive Officer', 'entity_ref'),
+  (gen_random_uuid(), 'YOUR_TENANT_UUID', 'founded_in', 'Founded', 'date');
 SQL
 ```
 
