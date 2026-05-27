@@ -124,27 +124,26 @@ factvault operates in one of two modes, configured per deployment via the `FACTV
 
 The default is strict for a reason. Permissive mode is the faster path at the start of a project and the more dangerous path over time. Once `founded_in` and `founding_year` both auto-register, they are both valid properties with statements written against them. Merging them requires a migration.
 
-**Plan 3 (Fact Pipeline) note:** The application-layer enforcement of strict mode — the code that intercepts extraction results and routes unknown slugs to `proposed_properties` — ships in Plan 3. As of Plan 1 (Schema and Migrations), the `proposed_properties` table is present and queryable, but the extraction worker that writes to it does not yet exist. The schema is ready; the wiring is not.
-
 The `proposed_properties` table:
 
 ```sql
 CREATE TABLE proposed_properties (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id   UUID NOT NULL,
-    slug        TEXT NOT NULL,
-    label       TEXT,
-    value_type  TEXT,
-    proposed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    proposed_by TEXT,     -- extraction_method that proposed it
-    reviewed    BOOLEAN NOT NULL DEFAULT false,
-    approved    BOOLEAN,
-    reviewed_at TIMESTAMPTZ,
-    UNIQUE (tenant_id, slug)
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id           UUID NOT NULL,
+    proposed_slug       TEXT NOT NULL,
+    proposed_value_type TEXT NOT NULL CHECK (proposed_value_type IN ('entity_ref', 'string', 'number', 'date', 'url')),
+    proposed_by         TEXT NOT NULL,
+    example_excerpt     TEXT,
+    example_source_id   UUID REFERENCES sources(id),
+    status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    reviewed_by         TEXT,
+    reviewed_at         TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_proposed_properties_tenant_slug_status UNIQUE (tenant_id, proposed_slug, status)
 );
 ```
 
-A strict-mode rejection flow (Plan 3) will look like this: extraction worker encounters `"yearFounded"` as a slug from an LLM extraction run → checks `properties` table → slug not found → INSERTs into `proposed_properties` with `reviewed = false` → logs the rejection → statement is not written. The human reviews the queue and either approves (promoting to `properties`) or rejects.
+A strict-mode rejection flow looks like this: extraction worker encounters `"yearFounded"` as a slug from an extraction run -> checks `properties` table -> slug not found -> INSERTs into `proposed_properties` with `status = 'pending'` and `proposed_by = 'extract:strict'` -> logs the rejection -> statement is not written. The human reviews the queue and either approves (promoting to `properties`) or rejects.
 
 ---
 
@@ -153,11 +152,11 @@ A strict-mode rejection flow (Plan 3) will look like this: extraction worker enc
 ### Inspect pending proposals
 
 ```sql
-SELECT slug, label, value_type, proposed_at, proposed_by
+SELECT id, proposed_slug, proposed_value_type, proposed_by, created_at
 FROM proposed_properties
 WHERE tenant_id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
-  AND reviewed = false
-ORDER BY proposed_at DESC;
+  AND status = 'pending'
+ORDER BY created_at DESC;
 ```
 
 ### Approve a proposed property
@@ -167,14 +166,15 @@ Approving promotes the slug to the `properties` table and marks the proposal as 
 ```sql
 BEGIN;
 
-INSERT INTO properties (tenant_id, slug, label, value_type)
-SELECT tenant_id, slug, COALESCE(label, slug), value_type
+INSERT INTO properties (id, tenant_id, slug, label, value_type)
+SELECT gen_random_uuid(), tenant_id, proposed_slug, proposed_slug, proposed_value_type
 FROM proposed_properties
 WHERE id = 'proposed-prop-uuid'
-  AND tenant_id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+  AND tenant_id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+  AND status = 'pending';
 
 UPDATE proposed_properties
-SET reviewed = true, approved = true, reviewed_at = now()
+SET status = 'approved', reviewed_by = 'operator', reviewed_at = now()
 WHERE id = 'proposed-prop-uuid';
 
 COMMIT;
@@ -186,12 +186,12 @@ After approval, the extraction worker can be re-run against documents that previ
 
 ```sql
 UPDATE proposed_properties
-SET reviewed = true, approved = false, reviewed_at = now()
+SET status = 'rejected', reviewed_by = 'operator', reviewed_at = now()
 WHERE id = 'proposed-prop-uuid'
   AND tenant_id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 ```
 
-Rejected proposals remain in the table with `approved = false`. They do not auto-retry. If the LLM proposes the same slug again (from a different document), the `UNIQUE (tenant_id, slug)` constraint prevents a duplicate row — the second proposal is silently dropped, as the slug's reviewed state already exists.
+Rejected proposals remain in the table with `status = 'rejected'`. They do not auto-retry. A later extraction can create a new `pending` row for the same slug because uniqueness is scoped to `(tenant_id, proposed_slug, status)`.
 
 ---
 
