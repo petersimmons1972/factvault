@@ -27,7 +27,6 @@ var (
 	startErr error
 	contName string
 	dsn      string
-	unlock   func()
 )
 
 func StartContainer() {
@@ -38,7 +37,7 @@ func StartContainer() {
 			startErr = err
 			return
 		}
-		unlock = releaseLock
+		defer releaseLock()
 
 		repository, tag := postgresImage()
 		contName = fmt.Sprintf("factvault-testdb-%d", time.Now().UnixNano())
@@ -55,13 +54,11 @@ func StartContainer() {
 			image,
 		)
 		if err != nil {
-			releaseTestDBStartupLock()
 			startErr = err
 			return
 		}
 		hostPort, err := dockerMappedPort(contName, "5432/tcp")
 		if err != nil {
-			releaseTestDBStartupLock()
 			startErr = err
 			return
 		}
@@ -79,24 +76,20 @@ func StartContainer() {
 			}
 			return sqlDB.PingContext(context.Background())
 		}); err != nil {
-			releaseTestDBStartupLock()
 			startErr = err
 			return
 		}
 		defer sqlDB.Close()
 
 		if err := goose.SetDialect("postgres"); err != nil {
-			releaseTestDBStartupLock()
 			startErr = err
 			return
 		}
 		if err := goose.RunContext(context.Background(), "up", sqlDB, migrationsPath()); err != nil {
-			releaseTestDBStartupLock()
 			startErr = err
 			return
 		}
 		if _, err := sqlDB.ExecContext(context.Background(), "GRANT app_user TO current_user"); err != nil {
-			releaseTestDBStartupLock()
 			startErr = err
 			return
 		}
@@ -108,7 +101,6 @@ func StopContainer() {
 		_ = runDockerCommand("rm", "-f", contName)
 		contName = ""
 	}
-	releaseTestDBStartupLock()
 }
 
 func New(t *testing.T) *pgxpool.Pool {
@@ -160,17 +152,10 @@ func testDBStartupLock() (func(), error) {
 	}, nil
 }
 
-func releaseTestDBStartupLock() {
-	if unlock != nil {
-		unlock()
-		unlock = nil
-	}
-}
-
 func postgresImage() (repository, tag string) {
 	image := os.Getenv("FACTVAULT_TEST_POSTGRES_IMAGE")
 	if image == "" {
-		image = "factvault-postgres:latest"
+		image = "ankane/pgvector:latest"
 	}
 	slash := strings.LastIndexByte(image, '/')
 	colon := strings.LastIndexByte(image, ':')

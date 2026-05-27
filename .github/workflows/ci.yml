@@ -85,6 +85,8 @@ jobs:
           ' govulncheck-test.json | sort | uniq -c | sort -nr
 
       - name: Test
+        env:
+          FACTVAULT_TEST_POSTGRES_IMAGE: ankane/pgvector:latest
         run: go test ./... -count=1
 
       - name: Test (race)

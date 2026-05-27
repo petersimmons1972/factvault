@@ -2,13 +2,13 @@ package testdb
 
 import "testing"
 
-func TestPostgresImageDefaultsToFactVaultChainguardImage(t *testing.T) {
+func TestPostgresImageDefaultsToLatestPgvectorImage(t *testing.T) {
 	t.Setenv("FACTVAULT_TEST_POSTGRES_IMAGE", "")
 
 	repository, tag := postgresImage()
 
-	if repository != "factvault-postgres" {
-		t.Fatalf("repository = %q, want factvault-postgres", repository)
+	if repository != "ankane/pgvector" {
+		t.Fatalf("repository = %q, want ankane/pgvector", repository)
 	}
 	if tag != "latest" {
 		t.Fatalf("tag = %q, want latest", tag)

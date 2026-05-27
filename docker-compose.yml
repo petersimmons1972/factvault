@@ -1,9 +1,6 @@
 services:
   postgres:
-    build:
-      context: .
-      dockerfile: docker/postgres/Dockerfile
-    image: "${FACTVAULT_POSTGRES_IMAGE:-factvault-postgres:latest}"
+    image: "${FACTVAULT_POSTGRES_IMAGE:-ankane/pgvector:latest}"
     ports:
       - "${FACTVAULT_POSTGRES_PORT:-5432}:5432"
     environment:

@@ -30,7 +30,7 @@ func TestDockerComposeTier1Contract(t *testing.T) {
 		t.Fatal("Tier 1 compose must not require a local .env file")
 	}
 	for _, expected := range []string{
-		"${FACTVAULT_POSTGRES_IMAGE:-factvault-postgres:latest}",
+		"${FACTVAULT_POSTGRES_IMAGE:-ankane/pgvector:latest}",
 		"FACTVAULT_DEV_TENANT_ID:-11111111-1111-1111-1111-111111111111",
 		"condition: service_completed_successfully",
 		"\"factvault\", \"migrate\"",
@@ -53,6 +53,6 @@ func TestDockerComposeTier1Contract(t *testing.T) {
 		}
 	}
 	if strings.Contains(compose, "pgvector/pgvector") {
-		t.Fatal("Tier 1 compose must default to the Chainguard-backed factvault Postgres image")
+		t.Fatal("Tier 1 compose must use an existing latest-tag pgvector image")
 	}
 }

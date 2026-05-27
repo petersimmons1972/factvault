@@ -5,9 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -21,12 +19,6 @@ func TestMigrationsRunClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dockertest.NewPool: %v", err)
 	}
-	releaseLock, err := testDBStartupLock()
-	if err != nil {
-		t.Fatalf("testDBStartupLock: %v", err)
-	}
-	defer releaseLock()
-
 	repository, tag := postgresImage()
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository:   repository,
@@ -115,26 +107,10 @@ func TestMigrationsRunClean(t *testing.T) {
 	}
 }
 
-func testDBStartupLock() (func(), error) {
-	lockPath := filepath.Join(os.TempDir(), "factvault-testdb-start.lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open testdb startup lock: %w", err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("lock testdb startup: %w", err)
-	}
-	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
-	}, nil
-}
-
 func postgresImage() (repository, tag string) {
 	image := os.Getenv("FACTVAULT_TEST_POSTGRES_IMAGE")
 	if image == "" {
-		image = "factvault-postgres:latest"
+		image = "ankane/pgvector:latest"
 	}
 	slash := strings.LastIndexByte(image, '/')
 	colon := strings.LastIndexByte(image, ':')
