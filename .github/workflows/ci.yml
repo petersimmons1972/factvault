@@ -8,7 +8,7 @@ on:
 
 jobs:
   go:
-    name: go test
+    name: go quality
     runs-on: ubuntu-latest
 
     steps:
@@ -26,8 +26,23 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.4
+          args: --timeout=5m
+
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: go.mod
+          go-package: ./...
+
       - name: Test
         run: go test ./... -count=1
+
+      - name: Test (race)
+        run: go test -race ./... -count=1
 
   embedder:
     name: embedder pytest

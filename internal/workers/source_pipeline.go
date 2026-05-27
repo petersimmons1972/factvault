@@ -6,19 +6,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/netip"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/petersimmons1972/factvault/internal/collectors"
+	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
 type SourcePipeline struct {
@@ -139,7 +136,7 @@ WHERE id = $2
 }
 
 func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) (status, newHash, notes string) {
-	if err := validateSourceURL(url); err != nil {
+	if err := netx.ValidatePublicHTTPURL(ctx, url); err != nil {
 		return "link-rot", "", err.Error()
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -180,30 +177,7 @@ func (p *SourcePipeline) client() *http.Client {
 	if p.HTTPClient != nil {
 		return p.HTTPClient
 	}
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			if ip, err := netip.ParseAddr(host); err == nil && isBlockedAddr(ip) {
-				return nil, fmt.Errorf("blocked address: %s", ip.String())
-			}
-			return dialer.DialContext(ctx, network, addr)
-		},
-	}
-	return &http.Client{
-		Timeout:   20 * time.Second,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return errors.New("too many redirects")
-			}
-			return validateSourceURL(req.URL.String())
-		},
-	}
+	return netx.NewSafeHTTPClient(20 * time.Second)
 }
 
 func sha256Hex(b []byte) string {
@@ -283,44 +257,4 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
-}
-
-func validateSourceURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("invalid source url: %w", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("unsupported url scheme %q", u.Scheme)
-	}
-	host := strings.TrimSpace(u.Hostname())
-	if host == "" {
-		return fmt.Errorf("missing source host")
-	}
-	if strings.EqualFold(host, "localhost") {
-		return fmt.Errorf("blocked host %q", host)
-	}
-	if ip, err := netip.ParseAddr(host); err == nil {
-		if isBlockedAddr(ip) {
-			return fmt.Errorf("blocked address: %s", ip.String())
-		}
-		return nil
-	}
-	ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", host)
-	if err != nil {
-		return fmt.Errorf("resolve host %q: %w", host, err)
-	}
-	for _, ip := range ips {
-		if isBlockedAddr(ip) {
-			return fmt.Errorf("blocked address: %s", ip.String())
-		}
-	}
-	return nil
-}
-
-func isBlockedAddr(ip netip.Addr) bool {
-	if !ip.IsValid() {
-		return true
-	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified()
 }
