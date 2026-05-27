@@ -9,7 +9,7 @@ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
         CREATE ROLE app_user WITH LOGIN PASSWORD 'changeme_in_production';
     END IF;
-END
+END;
 $$;
 
 CREATE TABLE entities (
@@ -211,7 +211,7 @@ BEGIN
             t
         );
     END LOOP;
-END
+END;
 $$;
 
 CREATE POLICY tenant_isolation ON qualifiers

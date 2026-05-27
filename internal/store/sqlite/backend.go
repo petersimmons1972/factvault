@@ -1,3 +1,5 @@
+//go:build sqlite && cgo
+
 // Package sqlite implements store interfaces using SQLite and sqlite-vec.
 package sqlite
 

@@ -18,6 +18,9 @@ func ParseBackend(value string) (Backend, error) {
 	case "", BackendPostgres:
 		return BackendPostgres, nil
 	case BackendSQLite:
+		if !sqliteAvailable() {
+			return "", fmt.Errorf("unsupported store backend %q: rebuild with -tags sqlite and CGO enabled", value)
+		}
 		return BackendSQLite, nil
 	default:
 		return "", fmt.Errorf("unsupported store backend %q: expected postgres or sqlite", value)

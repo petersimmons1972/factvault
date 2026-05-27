@@ -49,6 +49,11 @@ Use `.env.example` as the compose-oriented baseline. Use localhost hostnames whe
 8. Run `./bin/factvault worker dossier`.
 9. Start `./bin/factvault api` and query `/entities/{id}/dossier` with a tenant-scoped bearer token.
 
+The default binary uses the Postgres store and does not require CGO or SQLite
+development headers. The experimental SQLite store is opt-in: build with
+`CGO_ENABLED=1 go build -tags sqlite ./...` on a host with SQLite development
+headers installed.
+
 ## Health Checks
 
 `factvault doctor` runs seven checks:
