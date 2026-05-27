@@ -6,9 +6,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,6 +25,8 @@ type SourcePipeline struct {
 	DB         *pgxpool.Pool
 	HTTPClient *http.Client
 }
+
+const maxVerifyBodyBytes = 10 * 1024 * 1024
 
 func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c collectors.Collector) error {
 	items, err := c.Collect(ctx)
@@ -133,6 +139,9 @@ WHERE id = $2
 }
 
 func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) (status, newHash, notes string) {
+	if err := validateSourceURL(url); err != nil {
+		return "link-rot", "", err.Error()
+	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	resp, err := p.client().Do(req)
 	if err != nil {
@@ -142,9 +151,12 @@ func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "link-rot", "", fmt.Sprintf("status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxVerifyBodyBytes+1))
 	if err != nil {
 		return "link-rot", "", err.Error()
+	}
+	if len(body) > maxVerifyBodyBytes {
+		return "link-rot", "", fmt.Sprintf("response too large: max %d bytes", maxVerifyBodyBytes)
 	}
 	newHash = sha256Hex(body)
 	if newHash != oldHash {
@@ -168,7 +180,30 @@ func (p *SourcePipeline) client() *http.Client {
 	if p.HTTPClient != nil {
 		return p.HTTPClient
 	}
-	return &http.Client{Timeout: 20 * time.Second}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			if ip, err := netip.ParseAddr(host); err == nil && isBlockedAddr(ip) {
+				return nil, fmt.Errorf("blocked address: %s", ip.String())
+			}
+			return dialer.DialContext(ctx, network, addr)
+		},
+	}
+	return &http.Client{
+		Timeout:   20 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("too many redirects")
+			}
+			return validateSourceURL(req.URL.String())
+		},
+	}
 }
 
 func sha256Hex(b []byte) string {
@@ -248,4 +283,44 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
+}
+
+func validateSourceURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid source url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("unsupported url scheme %q", u.Scheme)
+	}
+	host := strings.TrimSpace(u.Hostname())
+	if host == "" {
+		return fmt.Errorf("missing source host")
+	}
+	if strings.EqualFold(host, "localhost") {
+		return fmt.Errorf("blocked host %q", host)
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if isBlockedAddr(ip) {
+			return fmt.Errorf("blocked address: %s", ip.String())
+		}
+		return nil
+	}
+	ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", host)
+	if err != nil {
+		return fmt.Errorf("resolve host %q: %w", host, err)
+	}
+	for _, ip := range ips {
+		if isBlockedAddr(ip) {
+			return fmt.Errorf("blocked address: %s", ip.String())
+		}
+	}
+	return nil
+}
+
+func isBlockedAddr(ip netip.Addr) bool {
+	if !ip.IsValid() {
+		return true
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified()
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/petersimmons1972/factvault/internal/collectors"
@@ -78,15 +78,23 @@ WHERE tenant_id = $1 AND url = 'https://example.com/b'
 
 func TestVerifyOnce_WritesVerificationAndStatus(t *testing.T) {
 	pool := testdb.New(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "<html><body>verify text</body></html>")
-	}))
-	defer server.Close()
+	const sourceURL = "https://example.com/verify"
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body := io.NopCloser(strings.NewReader("<html><body>verify text</body></html>"))
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       body,
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
 
-	p := &workers.SourcePipeline{DB: pool, HTTPClient: server.Client()}
+	p := &workers.SourcePipeline{DB: pool, HTTPClient: httpClient}
 	c := collectors.StaticCollector{
 		CollectorName: "test",
-		Items:         []collectors.Item{{URL: server.URL, HTML: []byte("<html><body>verify text</body></html>")}},
+		Items:         []collectors.Item{{URL: sourceURL, HTML: []byte("<html><body>verify text</body></html>")}},
 	}
 	ctx := context.Background()
 	if err := p.CollectOnce(ctx, tenantID, c); err != nil {
@@ -103,7 +111,7 @@ func TestVerifyOnce_WritesVerificationAndStatus(t *testing.T) {
 	if err := pool.QueryRow(ctx, `
 SELECT status FROM sources
 WHERE tenant_id = $1 AND url = $2
-`, tenantID, server.URL).Scan(&sourceStatus); err != nil {
+`, tenantID, sourceURL).Scan(&sourceStatus); err != nil {
 		t.Fatalf("select source status: %v", err)
 	}
 	if sourceStatus != "verified" {
@@ -116,10 +124,16 @@ SELECT sv.status FROM source_verifications sv
 JOIN sources s ON s.id = sv.source_id
 WHERE s.tenant_id = $1 AND s.url = $2
 ORDER BY sv.verified_at DESC LIMIT 1
-`, tenantID, server.URL).Scan(&verificationStatus); err != nil {
+`, tenantID, sourceURL).Scan(&verificationStatus); err != nil {
 		t.Fatalf("select verification: %v", err)
 	}
 	if verificationStatus != "live" {
 		t.Fatalf("verification status=%q want live", verificationStatus)
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
