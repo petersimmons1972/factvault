@@ -14,7 +14,7 @@ spec:
           containers:
             - name: factvault-extract
               image: factvault-app:latest
-              args: ["factvault", "worker", "extract"]
+              args: ["/bin/sh", "-c", "factvault migrate && factvault worker extract --tenant $(FACTVAULT_DEV_TENANT_ID)"]
               envFrom:
                 - configMapRef:
                     name: factvault-config

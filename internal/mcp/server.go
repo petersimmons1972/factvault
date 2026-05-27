@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"crypto/rsa"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -12,28 +13,26 @@ import (
 )
 
 type Server struct {
-	Service retrieval.Service
+	Service  retrieval.Service
+	TenantID string
 }
 
 type EntityLookupArgs struct {
-	TenantID string `json:"tenant_id" jsonschema:"tenant UUID"`
 	EntityID string `json:"entity_id" jsonschema:"entity UUID"`
 	Depth    int    `json:"depth,omitempty" jsonschema:"graph depth, normally 0 for dossier"`
 }
 
 type StoryQueryArgs struct {
-	TenantID string `json:"tenant_id" jsonschema:"tenant UUID"`
-	Query    string `json:"query" jsonschema:"story query text"`
-	Depth    int    `json:"depth,omitempty" jsonschema:"graph depth from 1 to 3"`
+	Query string `json:"query" jsonschema:"story query text"`
+	Depth int    `json:"depth,omitempty" jsonschema:"graph depth from 1 to 3"`
 }
 
 type FactQueryArgs struct {
-	TenantID string `json:"tenant_id" jsonschema:"tenant UUID"`
-	Query    string `json:"query" jsonschema:"fact query text"`
+	Query string `json:"query" jsonschema:"fact query text"`
 }
 
-func New(pool *pgxpool.Pool, _ *rsa.PublicKey) *Server {
-	return &Server{Service: retrieval.Service{Pool: pool}}
+func New(pool *pgxpool.Pool, _ *rsa.PublicKey, tenantID string) *Server {
+	return &Server{Service: retrieval.Service{Pool: pool}, TenantID: tenantID}
 }
 
 func (s *Server) MCPServer() *mcp.Server {
@@ -49,7 +48,10 @@ func (s *Server) RunStdio(ctx context.Context) error {
 }
 
 func (s *Server) entityLookup(ctx context.Context, _ *mcp.CallToolRequest, args EntityLookupArgs) (*mcp.CallToolResult, any, error) {
-	resp, err := s.Service.Dossier(ctx, args.TenantID, args.EntityID)
+	if s.TenantID == "" {
+		return nil, nil, fmt.Errorf("mcp tenant not configured")
+	}
+	resp, err := s.Service.Dossier(ctx, s.TenantID, args.EntityID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,7 +59,10 @@ func (s *Server) entityLookup(ctx context.Context, _ *mcp.CallToolRequest, args 
 }
 
 func (s *Server) storyQuery(ctx context.Context, _ *mcp.CallToolRequest, args StoryQueryArgs) (*mcp.CallToolResult, any, error) {
-	resp, err := s.Service.Story(ctx, args.TenantID, retrieval.StoryRequest{Query: args.Query, Depth: args.Depth})
+	if s.TenantID == "" {
+		return nil, nil, fmt.Errorf("mcp tenant not configured")
+	}
+	resp, err := s.Service.Story(ctx, s.TenantID, retrieval.StoryRequest{Query: args.Query, Depth: args.Depth})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -65,7 +70,10 @@ func (s *Server) storyQuery(ctx context.Context, _ *mcp.CallToolRequest, args St
 }
 
 func (s *Server) factQuery(ctx context.Context, _ *mcp.CallToolRequest, args FactQueryArgs) (*mcp.CallToolResult, any, error) {
-	resp, err := s.Service.FactsQuery(ctx, args.TenantID, retrieval.FactsQueryRequest{Query: args.Query})
+	if s.TenantID == "" {
+		return nil, nil, fmt.Errorf("mcp tenant not configured")
+	}
+	resp, err := s.Service.FactsQuery(ctx, s.TenantID, retrieval.FactsQueryRequest{Query: args.Query})
 	if err != nil {
 		return nil, nil, err
 	}

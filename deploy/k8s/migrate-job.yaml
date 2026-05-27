@@ -1,0 +1,22 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: factvault-migrate
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: factvault-migrate
+          image: factvault-app:latest
+          args: ["factvault", "migrate"]
+          envFrom:
+            - configMapRef:
+                name: factvault-config
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

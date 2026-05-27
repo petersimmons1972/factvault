@@ -3,7 +3,9 @@ kind: ConfigMap
 metadata:
   name: factvault-config
 data:
-  FACTVAULT_DATABASE_URL: postgres://factvault:factvault@postgres:5432/factvault?sslmode=disable
+  FACTVAULT_DATABASE_URL: postgres://app_user:changeme_in_production@postgres:5432/factvault?sslmode=disable
   FACTVAULT_EMBEDDER_URL: http://factvault-embedder:8080
   FACTVAULT_LLM_URL: http://ollama:11434/v1
   FACTVAULT_WAYBACK_URL: https://web.archive.org
+  FACTVAULT_DEV_TENANT_ID: 11111111-1111-1111-1111-111111111111
+  FACTVAULT_MCP_TENANT_ID: 11111111-1111-1111-1111-111111111111

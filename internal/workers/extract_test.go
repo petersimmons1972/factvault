@@ -26,6 +26,14 @@ func (emptyExtractor) Extract(context.Context, *db.Source, string) ([]extractors
 	return nil, nil
 }
 
+type deterministicStub struct {
+	facts []extractors.ExtractedFact
+}
+
+func (d deterministicStub) Extract(context.Context, *db.Source, string) ([]extractors.ExtractedFact, error) {
+	return d.facts, nil
+}
+
 func TestVerifyExcerptOffset_MatchesExactSubstring(t *testing.T) {
 	rawText := "The quick brown fox jumps over the lazy dog"
 	excerpt := "quick brown fox"
@@ -287,17 +295,24 @@ func TestFactPipelineExtractOnce_StrictQueuesUnknownProperty(t *testing.T) {
 	}
 
 	var statements, proposals int
+	var status string
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM statements WHERE tenant_id=$1`, tenantID).Scan(&statements); err != nil {
 		t.Fatalf("count statements: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM proposed_properties WHERE tenant_id=$1`, tenantID).Scan(&proposals); err != nil {
 		t.Fatalf("count proposed properties: %v", err)
 	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM sources WHERE id=$1`, sourceID).Scan(&status); err != nil {
+		t.Fatalf("source status: %v", err)
+	}
 	if statements != 0 {
 		t.Fatalf("statements=%d want 0", statements)
 	}
 	if proposals != 1 {
 		t.Fatalf("proposals=%d want 1", proposals)
+	}
+	if status != "archived" {
+		t.Fatalf("status=%q want archived", status)
 	}
 }
 
@@ -403,5 +418,54 @@ func TestFactPipelineExtractOnce_CostGuardrailBypassesWithConfirm(t *testing.T) 
 	}
 	if err := p.ExtractOnce(ctx, tenantID, 1001); err != nil {
 		t.Fatalf("ExtractOnce: %v", err)
+	}
+}
+
+func TestFactPipelineExtractOnce_MultipleSubjectsDoNotConflictOnExtID(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	tenantID := uuid.NewString()
+	sourceID := uuid.NewString()
+	rawText := "Acme Corp acquired Beta Labs on 2024-01-01."
+	_, err := pool.Exec(ctx, `
+		INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status, title)
+		VALUES ($1, $2, 'https://example.com/multi-subject', 'hash', $3, 'archived', 'Acme acquires Beta')
+	`, sourceID, tenantID, rawText)
+	if err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	p := &FactPipeline{
+		DB: pool,
+		Deterministic: deterministicStub{facts: []extractors.ExtractedFact{
+			{
+				SubjectText:        "Acme Corp",
+				PropertySlug:       "Launch Date",
+				Value:              "2024-01-01",
+				ValueType:          "date",
+				Excerpt:            "Acme Corp acquired Beta Labs on 2024-01-01.",
+				ExcerptOffsetStart: 0,
+				ExcerptOffsetEnd:   43,
+			},
+			{
+				SubjectText:        "Beta Labs",
+				PropertySlug:       "Launch Date",
+				Value:              "2024-01-01",
+				ValueType:          "date",
+				Excerpt:            "Acme Corp acquired Beta Labs on 2024-01-01.",
+				ExcerptOffsetStart: 0,
+				ExcerptOffsetEnd:   43,
+			},
+		}},
+		VocabularyMode: vocabulary.ModePermissive,
+	}
+	if err := p.ExtractOnce(ctx, tenantID, 10); err != nil {
+		t.Fatalf("ExtractOnce: %v", err)
+	}
+	var entityCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM entities WHERE tenant_id=$1`, tenantID).Scan(&entityCount); err != nil {
+		t.Fatalf("entity count: %v", err)
+	}
+	if entityCount < 2 {
+		t.Fatalf("entity_count=%d want at least 2", entityCount)
 	}
 }

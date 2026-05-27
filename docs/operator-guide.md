@@ -8,7 +8,7 @@ This runbook covers the current operational surface for factvault on the Go impl
 |---|---|---|
 | Postgres + pgvector | Durable source, fact, vector, dossier, and audit storage | `docker compose up -d postgres` |
 | Embedder | BGE-M3 embedding HTTP service | `docker compose up -d embedder` |
-| API | JWT-protected REST retrieval surface | `factvault api --addr :8080` |
+| API | JWT-protected REST retrieval surface | `factvault api --addr :8080 --jwt-public-key .local/public.pem` |
 | MCP server | Stdio MCP tools backed by the same retrieval service | `factvault mcp` |
 | Workers | One-shot pipeline stages | `factvault worker <stage>` |
 | Doctor | First-boot and health diagnostics | `factvault doctor` |
@@ -44,10 +44,14 @@ Use `.env.example` as the compose-oriented baseline. Use localhost hostnames whe
 3. Build the binary: `go build -o bin/factvault ./cmd/factvault`.
 4. Run migrations: `./bin/factvault migrate`.
 5. Generate JWT keys with `./bin/factvault auth keys`.
-6. Run `./bin/factvault doctor` and resolve every failing check that applies to your deployment.
-7. Load an example with `./bin/factvault example load <name>`.
-8. Run `./bin/factvault worker dossier`.
-9. Start `./bin/factvault api` and query `/entities/{id}/dossier` with a tenant-scoped bearer token.
+6. Save keys and export API verifier path:
+   - `./bin/factvault auth keys > .local/jwt.pem`
+   - split into `.local/private.pem` and `.local/public.pem` (or use your secret manager flow)
+   - `export FACTVAULT_JWT_PUBLIC_KEY=.local/public.pem`
+7. Run `./bin/factvault doctor` and resolve every failing check that applies to your deployment.
+8. Load an example with `./bin/factvault example load <name>`.
+9. Run `./bin/factvault worker dossier`.
+10. Start `./bin/factvault api --jwt-public-key "$FACTVAULT_JWT_PUBLIC_KEY"` and query `/entities/{id}/dossier` with a tenant-scoped bearer token.
 
 ## Health Checks
 

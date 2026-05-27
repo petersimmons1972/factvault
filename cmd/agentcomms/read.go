@@ -18,7 +18,11 @@ func newReadCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "read",
 		Short: "Read messages from an inbox (JSON-encoded list)",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if unread {
+				return fmt.Errorf("--unread is not implemented yet")
+			}
 			root, _ := cmd.Flags().GetString("root")
 			store, err := agentcomms.NewStore(root)
 			if err != nil {
@@ -51,8 +55,6 @@ func newReadCmd() *cobra.Command {
 	cmd.Flags().StringVar(&inbox, "inbox", "", "which inbox to read (claude|codex) [default: claude]")
 	cmd.Flags().StringVar(&kind, "kind", "", "filter by kind")
 	cmd.Flags().StringVar(&from, "from", "", "filter by sender")
-	cmd.Flags().BoolVar(&unread, "unread", false, "only show unread (cursor not yet implemented; flag accepted)")
-	// suppress unused-arg complaints; intentional.
-	_ = fmt.Sprintln
+	cmd.Flags().BoolVar(&unread, "unread", false, "only show unread (not implemented)")
 	return cmd
 }

@@ -14,6 +14,7 @@ func newHeartbeatCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "heartbeat",
 		Short: "Emit a heartbeat message (nudge kind, body=status)",
+		Args:  cobra.NoArgs,
 		Long: "Heartbeat is shipped as a `nudge` to the peer with a status body.\n" +
 			"Schema v1 has no dedicated `heartbeat` kind; v2 uses `nudge` until\n" +
 			"the schema is extended (see §20.7 queue_depth backpressure TODO).",

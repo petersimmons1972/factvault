@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -43,6 +44,7 @@ func newWorkerCmd() *cobra.Command {
 		cmd.AddCommand(&cobra.Command{
 			Use:   name,
 			Short: "Run " + name + " worker once",
+			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, args []string) error {
 				if dsn == "" {
 					dsn = os.Getenv("FACTVAULT_DATABASE_URL")
@@ -51,7 +53,10 @@ func newWorkerCmd() *cobra.Command {
 					return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
 				}
 				if tenantID == "" {
-					return fmt.Errorf("tenant required: set --tenant")
+					tenantID = os.Getenv("FACTVAULT_DEV_TENANT_ID")
+				}
+				if tenantID == "" {
+					return fmt.Errorf("tenant required: set --tenant or FACTVAULT_DEV_TENANT_ID")
 				}
 				pool, err := db.NewPool(cmd.Context(), dsn)
 				if err != nil {
@@ -76,15 +81,49 @@ func newWorkerCmd() *cobra.Command {
 	addRun("archive", func(ctx context.Context, p *workers.SourcePipeline) error {
 		return p.ArchiveOnce(ctx, tenantID, limit)
 	})
-	addRun("extract", func(ctx context.Context, p *workers.SourcePipeline) error {
-		factPipeline := &workers.FactPipeline{
-			DB:                     p.DB,
-			VocabularyMode:         vocabulary.Mode(vocabularyMode),
-			LLMProvider:            llmProvider,
-			ConfirmCost:            confirmCost,
-			CostGuardrailThreshold: costThreshold,
-		}
-		return factPipeline.ExtractOnce(ctx, tenantID, limit)
+	cmd.AddCommand(&cobra.Command{
+		Use:   "extract",
+		Short: "Run extract worker once",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mode, err := parseVocabularyMode(vocabularyMode)
+			if err != nil {
+				return err
+			}
+			provider := strings.ToLower(strings.TrimSpace(llmProvider))
+			switch provider {
+			case "", "local", "ollama":
+			case "anthropic", "openai":
+				return fmt.Errorf("llm provider %q is not wired in this build; use --llm-provider local", provider)
+			default:
+				return fmt.Errorf("invalid llm provider %q: allowed values are local, ollama, openai, anthropic", provider)
+			}
+			if dsn == "" {
+				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+			}
+			if dsn == "" {
+				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
+			}
+			if tenantID == "" {
+				tenantID = os.Getenv("FACTVAULT_DEV_TENANT_ID")
+			}
+			if tenantID == "" {
+				return fmt.Errorf("tenant required: set --tenant or FACTVAULT_DEV_TENANT_ID")
+			}
+			pool, err := db.NewPool(cmd.Context(), dsn)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			factPipeline := &workers.FactPipeline{
+				DB:                     pool,
+				VocabularyMode:         mode,
+				LLMProvider:            provider,
+				ConfirmCost:            confirmCost,
+				CostGuardrailThreshold: costThreshold,
+			}
+			return factPipeline.ExtractOnce(cmd.Context(), tenantID, limit)
+		},
 	})
 	addRun("verify", func(ctx context.Context, p *workers.SourcePipeline) error {
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -94,6 +133,7 @@ func newWorkerCmd() *cobra.Command {
 	cmd.AddCommand(&cobra.Command{
 		Use:   "corroborate",
 		Short: "Run corroborate worker once",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
@@ -102,7 +142,10 @@ func newWorkerCmd() *cobra.Command {
 				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
 			}
 			if tenantID == "" {
-				return fmt.Errorf("tenant required: set --tenant")
+				tenantID = os.Getenv("FACTVAULT_DEV_TENANT_ID")
+			}
+			if tenantID == "" {
+				return fmt.Errorf("tenant required: set --tenant or FACTVAULT_DEV_TENANT_ID")
 			}
 			pool, err := db.NewPool(cmd.Context(), dsn)
 			if err != nil {
@@ -115,6 +158,7 @@ func newWorkerCmd() *cobra.Command {
 	cmd.AddCommand(&cobra.Command{
 		Use:   "dossier",
 		Short: "Precompute dossier bundles",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
@@ -123,7 +167,10 @@ func newWorkerCmd() *cobra.Command {
 				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
 			}
 			if tenantID == "" {
-				return fmt.Errorf("tenant required: set --tenant")
+				tenantID = os.Getenv("FACTVAULT_DEV_TENANT_ID")
+			}
+			if tenantID == "" {
+				return fmt.Errorf("tenant required: set --tenant or FACTVAULT_DEV_TENANT_ID")
 			}
 			pool, err := db.NewPool(cmd.Context(), dsn)
 			if err != nil {
@@ -135,4 +182,15 @@ func newWorkerCmd() *cobra.Command {
 		},
 	})
 	return cmd
+}
+
+func parseVocabularyMode(raw string) (vocabulary.Mode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case string(vocabulary.ModeStrict):
+		return vocabulary.ModeStrict, nil
+	case string(vocabulary.ModePermissive):
+		return vocabulary.ModePermissive, nil
+	default:
+		return "", fmt.Errorf("invalid vocabulary mode %q: allowed values are strict or permissive", raw)
+	}
 }

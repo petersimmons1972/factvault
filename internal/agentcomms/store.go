@@ -262,6 +262,9 @@ func (s *Store) appendAudit(row map[string]any) error {
 // Archive moves a message file to processed/ with an optional reason logged
 // to the audit trail.
 func (s *Store) Archive(msgID, reason string) error {
+	if !IsULID(msgID) {
+		return fmt.Errorf("archive: message id %q is not a valid ULID", msgID)
+	}
 	for _, a := range []Agent{AgentClaude, AgentCodex} {
 		dir := s.inboxDir(a)
 		entries, err := os.ReadDir(dir)
@@ -273,10 +276,21 @@ func (s *Store) Archive(msgID, reason string) error {
 			if strings.HasSuffix(name, ".tmp") || !strings.HasSuffix(name, ".json") {
 				continue
 			}
-			if !strings.Contains(name, msgID) {
+			src := filepath.Join(dir, name)
+			data, rerr := os.ReadFile(src)
+			if rerr != nil {
+				if errors.Is(rerr, os.ErrNotExist) {
+					continue
+				}
+				return fmt.Errorf("archive read %s: %w", name, rerr)
+			}
+			msg, perr := ParseMessage(data)
+			if perr != nil {
 				continue
 			}
-			src := filepath.Join(dir, name)
+			if msg.ID != msgID {
+				continue
+			}
 			dst := filepath.Join(s.Root, "processed", name)
 			if err := os.Rename(src, dst); err != nil {
 				return fmt.Errorf("archive rename: %w", err)

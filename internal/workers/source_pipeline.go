@@ -6,9 +6,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 
@@ -22,6 +25,8 @@ type SourcePipeline struct {
 	HTTPClient *http.Client
 }
 
+const maxVerifyBodyBytes = 10 * 1024 * 1024
+
 func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c collectors.Collector) error {
 	items, err := c.Collect(ctx)
 	if err != nil {
@@ -29,6 +34,9 @@ func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c col
 	}
 	for _, item := range items {
 		if strings.TrimSpace(item.URL) == "" || len(item.HTML) == 0 {
+			continue
+		}
+		if err := validateSourceURL(item.URL); err != nil {
 			continue
 		}
 		hash := sha256Hex(item.HTML)
@@ -97,7 +105,7 @@ func (p *SourcePipeline) VerifyOnce(ctx context.Context, tenantID string, ageDay
 	rows, err := p.DB.Query(ctx, `
 SELECT id, url, content_hash FROM sources
 WHERE tenant_id = $1
-  AND status IN ('archived', 'verified', 'content-changed')
+  AND status IN ('archived', 'verified', 'content-changed', 'extracted')
   AND (last_verified_at IS NULL OR last_verified_at < $2)
 ORDER BY fetched_at ASC
 LIMIT $3
@@ -133,8 +141,16 @@ WHERE id = $2
 }
 
 func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) (status, newHash, notes string) {
+	if err := validateSourceURL(url); err != nil {
+		return "link-rot", "", err.Error()
+	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	resp, err := p.client().Do(req)
+	client := p.client()
+	clone := *client
+	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return validateURLObject(req.URL)
+	}
+	resp, err := clone.Do(req)
 	if err != nil {
 		return "link-rot", "", err.Error()
 	}
@@ -142,9 +158,12 @@ func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "link-rot", "", fmt.Sprintf("status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxVerifyBodyBytes+1))
 	if err != nil {
 		return "link-rot", "", err.Error()
+	}
+	if len(body) > maxVerifyBodyBytes {
+		return "link-rot", "", "response body too large"
 	}
 	newHash = sha256Hex(body)
 	if newHash != oldHash {
@@ -248,4 +267,54 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
+}
+
+func validateSourceURL(raw string) error {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid source url: %w", err)
+	}
+	return validateURLObject(u)
+}
+
+func validateURLObject(u *neturl.URL) error {
+	if u == nil {
+		return errors.New("invalid source url")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("unsupported scheme %q", u.Scheme)
+	}
+	if u.Hostname() == "" || u.User != nil {
+		return errors.New("invalid host")
+	}
+	if ip := net.ParseIP(u.Hostname()); ip != nil {
+		if isPrivateOrInternalIP(ip) {
+			return fmt.Errorf("blocked internal address %s", ip.String())
+		}
+		return nil
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(context.Background(), u.Hostname())
+	if err != nil {
+		return fmt.Errorf("resolve host: %w", err)
+	}
+	for _, addr := range addrs {
+		if isPrivateOrInternalIP(addr.IP) {
+			return fmt.Errorf("blocked internal address %s", addr.IP.String())
+		}
+	}
+	return nil
+}
+
+func isPrivateOrInternalIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() || ip.IsPrivate() {
+		return true
+	}
+	// Block common cloud metadata endpoint.
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 169 && ip4[1] == 254 && ip4[2] == 169 && ip4[3] == 254 {
+		return true
+	}
+	return false
 }

@@ -54,6 +54,11 @@ var priorityKinds = map[Kind]struct{}{
 // ulidPattern matches Crockford base32 ULIDs (26 chars, 0-9 A-Z minus I,L,O,U).
 var ulidPattern = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
 
+// IsULID reports whether id is a valid 26-character Crockford ULID.
+func IsULID(id string) bool {
+	return ulidPattern.MatchString(id)
+}
+
 // Message is the on-wire representation of an agent message.
 // All fields conform to schema.json; additional fields are rejected on read.
 type Message struct {
@@ -70,7 +75,7 @@ type Message struct {
 // Validate checks the message against schema.json constraints.
 // Returns a descriptive error on failure, nil on success.
 func (m *Message) Validate() error {
-	if !ulidPattern.MatchString(m.ID) {
+	if !IsULID(m.ID) {
 		return fmt.Errorf("id %q: invalid ULID", m.ID)
 	}
 	if _, ok := validAgents[m.From]; !ok {
@@ -88,7 +93,7 @@ func (m *Message) Validate() error {
 	if m.Refs == nil {
 		return fmt.Errorf("refs: must be present (use empty array, not null)")
 	}
-	if m.InReplyTo != nil && !ulidPattern.MatchString(*m.InReplyTo) {
+	if m.InReplyTo != nil && !IsULID(*m.InReplyTo) {
 		return fmt.Errorf("in_reply_to %q: invalid ULID", *m.InReplyTo)
 	}
 	return nil

@@ -8,9 +8,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/assembler"
+	"github.com/petersimmons1972/factvault/internal/db"
 )
 
 type Corroborator struct {
@@ -34,7 +36,18 @@ func (c *Corroborator) CorroborateOnce(ctx context.Context, tenantID string) err
 	if tenantID == "" {
 		return fmt.Errorf("tenant id required")
 	}
-	rows, err := c.DB.Query(ctx, `
+	tenantUUID := pgtype.UUID{}
+	if err := tenantUUID.Scan(tenantID); err != nil {
+		return fmt.Errorf("invalid tenant id: %w", err)
+	}
+	txCtx := db.WithPool(ctx, c.DB)
+	txCtx, tx, err := db.TenantContext(txCtx, tenantUUID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(txCtx) }()
+
+	rows, err := tx.Query(txCtx, `
 		SELECT ss.statement_id::text, ss.source_id::text, s.url, COALESCE(s.publisher, ''), COALESCE(s.raw_text, ''), COALESCE(ss.confidence::float8, 0.5)
 		FROM statement_sources ss
 		JOIN sources s ON s.id = ss.source_id
@@ -63,9 +76,12 @@ func (c *Corroborator) CorroborateOnce(ctx context.Context, tenantID string) err
 			confidences = append(confidences, ev.Confidence)
 		}
 		confidence := assembler.ComputeConfidence(independent, confidences)
-		if _, err := c.DB.Exec(ctx, "UPDATE statements SET confidence = $1 WHERE id = $2 AND tenant_id = $3::uuid", confidence, statementID, tenantID); err != nil {
+		if _, err := tx.Exec(txCtx, "UPDATE statements SET confidence = $1 WHERE id = $2 AND tenant_id = $3::uuid", confidence, statementID, tenantID); err != nil {
 			return err
 		}
+	}
+	if err := tx.Commit(txCtx); err != nil {
+		return err
 	}
 	c.logger().InfoContext(ctx, "corroborate worker completed", "statements", len(byStatement))
 	return nil

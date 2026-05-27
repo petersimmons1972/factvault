@@ -166,9 +166,12 @@ LLM backend is pluggable via OpenAI-compatible API. Default: Ollama at `localhos
 Before ingesting your first document, define your property vocabulary:
 
 ```bash
-factvault props create --slug raised_usd --type number --label "Raised (USD)"
-factvault props create --slug ceo --type entity_ref --label "Chief Executive Officer"
-factvault props create --slug founded_in --type date --label "Founded"
+psql "$FACTVAULT_DATABASE_URL" <<'SQL'
+INSERT INTO properties (tenant_id, slug, label, value_type) VALUES
+  ('$FACTVAULT_DEV_TENANT_ID', 'raised_usd', 'Raised (USD)', 'number'),
+  ('$FACTVAULT_DEV_TENANT_ID', 'ceo', 'Chief Executive Officer', 'entity_ref'),
+  ('$FACTVAULT_DEV_TENANT_ID', 'founded_in', 'Founded', 'date');
+SQL
 ```
 
 The controlled vocabulary is not bureaucracy — it prevents `founded_in`, `founding year`, and `yearFounded` from silently diverging into three properties that all mean the same thing. See [docs/guides/defining-properties.md](docs/guides/defining-properties.md) for the full authoring guide including examples for four domains.

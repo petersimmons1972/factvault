@@ -10,6 +10,8 @@ jobs:
   go:
     name: go test
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
 
     steps:
       - name: Checkout
@@ -19,6 +21,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Install sqlite build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libsqlite3-dev
 
       - name: Build
         run: go build ./...
@@ -53,3 +60,14 @@ jobs:
         env:
           PYTHONPATH: services/embedder
         run: pytest services/embedder/tests -v --tb=short
+
+  codex-runner-bats:
+    name: codex runner bats
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run codex runner regression tests
+        run: bats .agent-comms/bin/test-codex-runner.bats

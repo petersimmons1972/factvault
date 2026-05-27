@@ -118,3 +118,23 @@ func TestCLISendRequiresKind(t *testing.T) {
 		t.Fatal("expected error when --kind missing")
 	}
 }
+
+func TestCLISendRejectsUnexpectedPositionalArgs(t *testing.T) {
+	dir := t.TempDir()
+	_, err := runCLI(t, "--root", dir, "send", "extra",
+		"--from", "claude", "--to", "codex", "--kind", "nudge", "--body", "hello")
+	if err == nil {
+		t.Fatal("expected positional arg error")
+	}
+}
+
+func TestCLIReadUnreadNotImplemented(t *testing.T) {
+	dir := t.TempDir()
+	_, err := runCLI(t, "--root", dir, "read", "--inbox", "codex", "--unread")
+	if err == nil {
+		t.Fatal("expected not implemented error")
+	}
+	if !strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
