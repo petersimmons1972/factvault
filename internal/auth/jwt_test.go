@@ -54,3 +54,25 @@ func TestVerifyExpiredToken(t *testing.T) {
 		t.Fatalf("err=%v want %v", err, ErrExpiredToken)
 	}
 }
+
+func TestVerifyRejectsMissingOrZeroExp(t *testing.T) {
+	privPEM, pubPEM, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	priv, err := ParsePrivateKeyPEM(privPEM)
+	if err != nil {
+		t.Fatalf("ParsePrivateKeyPEM: %v", err)
+	}
+	pub, err := ParsePublicKeyPEM(pubPEM)
+	if err != nil {
+		t.Fatalf("ParsePublicKeyPEM: %v", err)
+	}
+	token, err := SignRS256(priv, Claims{TenantID: "11111111-1111-1111-1111-111111111111", Subject: "dev", IssuedAt: time.Now().Unix(), ExpiresAt: 0})
+	if err != nil {
+		t.Fatalf("SignRS256: %v", err)
+	}
+	if _, err := (Verifier{PublicKey: pub}).Verify(token); err != ErrExpiredToken {
+		t.Fatalf("err=%v want %v", err, ErrExpiredToken)
+	}
+}

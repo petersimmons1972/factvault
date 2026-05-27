@@ -21,7 +21,9 @@ if [ "${FACTVAULT_BOOTSTRAP_AUTH:-1}" != "0" ]; then
 		rm -f "$tmp"
 	fi
 	export FACTVAULT_JWT_PUBLIC_KEY="$public_key"
-	export FACTVAULT_JWT_PRIVATE_KEY="$private_key"
+	if [ "${FACTVAULT_EXPORT_JWT_PRIVATE_KEY:-0}" = "1" ]; then
+		export FACTVAULT_JWT_PRIVATE_KEY="$private_key"
+	fi
 fi
 
 exec "$@"

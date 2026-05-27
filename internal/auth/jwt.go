@@ -136,7 +136,7 @@ func (v Verifier) Verify(token string) (Claims, error) {
 	if v.Now != nil {
 		now = v.Now
 	}
-	if claims.ExpiresAt > 0 && now().Unix() >= claims.ExpiresAt {
+	if claims.ExpiresAt <= 0 || now().Unix() >= claims.ExpiresAt {
 		return Claims{}, ErrExpiredToken
 	}
 	return claims, nil
