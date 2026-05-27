@@ -4,17 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/ory/dockertest/v3"
-	"github.com/ory/dockertest/v3/docker"
 	"github.com/pressly/goose/v3"
 
 	"github.com/petersimmons1972/factvault/internal/db"
@@ -23,8 +25,7 @@ import (
 var (
 	once     sync.Once
 	startErr error
-	dp       *dockertest.Pool
-	res      *dockertest.Resource
+	contName string
 	dsn      string
 	unlock   func()
 )
@@ -32,11 +33,6 @@ var (
 func StartContainer() {
 	once.Do(func() {
 		var err error
-		dp, err = dockertest.NewPool("")
-		if err != nil {
-			startErr = err
-			return
-		}
 		releaseLock, err := testDBStartupLock()
 		if err != nil {
 			startErr = err
@@ -45,20 +41,25 @@ func StartContainer() {
 		unlock = releaseLock
 
 		repository, tag := postgresImage()
-		res, err = dp.RunWithOptions(&dockertest.RunOptions{
-			Repository:   repository,
-			Tag:          tag,
-			ExposedPorts: []string{"5432/tcp"},
-			Env: []string{
-				"POSTGRES_USER=factvault_test",
-				"POSTGRES_PASSWORD=factvault_test",
-				"POSTGRES_DB=factvault_test",
-				"POSTGRES_INITDB_ARGS=--no-sync",
-			},
-		}, func(cfg *docker.HostConfig) {
-			cfg.AutoRemove = true
-			cfg.RestartPolicy = docker.RestartPolicy{Name: "no"}
-		})
+		contName = fmt.Sprintf("factvault-testdb-%d", time.Now().UnixNano())
+		image := fmt.Sprintf("%s:%s", repository, tag)
+		err = runDockerCommand(
+			"run", "-d",
+			"--name", contName,
+			"--rm",
+			"-p", "127.0.0.1::5432",
+			"-e", "POSTGRES_USER=factvault_test",
+			"-e", "POSTGRES_PASSWORD=factvault_test",
+			"-e", "POSTGRES_DB=factvault_test",
+			"-e", "POSTGRES_INITDB_ARGS=--no-sync",
+			image,
+		)
+		if err != nil {
+			releaseTestDBStartupLock()
+			startErr = err
+			return
+		}
+		hostPort, err := dockerMappedPort(contName, "5432/tcp")
 		if err != nil {
 			releaseTestDBStartupLock()
 			startErr = err
@@ -67,11 +68,11 @@ func StartContainer() {
 
 		dsn = fmt.Sprintf(
 			"postgres://factvault_test:factvault_test@localhost:%s/factvault_test?sslmode=disable",
-			res.GetPort("5432/tcp"),
+			hostPort,
 		)
 
 		var sqlDB *sql.DB
-		if err := dp.Retry(func() error {
+		if err := retry(60, 500*time.Millisecond, func() error {
 			sqlDB, err = sql.Open("pgx", dsn)
 			if err != nil {
 				return err
@@ -103,8 +104,9 @@ func StartContainer() {
 }
 
 func StopContainer() {
-	if dp != nil && res != nil {
-		_ = dp.Purge(res)
+	if contName != "" {
+		_ = runDockerCommand("rm", "-f", contName)
+		contName = ""
 	}
 	releaseTestDBStartupLock()
 }
@@ -176,4 +178,45 @@ func postgresImage() (repository, tag string) {
 		return image[:colon], image[colon+1:]
 	}
 	return image, "latest"
+}
+
+func runDockerCommand(args ...string) error {
+	cmd := exec.Command("docker", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func dockerMappedPort(containerName, containerPort string) (string, error) {
+	cmd := exec.Command("docker", "port", containerName, containerPort)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker port %s %s: %w: %s", containerName, containerPort, err, strings.TrimSpace(string(out)))
+	}
+	target := strings.TrimSpace(string(out))
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return "", fmt.Errorf("parse docker port %q: %w", target, err)
+	}
+	if host == "" || port == "" {
+		return "", fmt.Errorf("invalid docker port mapping %q", target)
+	}
+	if _, err := strconv.Atoi(port); err != nil {
+		return "", fmt.Errorf("invalid mapped port %q: %w", port, err)
+	}
+	return port, nil
+}
+
+func retry(attempts int, delay time.Duration, fn func() error) error {
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if err := fn(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(delay)
+	}
+	return fmt.Errorf("retry exhausted after %d attempts: %w", attempts, lastErr)
 }

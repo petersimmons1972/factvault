@@ -27,7 +27,26 @@ Compiler = zero-latency type checker. `go vet` catches ~20 classes of bugs.
 Official Go vuln scanner. Reachability-aware, low false-positive.
 
 - Install: `go install golang.org/x/vuln/cmd/govulncheck@latest`
-- Invoke: on `go.mod` changes and in CI: `govulncheck ./...`
+- Invoke locally:
+  - Runtime gate: `govulncheck -json ./...`
+  - Test graph inventory: `govulncheck -json -test ./...`
+
+### CI vulnerability policy
+
+CI runs two govulncheck passes with different intent:
+
+- `runtime, blocking`: scans `./...` without `-test` and fails on actionable findings
+  (package/symbol-level). This is the release safety gate and must stay strict.
+- `test graph, non-blocking`: scans with `-test` for visibility into vulnerabilities
+  that enter only through test tooling (for example, Docker-related test harness
+  dependencies). This output is reported but does not fail CI by itself.
+
+Tradeoff:
+
+- We do not hide runtime risk: shipping code is still blocked on actionable
+  vulnerabilities.
+- We avoid false stop-the-line churn from known test-only Docker dependency
+  findings while keeping them visible for periodic dependency hygiene work.
 
 ### go test -race -count=1 ./...
 Standard test runner with race detector. `-count=1` defeats caching.
@@ -65,7 +84,8 @@ After every edit batch, stop on first failure:
 On `go.mod` changes, additionally:
 ```
 6. go mod tidy
-7. govulncheck ./...
+7. govulncheck -json ./...
+8. govulncheck -json -test ./...   # visibility for test-only dependency surface
 ```
 
 ## Protected files
