@@ -152,10 +152,12 @@ POST /stories
 
 **MCP server** — works with Claude Desktop, Cursor, or any agent stack supporting MCP:
 ```python
-factvault__entity_lookup(entity_name="Acme Corp", tenant_id="...")
+factvault__entity_lookup(entity_name="Acme Corp")
 factvault__story_query(query="acquisition chain narrative", depth=2)
 factvault__fact_query(property_slug="raised_usd", min_confidence=0.5)
 ```
+
+MCP tenant scope is server-configured (`FACTVAULT_MCP_TENANT_ID`), not caller-supplied.
 
 LLM backend is pluggable via OpenAI-compatible API. Default: Ollama at `localhost:11434`. Swap to any hosted provider with `FACTVAULT_LLM_BASE_URL` and `FACTVAULT_LLM_API_KEY`.
 
