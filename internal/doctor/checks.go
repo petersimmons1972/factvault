@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/assembler"
+	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
 type CheckResult struct {
@@ -205,7 +206,7 @@ func httpClient(cfg Config) *http.Client {
 	if cfg.HTTPClient != nil {
 		return cfg.HTTPClient
 	}
-	return &http.Client{Timeout: 5 * time.Second}
+	return netx.NewHTTPClient(5*time.Second, netx.ClientPolicy{AllowPrivateHosts: true})
 }
 
 func defaultString(value, fallback string) string {

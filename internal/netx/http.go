@@ -17,7 +17,11 @@ const (
 	maxRedirects       = 5
 )
 
-func NewSafeHTTPClient(timeout time.Duration) *http.Client {
+type ClientPolicy struct {
+	AllowPrivateHosts bool
+}
+
+func NewHTTPClient(timeout time.Duration, policy ClientPolicy) *http.Client {
 	if timeout <= 0 {
 		timeout = defaultHTTPTimeout
 	}
@@ -29,7 +33,7 @@ func NewSafeHTTPClient(timeout time.Duration) *http.Client {
 			if err != nil {
 				return nil, err
 			}
-			if ip, err := netip.ParseAddr(host); err == nil && isBlockedAddr(ip) {
+			if ip, err := netip.ParseAddr(host); err == nil && !policy.AllowPrivateHosts && isBlockedAddr(ip) {
 				return nil, fmt.Errorf("blocked address: %s", ip.String())
 			}
 			return dialer.DialContext(ctx, network, addr)
@@ -42,12 +46,20 @@ func NewSafeHTTPClient(timeout time.Duration) *http.Client {
 			if len(via) >= maxRedirects {
 				return errors.New("too many redirects")
 			}
-			return ValidatePublicHTTPURL(req.Context(), req.URL.String())
+			return ValidateHTTPURL(req.Context(), req.URL.String(), policy.AllowPrivateHosts)
 		},
 	}
 }
 
+func NewSafeHTTPClient(timeout time.Duration) *http.Client {
+	return NewHTTPClient(timeout, ClientPolicy{AllowPrivateHosts: false})
+}
+
 func ValidatePublicHTTPURL(ctx context.Context, raw string) error {
+	return ValidateHTTPURL(ctx, raw, false)
+}
+
+func ValidateHTTPURL(ctx context.Context, raw string, allowPrivateHosts bool) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("invalid source url: %w", err)
@@ -59,11 +71,11 @@ func ValidatePublicHTTPURL(ctx context.Context, raw string) error {
 	if host == "" {
 		return fmt.Errorf("missing source host")
 	}
-	if strings.EqualFold(host, "localhost") {
+	if !allowPrivateHosts && strings.EqualFold(host, "localhost") {
 		return fmt.Errorf("blocked host %q", host)
 	}
 	if ip, err := netip.ParseAddr(host); err == nil {
-		if isBlockedAddr(ip) {
+		if !allowPrivateHosts && isBlockedAddr(ip) {
 			return fmt.Errorf("blocked address: %s", ip.String())
 		}
 		return nil
@@ -72,9 +84,11 @@ func ValidatePublicHTTPURL(ctx context.Context, raw string) error {
 	if err != nil {
 		return fmt.Errorf("resolve host %q: %w", host, err)
 	}
-	for _, ip := range ips {
-		if isBlockedAddr(ip) {
-			return fmt.Errorf("blocked address: %s", ip.String())
+	if !allowPrivateHosts {
+		for _, ip := range ips {
+			if isBlockedAddr(ip) {
+				return fmt.Errorf("blocked address: %s", ip.String())
+			}
 		}
 	}
 	return nil

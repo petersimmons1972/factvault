@@ -34,3 +34,30 @@ func TestValidatePublicHTTPURL(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateHTTPURLAllowPrivate(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		rawURL  string
+		wantErr bool
+	}{
+		{name: "localhost allowed", rawURL: "http://localhost:8080", wantErr: false},
+		{name: "private ip allowed", rawURL: "http://10.0.0.1/", wantErr: false},
+		{name: "loopback allowed", rawURL: "http://127.0.0.1/", wantErr: false},
+		{name: "unsupported scheme still blocked", rawURL: "file:///etc/passwd", wantErr: true},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateHTTPURL(context.Background(), tc.rawURL, true)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for %q", tc.rawURL)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error for %q: %v", tc.rawURL, err)
+			}
+		})
+	}
+}
