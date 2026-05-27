@@ -14,7 +14,7 @@ spec:
           containers:
             - name: factvault-corroborate
               image: factvault-app:latest
-              args: ["factvault", "worker", "corroborate"]
+              args: ["factvault", "worker", "corroborate", "--tenant", "$(FACTVAULT_TENANT_ID)"]
               envFrom:
                 - configMapRef:
                     name: factvault-config

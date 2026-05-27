@@ -14,7 +14,7 @@ spec:
           containers:
             - name: factvault-archive
               image: factvault-app:latest
-              args: ["factvault", "worker", "archive"]
+              args: ["factvault", "worker", "archive", "--tenant", "$(FACTVAULT_TENANT_ID)"]
               envFrom:
                 - configMapRef:
                     name: factvault-config
