@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/db"
@@ -17,6 +20,12 @@ import (
 	"github.com/petersimmons1972/factvault/internal/extractors/deterministic"
 	"github.com/petersimmons1972/factvault/internal/vocabulary"
 )
+
+type dbtx interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 // VerifyExcerptOffset validates that the excerpt appears at the claimed offsets in the source text.
 func VerifyExcerptOffset(rawText, excerpt string, offsetStart, offsetEnd int) bool {
@@ -59,11 +68,21 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 	if limit <= 0 {
 		limit = 100
 	}
+	tenantUUID := pgtype.UUID{}
+	if err := tenantUUID.Scan(tenantID); err != nil {
+		return fmt.Errorf("invalid tenant id: %w", err)
+	}
 	if err := p.costGuardrail(limit); err != nil {
 		return err
 	}
 	logger := p.logger()
-	rows, err := p.DB.Query(ctx, `
+	txCtx := db.WithPool(ctx, p.DB)
+	txCtx, tx, err := db.TenantContext(txCtx, tenantUUID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(txCtx) }()
+	rows, err := tx.Query(txCtx, `
 		SELECT id, tenant_id, url, fetched_at, content_hash, raw_html, raw_text, archive_url, publisher, title, published_at, last_verified_at, status, created_at
 		FROM sources
 		WHERE tenant_id = $1::uuid AND raw_text IS NOT NULL AND status = 'archived'
@@ -74,6 +93,7 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 		return err
 	}
 	defer rows.Close()
+	var sources []db.Source
 
 	for rows.Next() {
 		var source db.Source
@@ -83,11 +103,20 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 		); err != nil {
 			return err
 		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+
+	for _, source := range sources {
 		rawText, ok := extractors.SourceRawText(&source)
 		if !ok || rawText == "" {
 			continue
 		}
-		facts, err := p.extractFacts(ctx, &source, rawText)
+		allFactsPersisted := true
+		facts, err := p.extractFacts(txCtx, &source, rawText)
 		if err != nil {
 			return err
 		}
@@ -96,15 +125,23 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 				logger.WarnContext(ctx, "rejecting fact with invalid excerpt offset", "source_id", source.ID.String(), "property", fact.PropertySlug)
 				continue
 			}
-			if err := p.insertFact(ctx, tenantID, source.ID.String(), fact); err != nil {
+			written, err := p.insertFact(txCtx, tx, tenantID, source.ID.String(), fact)
+			if err != nil {
 				return err
 			}
+			if !written {
+				allFactsPersisted = false
+			}
 		}
-		if _, err := p.DB.Exec(ctx, "UPDATE sources SET status = 'extracted' WHERE id = $1", source.ID); err != nil {
+		nextStatus := "extracted"
+		if !allFactsPersisted {
+			nextStatus = "archived"
+		}
+		if _, err := tx.Exec(txCtx, "UPDATE sources SET status = $1 WHERE id = $2", nextStatus, source.ID); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return tx.Commit(txCtx)
 }
 
 func (p *FactPipeline) extractFacts(ctx context.Context, source *db.Source, rawText string) ([]extractors.ExtractedFact, error) {
@@ -138,17 +175,17 @@ func (p *FactPipeline) extractFacts(ctx context.Context, source *db.Source, rawT
 	return facts, nil
 }
 
-func (p *FactPipeline) insertFact(ctx context.Context, tenantID, sourceID string, fact extractors.ExtractedFact) error {
-	subjectID, err := p.ensureEntity(ctx, tenantID, fact.SubjectText)
+func (p *FactPipeline) insertFact(ctx context.Context, q dbtx, tenantID, sourceID string, fact extractors.ExtractedFact) (bool, error) {
+	subjectID, err := p.ensureEntity(ctx, q, tenantID, fact.SubjectText)
 	if err != nil {
-		return err
+		return false, err
 	}
-	propertyID, valueType, shouldWrite, err := p.ensureProperty(ctx, tenantID, sourceID, fact)
+	propertyID, valueType, shouldWrite, err := p.ensureProperty(ctx, q, tenantID, sourceID, fact)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !shouldWrite {
-		return nil
+		return false, nil
 	}
 	statementID := uuid.NewString()
 	confidence := 0.5
@@ -156,22 +193,22 @@ func (p *FactPipeline) insertFact(ctx context.Context, tenantID, sourceID string
 		confidence = *fact.SourceConfidence
 	}
 	query, args := insertStatementQuery(statementID, tenantID, subjectID, propertyID, valueType, fact.Value, confidence)
-	if _, err := p.DB.Exec(ctx, query, args...); err != nil {
-		return err
+	if _, err := q.Exec(ctx, query, args...); err != nil {
+		return false, err
 	}
-	_, err = p.DB.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		INSERT INTO statement_sources (id, statement_id, source_id, excerpt, excerpt_offset_start, excerpt_offset_end, extraction_method, confidence, tenant_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`, uuid.NewString(), statementID, sourceID, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd, fact.ExtractionMethod, confidence, tenantID)
-	return err
+	return true, err
 }
 
-func (p *FactPipeline) ensureEntity(ctx context.Context, tenantID, label string) (string, error) {
+func (p *FactPipeline) ensureEntity(ctx context.Context, q dbtx, tenantID, label string) (string, error) {
 	if label == "" {
 		label = "unknown subject"
 	}
 	var id string
-	err := p.DB.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT id::text
 		FROM entities
 		WHERE tenant_id = $1 AND label = $2
@@ -184,15 +221,17 @@ func (p *FactPipeline) ensureEntity(ctx context.Context, tenantID, label string)
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", err
 	}
-	err = p.DB.QueryRow(ctx, `
-		INSERT INTO entities (id, tenant_id, label, type_uri)
-		VALUES ($1, $2, $3, NULL)
+	extID := extractedEntityExtID(label)
+	err = q.QueryRow(ctx, `
+		INSERT INTO entities (id, tenant_id, ext_id, label, type_uri)
+		VALUES ($1, $2, $3, $4, NULL)
+		ON CONFLICT (tenant_id, ext_id) DO UPDATE SET label = EXCLUDED.label
 		RETURNING id::text
-	`, uuid.NewString(), tenantID, label).Scan(&id)
+	`, uuid.NewString(), tenantID, extID, label).Scan(&id)
 	return id, err
 }
 
-func (p *FactPipeline) ensureProperty(ctx context.Context, tenantID, sourceID string, fact extractors.ExtractedFact) (string, string, bool, error) {
+func (p *FactPipeline) ensureProperty(ctx context.Context, q dbtx, tenantID, sourceID string, fact extractors.ExtractedFact) (string, string, bool, error) {
 	resolver := vocabulary.NewResolver(p.vocabularyMode())
 	result := resolver.Resolve(fact.PropertySlug, fact.ValueType, fact.Excerpt)
 	slug := result.Property.Slug
@@ -201,7 +240,7 @@ func (p *FactPipeline) ensureProperty(ctx context.Context, tenantID, sourceID st
 		return "", "", false, fmt.Errorf("unsupported property value type %q", result.Property.ValueType)
 	}
 	var id string
-	err := p.DB.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT id::text
 		FROM properties
 		WHERE slug = $1 AND (tenant_id = $2 OR tenant_id IS NULL)
@@ -216,7 +255,7 @@ func (p *FactPipeline) ensureProperty(ctx context.Context, tenantID, sourceID st
 	}
 
 	if !result.Known && p.vocabularyMode() == vocabulary.ModeStrict {
-		_, err := p.DB.Exec(ctx, `
+		_, err := q.Exec(ctx, `
 			INSERT INTO proposed_properties (
 				id, tenant_id, proposed_slug, proposed_value_type, proposed_by,
 				example_excerpt, example_source_id
@@ -231,7 +270,7 @@ func (p *FactPipeline) ensureProperty(ctx context.Context, tenantID, sourceID st
 	if !result.Known {
 		label = slug
 	}
-	err = p.DB.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		INSERT INTO properties (id, tenant_id, slug, label, value_type)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id::text
@@ -333,4 +372,16 @@ func runeOffsetToByteOffset(rawText string, runeOffset int) (int, bool) {
 		return len(rawText), true
 	}
 	return 0, false
+}
+
+var extIDLabelCleaner = regexp.MustCompile(`[^a-z0-9]+`)
+
+func extractedEntityExtID(label string) string {
+	normalized := strings.ToLower(strings.TrimSpace(label))
+	normalized = extIDLabelCleaner.ReplaceAllString(normalized, "_")
+	normalized = strings.Trim(normalized, "_")
+	if normalized == "" {
+		normalized = "unknown_subject"
+	}
+	return "extracted:" + normalized
 }

@@ -14,6 +14,7 @@ func newHealthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "health",
 		Short: "Report bus health as JSON (schema_valid, queue depths, dead-letter count)",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root, _ := cmd.Flags().GetString("root")
 			store, err := agentcomms.NewStore(root)

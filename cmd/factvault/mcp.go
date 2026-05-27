@@ -22,12 +22,19 @@ func newMCPCmd() *cobra.Command {
 			if dsn == "" {
 				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
 			}
+			tenantID := os.Getenv("FACTVAULT_MCP_TENANT_ID")
+			if tenantID == "" {
+				tenantID = os.Getenv("FACTVAULT_DEV_TENANT_ID")
+			}
+			if tenantID == "" {
+				return fmt.Errorf("tenant required: set FACTVAULT_MCP_TENANT_ID (or FACTVAULT_DEV_TENANT_ID for local use)")
+			}
 			pool, err := db.NewPool(cmd.Context(), dsn)
 			if err != nil {
 				return err
 			}
 			defer pool.Close()
-			return mcpserver.New(pool, nil).RunStdio(cmd.Context())
+			return mcpserver.New(pool, nil, tenantID).RunStdio(cmd.Context())
 		},
 	}
 	cmd.Flags().StringVar(&dsn, "dsn", "", "Postgres DSN (or FACTVAULT_DATABASE_URL)")

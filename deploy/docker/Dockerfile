@@ -1,9 +1,10 @@
 FROM cgr.dev/chainguard/go:latest AS builder
 WORKDIR /app
+RUN apk add --no-cache build-base sqlite-dev
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /factvault ./cmd/factvault
+RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /factvault ./cmd/factvault
 
 FROM cgr.dev/chainguard/wolfi-base:latest AS runtime
 RUN apk add --no-cache tini ca-certificates

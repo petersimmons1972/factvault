@@ -50,9 +50,12 @@ services:
     command: ["factvault", "migrate"]
     environment:
       FACTVAULT_DATABASE_URL: "${FACTVAULT_DATABASE_URL:-postgres://factvault:factvault@postgres:5432/factvault?sslmode=disable}"
-      FACTVAULT_AUTH_DIR: "/var/lib/factvault/auth"
+      FACTVAULT_AUTH_DIR: "/var/lib/factvault/auth-private"
+      FACTVAULT_AUTH_PUBLIC_DIR: "/var/lib/factvault/auth-public"
+      FACTVAULT_EXPORT_PRIVATE_KEY: "1"
     volumes:
-      - factvault-auth:/var/lib/factvault/auth
+      - factvault-auth-private:/var/lib/factvault/auth-private
+      - factvault-auth-public:/var/lib/factvault/auth-public
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,8 +68,9 @@ services:
     ports:
       - "${FACTVAULT_API_PORT:-8080}:8080"
     environment: &factvault-env
-      FACTVAULT_DATABASE_URL: "${FACTVAULT_DATABASE_URL:-postgres://factvault:factvault@postgres:5432/factvault?sslmode=disable}"
-      FACTVAULT_AUTH_DIR: "/var/lib/factvault/auth"
+      FACTVAULT_DATABASE_URL: "${FACTVAULT_RUNTIME_DATABASE_URL:-postgres://app_user:changeme_in_production@postgres:5432/factvault?sslmode=disable}"
+      FACTVAULT_AUTH_PUBLIC_DIR: "/var/lib/factvault/auth-public"
+      FACTVAULT_JWT_PUBLIC_KEY: "/var/lib/factvault/auth-public/factvault-jwt-public.pem"
       FACTVAULT_DEV_TENANT_ID: "${FACTVAULT_DEV_TENANT_ID:-11111111-1111-1111-1111-111111111111}"
       FACTVAULT_EMBEDDER_URL: "${FACTVAULT_EMBEDDER_URL:-http://embedder:8080}"
       FACTVAULT_LLM_URL: "${FACTVAULT_LLM_URL:-http://ollama:11434/v1}"
@@ -75,7 +79,7 @@ services:
       FACTVAULT_WORKER_LIMIT: "${FACTVAULT_WORKER_LIMIT:-100}"
       FACTVAULT_VERIFY_AGE_DAYS: "${FACTVAULT_VERIFY_AGE_DAYS:-7}"
     volumes:
-      - factvault-auth:/var/lib/factvault/auth
+      - factvault-auth-public:/var/lib/factvault/auth-public:ro
     depends_on:
       factvault-migrate:
         condition: service_completed_successfully
@@ -96,7 +100,8 @@ services:
       - /bin/sh
       - -c
       - |
-        touch /tmp/factvault-workers.ready
+        set -eu
+        rm -f /tmp/factvault-workers.ok
         while true; do
           factvault worker collect --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
           factvault worker archive --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
@@ -104,16 +109,15 @@ services:
           factvault worker extract --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
           factvault worker corroborate --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
           factvault worker dossier --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT"
+          date +%s > /tmp/factvault-workers.ok
           sleep "$${FACTVAULT_WORKER_INTERVAL_SECONDS:-300}"
         done
     environment: *factvault-env
-    volumes:
-      - factvault-auth:/var/lib/factvault/auth
     depends_on:
       factvault-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/factvault-workers.ready"]
+      test: ["CMD-SHELL", "test -f /tmp/factvault-workers.ok && [ $$(($$(date +%s) - $$(cat /tmp/factvault-workers.ok))) -lt $${FACTVAULT_WORKER_HEALTH_MAX_AGE_SECONDS:-900} ]"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -123,8 +127,6 @@ services:
     image: factvault-app:latest
     command: ["factvault", "mcp"]
     environment: *factvault-env
-    volumes:
-      - factvault-auth:/var/lib/factvault/auth
     depends_on:
       factvault-migrate:
         condition: service_completed_successfully
@@ -136,4 +138,5 @@ volumes:
   pgdata:
   embedder-cache:
   ollama:
-  factvault-auth:
+  factvault-auth-private:
+  factvault-auth-public:

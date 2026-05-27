@@ -14,7 +14,7 @@ spec:
           containers:
             - name: factvault-corroborate
               image: factvault-app:latest
-              args: ["factvault", "worker", "corroborate"]
+              args: ["/bin/sh", "-c", "factvault migrate && factvault worker corroborate --tenant $(FACTVAULT_DEV_TENANT_ID)"]
               envFrom:
                 - configMapRef:
                     name: factvault-config

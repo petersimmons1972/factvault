@@ -172,6 +172,17 @@ func TestArchive(t *testing.T) {
 	}
 }
 
+func TestArchiveRejectsPartialID(t *testing.T) {
+	s := newStore(t)
+	m := mkMsg(t, KindNudge, AgentClaude, AgentCodex)
+	if err := s.Send(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Archive(m.ID[:6], "partial"); err == nil {
+		t.Fatal("expected error for partial id")
+	}
+}
+
 func TestAtomicWriteNoTmpLeak(t *testing.T) {
 	// After Send, no .tmp file should remain.
 	s := newStore(t)

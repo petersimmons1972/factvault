@@ -132,11 +132,14 @@ func (v Verifier) Verify(token string) (Claims, error) {
 	if err := json.Unmarshal(claimsJSON, &claims); err != nil || claims.TenantID == "" || claims.Subject == "" {
 		return Claims{}, ErrInvalidToken
 	}
+	if claims.ExpiresAt <= 0 {
+		return Claims{}, ErrInvalidToken
+	}
 	now := time.Now
 	if v.Now != nil {
 		now = v.Now
 	}
-	if claims.ExpiresAt > 0 && now().Unix() >= claims.ExpiresAt {
+	if now().Unix() >= claims.ExpiresAt {
 		return Claims{}, ErrExpiredToken
 	}
 	return claims, nil

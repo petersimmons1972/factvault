@@ -14,7 +14,7 @@ spec:
           containers:
             - name: factvault-verify
               image: factvault-app:latest
-              args: ["factvault", "worker", "verify"]
+              args: ["/bin/sh", "-c", "factvault migrate && factvault worker verify --tenant $(FACTVAULT_DEV_TENANT_ID)"]
               envFrom:
                 - configMapRef:
                     name: factvault-config
