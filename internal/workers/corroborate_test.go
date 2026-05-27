@@ -68,3 +68,14 @@ func TestCorroboratorUpdatesConfidenceFromIndependentSources(t *testing.T) {
 		t.Fatalf("confidence=%v want 0.85", confidence)
 	}
 }
+
+func TestCorroboratorInvalidTenantID(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	defer pool.Close()
+
+	err := (&Corroborator{DB: pool}).CorroborateOnce(ctx, "not-a-uuid")
+	if err == nil {
+		t.Fatal("expected invalid tenant id error")
+	}
+}

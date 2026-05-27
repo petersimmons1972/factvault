@@ -252,6 +252,17 @@ func TestFactPipelineExtractOnce_InsertsStatements(t *testing.T) {
 	}
 }
 
+func TestFactPipelineExtractOnce_InvalidTenantID(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	defer pool.Close()
+
+	err := (&FactPipeline{DB: pool}).ExtractOnce(ctx, "not-a-uuid", 10)
+	if err == nil {
+		t.Fatal("expected invalid tenant id error")
+	}
+}
+
 func TestFactPipelineExtractOnce_StrictQueuesUnknownProperty(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Setup(ctx, t)

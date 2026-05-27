@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/db"
@@ -49,6 +51,12 @@ type LLMExtractor interface {
 	Extract(ctx context.Context, source *db.Source, rawText string) ([]extractors.StatementProposal, error)
 }
 
+type queryExecutor interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit int) error {
 	if p == nil || p.DB == nil {
 		return fmt.Errorf("extract worker: nil db pool")
@@ -62,8 +70,19 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 	if err := p.costGuardrail(limit); err != nil {
 		return err
 	}
+	var tenant pgtype.UUID
+	if err := tenant.Scan(tenantID); err != nil {
+		return fmt.Errorf("invalid tenant id: %w", err)
+	}
+	txCtx := db.WithPool(ctx, p.DB)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(txCtx)
+
 	logger := p.logger()
-	rows, err := p.DB.Query(ctx, `
+	rows, err := tx.Query(txCtx, `
 		SELECT id, tenant_id, url, fetched_at, content_hash, raw_html, raw_text, archive_url, publisher, title, published_at, last_verified_at, status, created_at
 		FROM sources
 		WHERE tenant_id = $1::uuid AND raw_text IS NOT NULL AND status = 'archived'
@@ -75,6 +94,7 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 	}
 	defer rows.Close()
 
+	var sources []db.Source
 	for rows.Next() {
 		var source db.Source
 		if err := rows.Scan(
@@ -83,6 +103,14 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 		); err != nil {
 			return err
 		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+
+	for _, source := range sources {
 		rawText, ok := extractors.SourceRawText(&source)
 		if !ok || rawText == "" {
 			continue
@@ -93,18 +121,18 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 		}
 		for _, fact := range facts {
 			if !VerifyExcerptOffset(rawText, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd) {
-				logger.WarnContext(ctx, "rejecting fact with invalid excerpt offset", "source_id", source.ID.String(), "property", fact.PropertySlug)
+				logger.WarnContext(txCtx, "rejecting fact with invalid excerpt offset", "source_id", source.ID.String(), "property", fact.PropertySlug)
 				continue
 			}
-			if err := p.insertFact(ctx, tenantID, source.ID.String(), fact); err != nil {
+			if err := p.insertFact(txCtx, tx, tenantID, source.ID.String(), fact); err != nil {
 				return err
 			}
 		}
-		if _, err := p.DB.Exec(ctx, "UPDATE sources SET status = 'extracted' WHERE id = $1", source.ID); err != nil {
+		if _, err := tx.Exec(txCtx, "UPDATE sources SET status = 'extracted' WHERE id = $1", source.ID); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return tx.Commit(txCtx)
 }
 
 func (p *FactPipeline) extractFacts(ctx context.Context, source *db.Source, rawText string) ([]extractors.ExtractedFact, error) {
@@ -138,12 +166,12 @@ func (p *FactPipeline) extractFacts(ctx context.Context, source *db.Source, rawT
 	return facts, nil
 }
 
-func (p *FactPipeline) insertFact(ctx context.Context, tenantID, sourceID string, fact extractors.ExtractedFact) error {
-	subjectID, err := p.ensureEntity(ctx, tenantID, fact.SubjectText)
+func (p *FactPipeline) insertFact(ctx context.Context, exec queryExecutor, tenantID, sourceID string, fact extractors.ExtractedFact) error {
+	subjectID, err := p.ensureEntity(ctx, exec, tenantID, fact.SubjectText)
 	if err != nil {
 		return err
 	}
-	propertyID, valueType, shouldWrite, err := p.ensureProperty(ctx, tenantID, sourceID, fact)
+	propertyID, valueType, shouldWrite, err := p.ensureProperty(ctx, exec, tenantID, sourceID, fact)
 	if err != nil {
 		return err
 	}
@@ -156,22 +184,22 @@ func (p *FactPipeline) insertFact(ctx context.Context, tenantID, sourceID string
 		confidence = *fact.SourceConfidence
 	}
 	query, args := insertStatementQuery(statementID, tenantID, subjectID, propertyID, valueType, fact.Value, confidence)
-	if _, err := p.DB.Exec(ctx, query, args...); err != nil {
+	if _, err := exec.Exec(ctx, query, args...); err != nil {
 		return err
 	}
-	_, err = p.DB.Exec(ctx, `
+	_, err = exec.Exec(ctx, `
 		INSERT INTO statement_sources (id, statement_id, source_id, excerpt, excerpt_offset_start, excerpt_offset_end, extraction_method, confidence, tenant_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`, uuid.NewString(), statementID, sourceID, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd, fact.ExtractionMethod, confidence, tenantID)
 	return err
 }
 
-func (p *FactPipeline) ensureEntity(ctx context.Context, tenantID, label string) (string, error) {
+func (p *FactPipeline) ensureEntity(ctx context.Context, exec queryExecutor, tenantID, label string) (string, error) {
 	if label == "" {
 		label = "unknown subject"
 	}
 	var id string
-	err := p.DB.QueryRow(ctx, `
+	err := exec.QueryRow(ctx, `
 		SELECT id::text
 		FROM entities
 		WHERE tenant_id = $1 AND label = $2
@@ -184,7 +212,7 @@ func (p *FactPipeline) ensureEntity(ctx context.Context, tenantID, label string)
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", err
 	}
-	err = p.DB.QueryRow(ctx, `
+	err = exec.QueryRow(ctx, `
 		INSERT INTO entities (id, tenant_id, label, type_uri)
 		VALUES ($1, $2, $3, NULL)
 		RETURNING id::text
@@ -192,7 +220,7 @@ func (p *FactPipeline) ensureEntity(ctx context.Context, tenantID, label string)
 	return id, err
 }
 
-func (p *FactPipeline) ensureProperty(ctx context.Context, tenantID, sourceID string, fact extractors.ExtractedFact) (string, string, bool, error) {
+func (p *FactPipeline) ensureProperty(ctx context.Context, exec queryExecutor, tenantID, sourceID string, fact extractors.ExtractedFact) (string, string, bool, error) {
 	resolver := vocabulary.NewResolver(p.vocabularyMode())
 	result := resolver.Resolve(fact.PropertySlug, fact.ValueType, fact.Excerpt)
 	slug := result.Property.Slug
@@ -201,7 +229,7 @@ func (p *FactPipeline) ensureProperty(ctx context.Context, tenantID, sourceID st
 		return "", "", false, fmt.Errorf("unsupported property value type %q", result.Property.ValueType)
 	}
 	var id string
-	err := p.DB.QueryRow(ctx, `
+	err := exec.QueryRow(ctx, `
 		SELECT id::text
 		FROM properties
 		WHERE slug = $1 AND (tenant_id = $2 OR tenant_id IS NULL)
@@ -216,7 +244,7 @@ func (p *FactPipeline) ensureProperty(ctx context.Context, tenantID, sourceID st
 	}
 
 	if !result.Known && p.vocabularyMode() == vocabulary.ModeStrict {
-		_, err := p.DB.Exec(ctx, `
+		_, err := exec.Exec(ctx, `
 			INSERT INTO proposed_properties (
 				id, tenant_id, proposed_slug, proposed_value_type, proposed_by,
 				example_excerpt, example_source_id
@@ -231,7 +259,7 @@ func (p *FactPipeline) ensureProperty(ctx context.Context, tenantID, sourceID st
 	if !result.Known {
 		label = slug
 	}
-	err = p.DB.QueryRow(ctx, `
+	err = exec.QueryRow(ctx, `
 		INSERT INTO properties (id, tenant_id, slug, label, value_type)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id::text
