@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/assembler"
 	"github.com/petersimmons1972/factvault/internal/auth"
+	"github.com/petersimmons1972/factvault/internal/briefs"
 	"github.com/petersimmons1972/factvault/internal/retrieval"
 )
 
@@ -58,6 +62,9 @@ func (s *Server) Router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.jwtMiddleware)
 		r.Get("/entities/{id}/dossier", s.getDossier)
+		r.Post("/briefs/generate", s.postBriefGenerate)
+		r.Get("/briefs", s.getBriefs)
+		r.Get("/briefs/{id}", s.getBrief)
 		r.Post("/stories", s.postStory)
 		r.Post("/facts/query", s.postFactsQuery)
 	})
@@ -104,9 +111,69 @@ func (s *Server) postFactsQuery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) postBriefGenerate(w http.ResponseWriter, r *http.Request) {
+	var req briefs.GenerateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		return
+	}
+	claims := ClaimsFromContext(r.Context())
+	rec, err := (briefs.Service{Pool: s.Service.Pool}).GenerateAndStore(r.Context(), claims.TenantID, req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rec)
+}
+
+func (s *Server) getBriefs(w http.ResponseWriter, r *http.Request) {
+	opts := briefs.ListOptions{Limit: 100}
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if parsed, err := strconv.Atoi(q); err == nil {
+			opts.Limit = parsed
+		}
+	}
+	if sourceKind := r.URL.Query().Get("source_kind"); sourceKind != "" {
+		s := briefs.SourceKind(sourceKind)
+		opts.SourceKind = &s
+	}
+	if entityID := r.URL.Query().Get("entity_id"); entityID != "" {
+		opts.EntityID = &entityID
+	}
+	if createdAfter := r.URL.Query().Get("created_after"); createdAfter != "" {
+		if parsed, err := time.Parse(time.RFC3339, createdAfter); err == nil {
+			opts.CreatedAfter = &parsed
+		}
+	}
+	if createdBefore := r.URL.Query().Get("created_before"); createdBefore != "" {
+		if parsed, err := time.Parse(time.RFC3339, createdBefore); err == nil {
+			opts.CreatedBefore = &parsed
+		}
+	}
+	claims := ClaimsFromContext(r.Context())
+	records, err := (briefs.Service{Pool: s.Service.Pool}).List(r.Context(), claims.TenantID, opts)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, records)
+}
+
+func (s *Server) getBrief(w http.ResponseWriter, r *http.Request) {
+	claims := ClaimsFromContext(r.Context())
+	rec, err := (briefs.Service{Pool: s.Service.Pool}).Get(r.Context(), claims.TenantID, chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rec)
+}
+
 func writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, assembler.ErrEntityNotFound):
+		writeProblem(w, http.StatusNotFound, "not found", err.Error())
+	case errors.Is(err, pgx.ErrNoRows):
 		writeProblem(w, http.StatusNotFound, "not found", err.Error())
 	case errors.Is(err, assembler.ErrInvalidDepth), errors.Is(err, assembler.ErrInvalidEntityCount):
 		writeProblem(w, http.StatusBadRequest, "bad request", err.Error())

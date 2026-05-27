@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,9 +35,11 @@ type GenerateRequest struct {
 
 // ListOptions controls which briefs are returned from List.
 type ListOptions struct {
-	Limit      int
-	SourceKind *SourceKind
-	EntityID   *string
+	Limit         int
+	SourceKind    *SourceKind
+	EntityID      *string
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
 }
 
 // Brief is the stored record returned by GenerateAndStore, List, and Get.
@@ -340,6 +343,16 @@ func (s *Service) List(ctx context.Context, tenantID string, opts ListOptions) (
 	if opts.EntityID != nil {
 		query += fmt.Sprintf(" AND entity_id = $%d::uuid", argIdx)
 		args = append(args, *opts.EntityID)
+		argIdx++
+	}
+	if opts.CreatedAfter != nil {
+		query += fmt.Sprintf(" AND created_at >= $%d::timestamptz", argIdx)
+		args = append(args, *opts.CreatedAfter)
+		argIdx++
+	}
+	if opts.CreatedBefore != nil {
+		query += fmt.Sprintf(" AND created_at <= $%d::timestamptz", argIdx)
+		args = append(args, *opts.CreatedBefore)
 		argIdx++
 	}
 
