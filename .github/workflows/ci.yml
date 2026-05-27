@@ -89,6 +89,11 @@ jobs:
           FACTVAULT_TEST_POSTGRES_IMAGE: ankane/pgvector:latest
         run: go test ./... -count=1
 
+      - name: Test (repeat for flake detection)
+        env:
+          FACTVAULT_TEST_POSTGRES_IMAGE: ankane/pgvector:latest
+        run: go test ./... -count=1
+
       - name: Test (race)
         run: go test -race ./... -count=1
 
