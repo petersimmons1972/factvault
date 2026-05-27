@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt generate migrate setup
+.PHONY: build test lint fmt generate migrate setup pr-watch
 
 BINARY := factvault
 DSN ?= $(FACTVAULT_DATABASE_URL)
@@ -32,3 +32,6 @@ setup:
 	./bin/$(BINARY) init \
 		--dsn "$${FACTVAULT_DATABASE_URL:-postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable}" \
 		--tenant "$${FACTVAULT_DEV_TENANT_ID:-11111111-1111-1111-1111-111111111111}"
+
+pr-watch:
+	./scripts/pr-autopilot.sh $(PR)
