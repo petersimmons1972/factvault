@@ -46,13 +46,15 @@ func newInitCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 
 			// --- Key generation ---
-			fmt.Fprintf(out, "==> Generating JWT keys in %s\n", keyDir)
-			if err := initKeys(keyDir); err != nil {
-				return fmt.Errorf("keygen: %w", err)
-			}
 			privPath := filepath.Join(keyDir, "private.pem")
 			pubPath := filepath.Join(keyDir, "public.pem")
 			if fileNonEmpty(privPath) && fileNonEmpty(pubPath) {
+				fmt.Fprintf(out, "==> JWT keys already exist in %s — skipping keygen\n", keyDir)
+			} else {
+				fmt.Fprintf(out, "==> Generating JWT keys in %s\n", keyDir)
+				if err := initKeys(keyDir); err != nil {
+					return fmt.Errorf("keygen: %w", err)
+				}
 				fmt.Fprintf(out, "    private.pem: %s\n", privPath)
 				fmt.Fprintf(out, "    public.pem:  %s\n", pubPath)
 			}

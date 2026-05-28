@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +60,65 @@ func TestInitKeys_IsIdempotent(t *testing.T) {
 	if string(first) != string(second) {
 		t.Fatal("initKeys is not idempotent: private.pem changed on second call")
 	}
+}
+
+// TestInitCmd_KeygenOutputMessages verifies that the init command prints the
+// "Generating" header only when keys are actually created, and prints a
+// "skipping keygen" message (without "Generating") when keys already exist.
+//
+// Because the full init command requires a live DB, we use a deliberately
+// invalid DSN so the command fails at the doctor step — but keygen output is
+// emitted before that, so we can still assert on it.
+func TestInitCmd_KeygenOutputMessages(t *testing.T) {
+	t.Run("first_run_prints_generating", func(t *testing.T) {
+		dir := t.TempDir()
+		cmd := newInitCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		// Invalid DSN — command will fail at doctor, but keygen runs first.
+		_ = cmd.Flags().Set("dsn", "postgres://invalid:5432/nodb")
+		_ = cmd.Flags().Set("key-dir", dir)
+		_ = cmd.Flags().Set("skip-example", "true")
+		// RunE will error; we only care about what was printed before the error.
+		_ = cmd.Execute()
+		out := buf.String()
+		if !strings.Contains(out, "Generating JWT keys") {
+			t.Errorf("first run: expected output to contain 'Generating JWT keys', got:\n%s", out)
+		}
+	})
+
+	t.Run("second_run_skips_keygen_without_generating_header", func(t *testing.T) {
+		dir := t.TempDir()
+		// Pre-populate key files so initKeys is a no-op.
+		cmd1 := newInitCmd()
+		cmd1.SetOut(&bytes.Buffer{})
+		_ = cmd1.Flags().Set("dsn", "postgres://invalid:5432/nodb")
+		_ = cmd1.Flags().Set("key-dir", dir)
+		_ = cmd1.Flags().Set("skip-example", "true")
+		_ = cmd1.Execute()
+		// Keys should now exist; confirm before second run.
+		privPath := filepath.Join(dir, "private.pem")
+		pubPath := filepath.Join(dir, "public.pem")
+		if !fileNonEmpty(privPath) || !fileNonEmpty(pubPath) {
+			t.Fatal("keys not created on first run; cannot test skip path")
+		}
+
+		// Second run — should NOT print "Generating", SHOULD print skip message.
+		cmd2 := newInitCmd()
+		var buf bytes.Buffer
+		cmd2.SetOut(&buf)
+		_ = cmd2.Flags().Set("dsn", "postgres://invalid:5432/nodb")
+		_ = cmd2.Flags().Set("key-dir", dir)
+		_ = cmd2.Flags().Set("skip-example", "true")
+		_ = cmd2.Execute()
+		out := buf.String()
+		if strings.Contains(out, "Generating JWT keys") {
+			t.Errorf("second run: output must NOT contain 'Generating JWT keys' on skip path, got:\n%s", out)
+		}
+		if !strings.Contains(out, "skipping keygen") {
+			t.Errorf("second run: expected output to contain 'skipping keygen', got:\n%s", out)
+		}
+	})
 }
 
 // TestFileNonEmpty verifies the fileNonEmpty helper.
