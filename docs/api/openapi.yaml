@@ -57,6 +57,88 @@ paths:
       responses:
         "200":
           description: fact query bundle
+  /briefs/generate:
+    post:
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateBriefRequest"
+      responses:
+        "200":
+          description: generated and persisted evidence brief record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceBrief"
+  /briefs:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+        - name: source_kind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [dossier, story]
+        - name: entity_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: created_after
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: created_before
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: brief records ordered by created_at desc
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EvidenceBrief"
+  /briefs/{id}:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: one persisted brief record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceBrief"
+        "404":
+          description: brief not found for tenant
 components:
   securitySchemes:
     bearerAuth:
@@ -88,3 +170,47 @@ components:
           type: integer
         min_confidence:
           type: number
+    GenerateBriefRequest:
+      type: object
+      required: [source_kind, bundle]
+      properties:
+        source_kind:
+          type: string
+          enum: [dossier, story]
+        entity_id:
+          type: string
+          format: uuid
+          description: required when source_kind is dossier
+        query:
+          type: string
+          description: required when source_kind is story
+        bundle:
+          type: object
+          description: dossier/story bundle JSON payload
+    EvidenceBrief:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        entity_id:
+          type: string
+          format: uuid
+          nullable: true
+        query:
+          type: string
+          nullable: true
+        source_kind:
+          type: string
+          enum: [dossier, story]
+        bundle_hash:
+          type: string
+        brief:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time

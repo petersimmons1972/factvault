@@ -3,7 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/petersimmons1972/factvault/internal/collectors"
 	"github.com/petersimmons1972/factvault/internal/workers"
 )
 
@@ -67,5 +69,48 @@ func TestFirstNonEmpty(t *testing.T) {
 	got := firstNonEmpty("", "  ", "value")
 	if got != "value" {
 		t.Fatalf("firstNonEmpty() = %q, want value", got)
+	}
+}
+
+func TestRSSScheduleHelpers(t *testing.T) {
+	feeds := []collectors.FeedSpec{
+		{TenantID: "t1", Interval: "10m"},
+		{TenantID: "", Interval: "5m"},
+		{TenantID: "t2", Interval: "30m"},
+	}
+	schedules := buildRSSSchedules(feeds, 15*time.Minute)
+	if len(schedules) != 2 {
+		t.Fatalf("len(schedules)=%d want 2", len(schedules))
+	}
+	idx := allScheduleIndexes(schedules)
+	if len(idx) != 2 || idx[0] != 0 || idx[1] != 2 {
+		t.Fatalf("indexes=%v", idx)
+	}
+
+	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	due := dueRSSFeedIndexes(schedules, map[int]time.Time{}, now)
+	if len(due) != 2 {
+		t.Fatalf("initial due=%v want both feeds", due)
+	}
+
+	last := map[int]time.Time{0: now, 2: now}
+	if got := nextRSSPollWait(schedules, last, now); got != 10*time.Minute {
+		t.Fatalf("next wait=%s want 10m", got)
+	}
+	due = dueRSSFeedIndexes(schedules, last, now.Add(10*time.Minute))
+	if len(due) != 1 || due[0] != 0 {
+		t.Fatalf("due at 10m=%v want only feed 0", due)
+	}
+	due = dueRSSFeedIndexes(schedules, last, now.Add(30*time.Minute))
+	if len(due) != 2 {
+		t.Fatalf("due at 30m=%v want both", due)
+	}
+}
+
+func TestRSSOnceUsesAllScheduledFeeds(t *testing.T) {
+	schedules := []rssSchedule{{feedIndex: 2, interval: time.Minute}, {feedIndex: 7, interval: 2 * time.Minute}}
+	idx := allScheduleIndexes(schedules)
+	if len(idx) != 2 || idx[0] != 2 || idx[1] != 7 {
+		t.Fatalf("once indexes=%v", idx)
 	}
 }

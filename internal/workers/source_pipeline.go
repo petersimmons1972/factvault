@@ -39,11 +39,15 @@ func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c col
 		if err != nil {
 			return err
 		}
+		publisher := strings.TrimSpace(item.Publisher)
+		if item.Topic != "" || len(item.Tags) > 0 {
+			publisher = strings.TrimSpace(publisher + " topic=" + item.Topic + " tags=" + strings.Join(item.Tags, ","))
+		}
 		_, err = p.DB.Exec(ctx, `
-INSERT INTO sources (id, tenant_id, url, content_hash, raw_html, status)
-VALUES ($1, $2, $3, $4, $5, 'collected')
+INSERT INTO sources (id, tenant_id, url, content_hash, raw_html, status, title, publisher, published_at)
+VALUES ($1, $2, $3, $4, $5, 'collected', NULLIF($6, ''), NULLIF($7, ''), $8)
 ON CONFLICT (tenant_id, url) DO NOTHING
-`, uuid.NewString(), tenantID, item.URL, hash, compressed)
+`, uuid.NewString(), tenantID, item.URL, hash, compressed, item.Title, publisher, item.PublishedAt)
 		if err != nil {
 			return fmt.Errorf("insert source: %w", err)
 		}

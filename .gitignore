@@ -28,3 +28,8 @@ Thumbs.db
 .agent-comms/processed/
 
 docker-compose.override.yml
+
+# local runtime artifacts
+.local/
+bin/
+.agent-comms/bin/watchdog.log

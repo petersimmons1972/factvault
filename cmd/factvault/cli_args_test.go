@@ -25,6 +25,9 @@ func TestNoArgCommandsRejectUnexpectedPositionalArgs(t *testing.T) {
 		{name: "worker verify", cmd: mustSubcommand(t, newWorkerCmd(), "verify")},
 		{name: "worker corroborate", cmd: mustSubcommand(t, newWorkerCmd(), "corroborate")},
 		{name: "worker dossier", cmd: mustSubcommand(t, newWorkerCmd(), "dossier")},
+		{name: "worker rss", cmd: mustSubcommand(t, newWorkerCmd(), "rss")},
+		{name: "brief generate", cmd: mustSubcommand(t, newBriefCmd(), "generate")},
+		{name: "brief list", cmd: mustSubcommand(t, newBriefCmd(), "list")},
 		{name: "example list", cmd: mustSubcommand(t, newExampleCmd(), "list")},
 	}
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -65,5 +66,57 @@ func TestDossierRouteRequiresAndAcceptsJWT(t *testing.T) {
 	h.ServeHTTP(authResp, authReq)
 	if authResp.Code != http.StatusOK {
 		t.Fatalf("authorized code=%d body=%s", authResp.Code, authResp.Body.String())
+	}
+}
+
+func TestBriefRoutesTenantScoped(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	defer pool.Close()
+
+	tenantID := uuid.NewString()
+	entityID := uuid.NewString()
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
+		t.Fatalf("set tenant: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO entities (id, tenant_id, label, type_uri) VALUES ($1, $2, 'Acme', 'https://schema.org/Organization')`, entityID, tenantID); err != nil {
+		t.Fatalf("insert entity: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	privPEM, pubPEM, err := auth.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("keys: %v", err)
+	}
+	priv, _ := auth.ParsePrivateKeyPEM(privPEM)
+	pub, _ := auth.ParsePublicKeyPEM(pubPEM)
+	token, err := auth.SignRS256(priv, auth.Claims{TenantID: tenantID, Subject: "tester", IssuedAt: time.Now().Unix(), ExpiresAt: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+
+	h := New(pool, pub).Router()
+	body := []byte(`{"source_kind":"dossier","entity_id":"` + entityID + `","bundle":{"entity_id":"` + entityID + `","tenant_id":"` + tenantID + `","entities":[],"statements":[],"sources":[],"assembled_at":"2026-01-01T00:00:00Z"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/briefs/generate", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("generate code=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/briefs", nil)
+	listReq.Header.Set("Authorization", "Bearer "+token)
+	listResp := httptest.NewRecorder()
+	h.ServeHTTP(listResp, listReq)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list code=%d body=%s", listResp.Code, listResp.Body.String())
 	}
 }

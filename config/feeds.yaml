@@ -1,0 +1,7 @@
+feeds:
+  - name: "CISA Alerts"
+    url: "https://www.cisa.gov/news.xml"
+    tenant: "00000000-0000-0000-0000-000000000001"
+    topic: "threat-intelligence"
+    tags: ["cisa", "alerts", "security"]
+    interval: "15m"

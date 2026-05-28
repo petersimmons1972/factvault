@@ -26,6 +26,7 @@ func newRootCmd() *cobra.Command {
 	}
 	root.AddCommand(newMigrateCmd())
 	root.AddCommand(newWorkerCmd())
+	root.AddCommand(newBriefCmd())
 	root.AddCommand(newAuthCmd())
 	root.AddCommand(newAPICmd())
 	root.AddCommand(newMCPCmd())

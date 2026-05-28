@@ -38,6 +38,7 @@ jobs:
         with:
           version: v2.12.2
           args: --timeout=5m
+          only-new-issues: true
 
       # Blocking gate: runtime source graph only (no -test).
       # This preserves signal for real shipped vulnerabilities.
@@ -85,6 +86,11 @@ jobs:
           ' govulncheck-test.json | sort | uniq -c | sort -nr
 
       - name: Test
+        env:
+          FACTVAULT_TEST_POSTGRES_IMAGE: ankane/pgvector:latest
+        run: go test ./... -count=1
+
+      - name: Test (repeat for flake detection)
         env:
           FACTVAULT_TEST_POSTGRES_IMAGE: ankane/pgvector:latest
         run: go test ./... -count=1
