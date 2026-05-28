@@ -1,9 +1,11 @@
 package doctor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -147,9 +149,100 @@ func CheckLLM(ctx context.Context, cfg Config) CheckResult {
 	return checkHTTP(ctx, cfg, "llm", url, http.StatusOK)
 }
 
+// CheckEmbedder verifies the embedder service is reachable and returns a real
+// (non-zero) 1024-dimensional vector for a probe text.  The check is OPTIONAL
+// (Required=false) — operators running without an embedder should not see a
+// required failure.  If /info is available, the model name is included in the
+// detail string.
 func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
-	base := strings.TrimRight(defaultString(cfg.EmbedderURL, "http://localhost:8080"), "/")
-	return checkHTTPAny(ctx, cfg, "embedder", []string{base + "/healthz", base + "/health"})
+	return timed("embedder", func() (string, string, error) {
+		base := strings.TrimRight(defaultString(cfg.EmbedderURL, "http://localhost:8080"), "/")
+		client := httpClient(cfg)
+
+		// 1. Health check — try /healthz then /health.
+		var healthOK bool
+		for _, path := range []string{"/healthz", "/health"} {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+			if err != nil {
+				continue
+			}
+			resp, err := client.Do(req)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					healthOK = true
+					break
+				}
+			}
+		}
+		if !healthOK {
+			return "", "start embedder service", fmt.Errorf("embedder health check failed")
+		}
+
+		// 2. Optional /info — collect model name for the detail string.
+		modelName := ""
+		infoReq, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/info", nil)
+		if err == nil {
+			if infoResp, err := client.Do(infoReq); err == nil {
+				defer infoResp.Body.Close()
+				if infoResp.StatusCode == http.StatusOK {
+					var infoBody struct {
+						Model string `json:"model"`
+						Dim   int    `json:"dim"`
+					}
+					if json.NewDecoder(infoResp.Body).Decode(&infoBody) == nil {
+						modelName = infoBody.Model
+					}
+				}
+			}
+		}
+
+		// 3. POST /embed with a probe text; verify non-zero 1024-dim vector.
+		probeBody, _ := json.Marshal(map[string]any{"texts": []string{"factvault embedder probe"}})
+		embedReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/embed",
+			bytes.NewReader(probeBody))
+		if err != nil {
+			return "", "check embedder URL", err
+		}
+		embedReq.Header.Set("Content-Type", "application/json")
+		embedResp, err := client.Do(embedReq)
+		if err != nil {
+			return "", "start embedder service", err
+		}
+		defer embedResp.Body.Close()
+		if embedResp.StatusCode != http.StatusOK {
+			return "", "check embedder /embed endpoint", fmt.Errorf("embed status=%d", embedResp.StatusCode)
+		}
+		var embedBody struct {
+			Vectors [][]float64 `json:"vectors"`
+		}
+		if err := json.NewDecoder(embedResp.Body).Decode(&embedBody); err != nil {
+			return "", "check embedder response format", err
+		}
+		if len(embedBody.Vectors) == 0 {
+			return "", "embedder returned empty vectors", fmt.Errorf("empty vectors")
+		}
+		vec := embedBody.Vectors[0]
+		const wantDim = 1024
+		if len(vec) != wantDim {
+			return "", fmt.Sprintf("expect %d-dim vectors", wantDim),
+				fmt.Errorf("vector dim=%d, want %d", len(vec), wantDim)
+		}
+		// Verify at least one component is non-zero (real model, not stub).
+		var norm float64
+		for _, v := range vec {
+			norm += v * v
+		}
+		if math.Sqrt(norm) < 1e-6 {
+			return "", "embedder returned zero vector — stub still active?",
+				fmt.Errorf("vector norm≈0, expected real BGE-M3 embedding")
+		}
+		detail := fmt.Sprintf("dim=%d norm=%.4f", wantDim, math.Sqrt(norm))
+		if modelName != "" {
+			detail = fmt.Sprintf("%s model=%s", detail, modelName)
+		}
+		return detail, "", nil
+	})
 }
 
 func CheckWayback(ctx context.Context, cfg Config) CheckResult {

@@ -1,8 +1,9 @@
 [project]
 name = "factvault-embedder"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.111.0",
   "uvicorn>=0.30.0",
+  "sentence-transformers>=3.3.1",
 ]

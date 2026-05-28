@@ -55,7 +55,7 @@ migrations                   OK schema version 4
 rls                          OK cross-tenant row hidden
 canary                       OK assembled 312 bytes
 llm                          WARN connection refused  (optional)
-embedder                     OK http://localhost:8081/health
+embedder                     OK dim=1024 norm=1.0000 model=BAAI/bge-m3
 wayback                      OK https://web.archive.org/
 ```
 
