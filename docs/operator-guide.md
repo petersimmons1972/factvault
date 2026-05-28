@@ -67,7 +67,7 @@ headers installed.
 | Goose migrations | Schema version is current enough | Run `factvault migrate`. |
 | RLS enforced | Tenant isolation policies hide cross-tenant rows | Verify migrations and app role setup. |
 | LLM endpoint | OpenAI-compatible `/models` endpoint responds | Start local Ollama/olla or configure frontier endpoint. |
-| Embedder health | BGE-M3 service responds on `/health` or `/healthz` | Start embedder; wait for model initialization. |
+| Embedder health | BGE-M3 service responds on `/healthz` (200 when model loaded; 503 while loading) AND returns a real non-zero 1024-dim vector for a probe text (stub detection) | Start embedder; wait for model initialization (cold model download can take several minutes). |
 | Wayback reachable | Archive endpoint can be contacted | Check outbound network or set alternate `FACTVAULT_WAYBACK_URL`. |
 | Canary fact | Assembler can produce a bundle from a tenant-scoped entity | Check migrations and RLS context. |
 

@@ -14,7 +14,8 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
@@ -68,8 +69,18 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/health")
 @app.get("/healthz")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> JSONResponse:
+    """Model-aware health.
+
+    Returns 200 only when the model is loaded and ready to serve /embed.
+    Returns 503 with {"status":"loading"} while the lifespan startup is
+    still pulling/initialising weights — this prevents dependent services
+    (compose `depends_on: condition: service_healthy`) from racing ahead
+    and hitting `/embed` before the model is ready.
+    """
+    if _model is None:
+        return JSONResponse(status_code=503, content={"status": "loading"})
+    return JSONResponse(status_code=200, content={"status": "ok"})
 
 
 @app.get("/info", response_model=InfoResponse)
@@ -82,6 +93,8 @@ def embed(req: EmbedRequest) -> EmbedResponse:
     if not req.texts:
         return EmbedResponse(vectors=[])
     if _model is None:
-        raise RuntimeError("Embedding model not loaded")
+        # 503 (not 500) — transient unavailability while the model loads.
+        # Clients with retry/backoff will recover; explicit 500 would mislead.
+        raise HTTPException(status_code=503, detail="model not yet loaded")
     embeddings = _model.encode(req.texts, convert_to_numpy=True, normalize_embeddings=True)
     return EmbedResponse(vectors=embeddings.tolist())

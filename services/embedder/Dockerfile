@@ -44,6 +44,14 @@ RUN python3.12 -m venv /opt/venv \
 # Remove pip/dev tools to trim the image; the venv is self-contained.
 RUN apk del python-3.12-dev py3.12-pip || true
 
+# Pre-create the cache directory owned by the nonroot UID so a freshly
+# initialised Docker volume inherits the correct permissions.  Without this,
+# `docker volume create` produces a root-owned mountpoint and the nonroot
+# uvicorn process gets PermissionError on first HuggingFace download.
+# (K8s users must still set fsGroup=65532 on the pod spec.)
+RUN mkdir -p /home/nonroot/.cache \
+ && chown -R 65532:65532 /home/nonroot
+
 COPY app.py /app/app.py
 
 ENV PATH="/opt/venv/bin:${PATH}" \

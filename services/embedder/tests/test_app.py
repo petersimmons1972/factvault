@@ -97,3 +97,44 @@ def test_embed_empty_list(client) -> None:
     resp = client.post("/embed", json={"texts": []})
     assert resp.status_code == 200
     assert resp.json()["vectors"] == []
+
+
+# ---------------------------------------------------------------------------
+# Pre-load state: model not yet loaded.  Health and embed must report 503
+# so dependent services don't race ahead and hit the embedder before it is
+# actually ready.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def unloaded_client(monkeypatch):
+    """Client where _model is None (simulates pre-lifespan / loading state)."""
+    import app as app_module
+    monkeypatch.setattr(app_module, "_model", None)
+    return TestClient(app_module.app)
+
+
+def test_health_503_when_model_not_loaded(unloaded_client) -> None:
+    resp = unloaded_client.get("/health")
+    assert resp.status_code == 503
+    assert resp.json()["status"] == "loading"
+
+
+def test_healthz_503_when_model_not_loaded(unloaded_client) -> None:
+    resp = unloaded_client.get("/healthz")
+    assert resp.status_code == 503
+    assert resp.json()["status"] == "loading"
+
+
+def test_embed_503_when_model_not_loaded(unloaded_client) -> None:
+    resp = unloaded_client.post("/embed", json={"texts": ["hello"]})
+    assert resp.status_code == 503
+    body = resp.json()
+    # FastAPI HTTPException puts the message in "detail".
+    assert "not yet loaded" in body.get("detail", "").lower()
+
+
+def test_embed_empty_list_503_when_model_not_loaded(unloaded_client) -> None:
+    """Empty-list shortcut returns 200 even with no model (no encode needed)."""
+    resp = unloaded_client.post("/embed", json={"texts": []})
+    assert resp.status_code == 200
+    assert resp.json()["vectors"] == []
