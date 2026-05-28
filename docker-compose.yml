@@ -7,8 +7,14 @@ services:
       POSTGRES_DB: "${POSTGRES_DB:-factvault}"
       POSTGRES_USER: "${POSTGRES_USER:-factvault}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-factvault}"
+      # POSTGRES_APP_USER_PASSWORD seeds the app_user login role on first init.
+      # The default is safe ONLY for local development — override this value for
+      # any non-local deployment (staging, CI with external Postgres, production).
+      POSTGRES_APP_USER_PASSWORD: "${POSTGRES_APP_USER_PASSWORD:-dev_only_local_password}"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # init script runs once on first Postgres init (empty pgdata); creates app_user
+      - ./deploy/initdb/01-create-app-user.sh:/docker-entrypoint-initdb.d/01-create-app-user.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -17,13 +23,17 @@ services:
 
   embedder:
     build:
-      context: .
-      dockerfile: deploy/docker/embedder.Dockerfile
+      context: services/embedder
+      dockerfile: Dockerfile
     image: factvault-embedder:latest
     ports:
       - "${FACTVAULT_EMBEDDER_PORT:-8081}:8080"
     volumes:
       - embedder-cache:/home/nonroot/.cache
+    environment:
+      HF_HOME: /home/nonroot/.cache
+      SENTENCE_TRANSFORMERS_HOME: /home/nonroot/.cache
+      EMBEDDER_MODEL: "${EMBEDDER_MODEL:-BAAI/bge-m3}"
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080/health\")' || exit 1"]
       interval: 10s

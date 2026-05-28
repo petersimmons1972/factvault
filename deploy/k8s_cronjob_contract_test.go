@@ -59,5 +59,9 @@ func TestK8sWorkerCronJobsIncludeMigrationInitContainer(t *testing.T) {
 		if !strings.Contains(manifest, "name: factvault-config") {
 			t.Fatalf("%s is missing factvault-config env source", path)
 		}
+		// Credentials come from the Secret, not the ConfigMap.
+		if !strings.Contains(manifest, "name: factvault-db-credentials") {
+			t.Fatalf("%s is missing factvault-db-credentials secret ref", path)
+		}
 	}
 }

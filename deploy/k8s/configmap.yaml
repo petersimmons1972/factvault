@@ -3,7 +3,10 @@ kind: ConfigMap
 metadata:
   name: factvault-config
 data:
-  FACTVAULT_DATABASE_URL: postgres://app_user:changeme_in_production@postgres:5432/factvault?sslmode=disable
+  # FACTVAULT_DATABASE_URL is intentionally absent from this ConfigMap.
+  # It is supplied by the factvault-db-credentials Secret (see secret.yaml).
+  # Credentials MUST NOT appear in ConfigMaps — use Infisical / ExternalSecrets
+  # to populate that Secret; see docs/operator-guide.md § Kubernetes Credentials.
   FACTVAULT_EMBEDDER_URL: http://factvault-embedder:8080
   FACTVAULT_LLM_URL: http://ollama:11434/v1
   FACTVAULT_WAYBACK_URL: https://web.archive.org

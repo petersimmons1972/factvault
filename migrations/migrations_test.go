@@ -90,12 +90,29 @@ func TestMigrationsRunClean(t *testing.T) {
 		}
 	}
 
+	// The migration creates app_user as NOLOGIN (no password) so that the GRANTs
+	// in the schema succeed. In production environments the role is created WITH
+	// LOGIN and a real password by the init layer BEFORE migrations run; the
+	// IF NOT EXISTS guard in the migration is a no-op in that case.
 	var roleExists bool
 	if err := db.QueryRowContext(context.Background(), "SELECT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user')").Scan(&roleExists); err != nil {
 		t.Fatalf("checking role: %v", err)
 	}
 	if !roleExists {
 		t.Error("app_user role missing")
+	}
+
+	// Verify the migration does NOT embed a hardcoded password.
+	// pg_authid.rolpassword is NULL for roles created without a password.
+	var hasPassword bool
+	err = db.QueryRowContext(context.Background(),
+		"SELECT rolpassword IS NOT NULL FROM pg_authid WHERE rolname = 'app_user'",
+	).Scan(&hasPassword)
+	if err != nil {
+		t.Fatalf("checking app_user password: %v", err)
+	}
+	if hasPassword {
+		t.Error("app_user must not have a password set by the migration (hardcoded credentials are prohibited)")
 	}
 
 	var viewExists bool
