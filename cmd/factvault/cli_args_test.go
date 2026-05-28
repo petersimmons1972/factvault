@@ -11,6 +11,7 @@ func TestNoArgCommandsRejectUnexpectedPositionalArgs(t *testing.T) {
 		name string
 		cmd  *cobra.Command
 	}{
+		{name: "init", cmd: newInitCmd()},
 		{name: "doctor", cmd: newDoctorCmd()},
 		{name: "migrate", cmd: newMigrateCmd()},
 		{name: "api", cmd: newAPICmd()},
