@@ -25,26 +25,45 @@ export FACTVAULT_DATABASE_URL='postgres://factvault:factvault@localhost:5432/fac
 export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
 ```
 
-## 2. Start the Local Services
+## 2. One-Command Setup (recommended)
 
-Start Postgres first. The embedder can also be started if you want the `doctor` embedder check to pass, but the worked dossier example below only needs Postgres.
+`make setup` handles everything: starts Postgres and the embedder, waits for database readiness, builds the binary, runs migrations, and calls `factvault init` which generates JWT keys, runs health checks, and loads the `ai-startup-tracking` example.
+
+```bash
+make setup
+```
+
+`factvault init` is idempotent — re-running will not overwrite existing key files or reload example data.
+
+After `make setup` completes, skip to [step 5](#5-query-the-dossier-through-the-api).
+
+---
+
+## Manual Steps (alternative)
+
+Use these if you prefer to run each step individually.
+
+### 3. Start the Local Services
 
 ```bash
 docker compose up -d postgres embedder
 ```
 
-Current note: issue #94 is tracking the final Tier 1 single-command compose polish. Until that lands, run the API from the host in step 6 so you can provide the JWT public key directly.
-
-## 3. Build and Migrate
+### 4. Build, Migrate, and Initialise
 
 ```bash
 go build -o bin/factvault ./cmd/factvault
 ./bin/factvault migrate
+./bin/factvault init \
+  --dsn "$FACTVAULT_DATABASE_URL" \
+  --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
-The migration installs the Postgres schema, pgvector extension, RLS policies, and indexes.
+`init` generates JWT keys in `.local/`, runs the doctor health checks, and loads the default example. Keys are written only if they do not exist yet. The awk key-splitting step from older guides is no longer required — `init` writes `private.pem` and `public.pem` directly.
 
-## 4. Run Readiness Checks
+### 4a. Run Readiness Checks
+
+The `init` command runs doctor automatically. You can also invoke it directly:
 
 ```bash
 ./bin/factvault doctor \
@@ -53,11 +72,15 @@ The migration installs the Postgres schema, pgvector extension, RLS policies, an
   --llm-url http://localhost:11434/v1
 ```
 
-Expected result when Postgres, embedder, Wayback, and the local LLM are reachable: all seven checks return `OK`.
+If you do not have a local LLM running, use `--required-only` to exit 0 when only LLM/embedder/Wayback fail:
 
-If you are only validating the dossier path and do not have a local LLM running yet, the LLM check can fail while the following example still works. The API and dossier worker do not need an LLM for preloaded example entities.
+```bash
+./bin/factvault doctor --dsn "$FACTVAULT_DATABASE_URL" --required-only
+```
 
-## 5. Load an Example and Assemble a Dossier
+Required checks (postgres, migrations, rls, canary) still fail loudly; optional ones show `WARN`.
+
+### 4b. Load an Example and Assemble a Dossier
 
 List the bundled domains:
 
@@ -82,20 +105,13 @@ Precompute dossiers for that tenant:
   --limit 10
 ```
 
-Expected output is a successful exit. The worker writes one `dossiers` row per stale or missing tenant entity dossier.
+The dossier is empty until the full collect/archive/extract/corroborate pipeline runs. The retrieval path is live and tenant-scoped immediately.
 
-## 6. Query the Dossier Through the API
+---
 
-Generate a development RSA keypair:
+## 5. Query the Dossier Through the API
 
-```bash
-mkdir -p .local
-./bin/factvault auth keys > .local/dev-keys.pem
-awk 'BEGIN{pub=0} /BEGIN PUBLIC KEY/{pub=1} pub{print}' .local/dev-keys.pem > .local/public.pem
-awk 'BEGIN{priv=0} /BEGIN RSA PRIVATE KEY/{priv=1} priv{print} /END RSA PRIVATE KEY/{exit}' .local/dev-keys.pem > .local/private.pem
-```
-
-Issue a tenant-scoped token:
+Keys are in `.local/` (written by `init` or `make setup`). Issue a tenant-scoped token:
 
 ```bash
 TOKEN=$(./bin/factvault auth token \
@@ -124,7 +140,7 @@ curl -sS \
   "http://localhost:8080/entities/$ENTITY_ID/dossier" | jq .
 ```
 
-A successful response contains an entity bundle for the loaded example entity. In the current example fixtures, the bundle may have no statement facts until you run the full collect/archive/extract/corroborate pipeline, but the dossier retrieval path is live and tenant-scoped.
+A successful response contains an entity bundle for the loaded example entity.
 
 ## Full Pipeline Next Steps
 
@@ -138,17 +154,18 @@ After the initial dossier works, run the source pipeline against a tenant:
 ./bin/factvault worker dossier --dsn "$FACTVAULT_DATABASE_URL" --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
-The extract and corroborate CLI entries are present, but the current compose-first operator path is still being tightened under #94. Treat this section as the next operational path rather than the shortest first-run path.
+The dossier will remain empty until the full pipeline stages complete.
 
 ## Troubleshooting
 
 | Symptom | Check | Fix |
 |---|---|---|
-| `database DSN required` | `echo "$FACTVAULT_DATABASE_URL"` | Export the localhost DSN shown in step 1 or pass `--dsn`. |
-| `failed to connect to postgres` | `docker compose ps postgres` | Start Postgres with `docker compose up -d postgres`. |
-| `run factvault migrate` from `doctor` | `./bin/factvault migrate` | Run migrations against the same DSN used by the API and workers. |
-| `JWT public key required` | API startup args | Pass `--jwt-public-key .local/public.pem` or set `FACTVAULT_JWT_PUBLIC_KEY`. |
-| `missing bearer token` | `curl` headers | Add `Authorization: Bearer $TOKEN`. |
-| `LLM endpoint` fails in `doctor` | `curl http://localhost:11434/v1/models` | Start your local OpenAI-compatible LLM, or skip full doctor while testing the preloaded dossier path. |
-| `embedder health` fails | `docker compose ps embedder` | Start the embedder with `docker compose up -d embedder`; first model load can take time. |
-| `entity not found` from dossier API | Tenant mismatch | Use a token whose `tenant_id` matches the tenant used by `example load`. |
+| `database DSN required`                       | `echo "$FACTVAULT_DATABASE_URL"`        | Export the localhost DSN or pass `--dsn`.                                        |
+| `failed to connect to postgres`               | `docker compose ps postgres`            | Start Postgres with `docker compose up -d postgres`.                             |
+| `run factvault migrate` from `doctor`         | `./bin/factvault migrate`               | Run migrations against the same DSN used by the API and workers.                 |
+| `JWT public key required`                     | API startup args                        | Pass `--jwt-public-key .local/public.pem` or set `FACTVAULT_JWT_PUBLIC_KEY`.     |
+| `missing bearer token`                        | `curl` headers                          | Add `Authorization: Bearer $TOKEN`.                                              |
+| `llm` shows `FAIL` or `WARN` in doctor       | `curl http://localhost:11434/v1/models` | Start your local LLM, or use `doctor --required-only` to ignore optional checks. |
+| `embedder` shows `FAIL` in doctor            | `docker compose ps embedder`            | Start embedder; first model load can take time.                                   |
+| `entity not found` from dossier API          | Tenant mismatch                         | Use a token whose `tenant_id` matches the tenant used by `example load`.          |
+| Dossier body is empty (no facts)             | Pipeline not run yet                    | Run collect → archive → extract → corroborate → dossier workers in order.        |

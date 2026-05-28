@@ -30,6 +30,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newAPICmd())
 	root.AddCommand(newMCPCmd())
 	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newInitCmd())
 	root.AddCommand(newExampleCmd())
 	return root
 }

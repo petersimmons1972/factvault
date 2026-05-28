@@ -28,12 +28,13 @@ Common optional settings:
 
 | Variable | Default or example | Used by |
 |---|---|---|
-| `FACTVAULT_JWT_PUBLIC_KEY` | `/run/secrets/factvault-jwt-public.pem` | API JWT verification |
-| `FACTVAULT_LLM_URL` | `http://localhost:11434/v1` | Doctor and LLM extraction clients |
-| `FACTVAULT_LLM_MODEL` | `llama3.1:8b` | LLM extraction clients |
-| `FACTVAULT_LLM_API_KEY` | empty | Frontier or protected OpenAI-compatible endpoints |
-| `FACTVAULT_EMBEDDER_URL` | `http://localhost:8080` or `http://localhost:8081` from host | Doctor and embedding clients |
-| `FACTVAULT_WAYBACK_URL` | `https://web.archive.org` | Doctor and archive checks |
+| `FACTVAULT_JWT_PUBLIC_KEY`   | `/run/secrets/factvault-jwt-public.pem`                   | API JWT verification                                      |
+| `FACTVAULT_LLM_URL`          | `http://localhost:11434/v1`                               | Doctor and LLM extraction clients (fallback)              |
+| `FACTVAULT_LLM_BASE_URL`     | unset — when set, takes precedence over `FACTVAULT_LLM_URL` | LLM extraction clients; use for non-default Ollama paths |
+| `FACTVAULT_LLM_MODEL`        | `llama3.1:8b` (override for prod, e.g. `qwen3:32b`)      | LLM extraction clients                                    |
+| `FACTVAULT_LLM_API_KEY`      | empty                                                     | Frontier or protected OpenAI-compatible endpoints         |
+| `FACTVAULT_EMBEDDER_URL`     | `http://localhost:8080` or `http://localhost:8081` (host) | Doctor and embedding clients                              |
+| `FACTVAULT_WAYBACK_URL`      | `https://web.archive.org`                                 | Doctor and archive checks                                 |
 
 Use `.env.example` as the compose-oriented baseline. Use localhost hostnames when running `factvault` from the host and service names when running inside Compose or Kubernetes.
 
@@ -71,6 +72,8 @@ headers installed.
 | Canary fact | Assembler can produce a bundle from a tenant-scoped entity | Check migrations and RLS context. |
 
 The command exits non-zero if any check fails. For a minimal dossier smoke test, Postgres, migrations, RLS, and canary are the load-bearing checks.
+
+Use `doctor --required-only` to exit 0 when only optional checks (LLM, embedder, Wayback) fail. Optional failures are shown as `WARN` instead of `FAIL` and their remedy lines are suppressed. Required checks (postgres, migrations, rls, canary) still cause a non-zero exit on failure.
 
 ## Worker Order
 

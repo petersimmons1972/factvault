@@ -73,6 +73,7 @@ func newWorkerCmd() *cobra.Command {
 	}
 
 	addRun("collect", func(ctx context.Context, p *workers.SourcePipeline) error {
+		// TODO(#94): seed URL is not yet configurable; collector uses a static stub.
 		seed := collectors.StaticCollector{
 			CollectorName: "seed",
 			Items: []collectors.Item{

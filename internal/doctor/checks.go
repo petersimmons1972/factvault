@@ -16,11 +16,12 @@ import (
 )
 
 type CheckResult struct {
-	Name    string `json:"name"`
-	OK      bool   `json:"ok"`
-	Detail  string `json:"detail,omitempty"`
-	Remedy  string `json:"remedy,omitempty"`
-	Elapsed string `json:"elapsed"`
+	Name     string `json:"name"`
+	OK       bool   `json:"ok"`
+	Required bool   `json:"required"`
+	Detail   string `json:"detail,omitempty"`
+	Remedy   string `json:"remedy,omitempty"`
+	Elapsed  string `json:"elapsed"`
 }
 
 type Config struct {
@@ -33,11 +34,23 @@ type Config struct {
 
 type checkFunc func(context.Context, Config) CheckResult
 
+// requiredChecks are the checks that must pass for the system to function.
+// Optional checks (LLM, embedder, Wayback) are run separately and do not
+// block a healthy status when --required-only is used.
+var requiredChecks = []checkFunc{CheckPostgres, CheckMigrations, CheckRLS, CheckCanary}
+var optionalChecks = []checkFunc{CheckLLM, CheckEmbedder, CheckWayback}
+
 func RunAll(ctx context.Context, cfg Config) []CheckResult {
-	checks := []checkFunc{CheckPostgres, CheckMigrations, CheckRLS, CheckLLM, CheckEmbedder, CheckWayback, CheckCanary}
-	results := make([]CheckResult, 0, len(checks))
-	for _, check := range checks {
-		results = append(results, check(ctx, cfg))
+	results := make([]CheckResult, 0, len(requiredChecks)+len(optionalChecks))
+	for _, check := range requiredChecks {
+		r := check(ctx, cfg)
+		r.Required = true
+		results = append(results, r)
+	}
+	for _, check := range optionalChecks {
+		r := check(ctx, cfg)
+		r.Required = false
+		results = append(results, r)
 	}
 	return results
 }
@@ -51,8 +64,19 @@ func AllOK(results []CheckResult) bool {
 	return true
 }
 
+// RequiredOK returns true if all required checks passed.
+// Optional check failures are ignored.
+func RequiredOK(results []CheckResult) bool {
+	for _, result := range results {
+		if result.Required && !result.OK {
+			return false
+		}
+	}
+	return true
+}
+
 func CheckPostgres(ctx context.Context, cfg Config) CheckResult {
-	return timed("[1/7] postgres + pgvector", func() (string, string, error) {
+	return timed("postgres", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 		if err != nil {
 			return "", "set FACTVAULT_DATABASE_URL", err
@@ -67,7 +91,7 @@ func CheckPostgres(ctx context.Context, cfg Config) CheckResult {
 }
 
 func CheckMigrations(ctx context.Context, cfg Config) CheckResult {
-	return timed("[2/7] goose migrations", func() (string, string, error) {
+	return timed("migrations", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 		if err != nil {
 			return "", "set FACTVAULT_DATABASE_URL", err
@@ -85,7 +109,7 @@ func CheckMigrations(ctx context.Context, cfg Config) CheckResult {
 }
 
 func CheckRLS(ctx context.Context, cfg Config) CheckResult {
-	return timed("[3/7] RLS enforced", func() (string, string, error) {
+	return timed("rls", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 		if err != nil {
 			return "", "set FACTVAULT_DATABASE_URL", err
@@ -120,21 +144,21 @@ func CheckRLS(ctx context.Context, cfg Config) CheckResult {
 
 func CheckLLM(ctx context.Context, cfg Config) CheckResult {
 	url := strings.TrimRight(defaultString(cfg.LLMURL, "http://localhost:11434/v1"), "/") + "/models"
-	return checkHTTP(ctx, cfg, "[4/7] LLM endpoint", url, http.StatusOK)
+	return checkHTTP(ctx, cfg, "llm", url, http.StatusOK)
 }
 
 func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 	base := strings.TrimRight(defaultString(cfg.EmbedderURL, "http://localhost:8080"), "/")
-	return checkHTTPAny(ctx, cfg, "[5/7] embedder health", []string{base + "/healthz", base + "/health"})
+	return checkHTTPAny(ctx, cfg, "embedder", []string{base + "/healthz", base + "/health"})
 }
 
 func CheckWayback(ctx context.Context, cfg Config) CheckResult {
 	url := strings.TrimRight(defaultString(cfg.WaybackURL, "https://web.archive.org"), "/") + "/"
-	return checkHTTP(ctx, cfg, "[6/7] Wayback reachable", url, http.StatusOK)
+	return checkHTTP(ctx, cfg, "wayback", url, http.StatusOK)
 }
 
 func CheckCanary(ctx context.Context, cfg Config) CheckResult {
-	return timed("[7/7] canary fact", func() (string, string, error) {
+	return timed("canary", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 		if err != nil {
 			return "", "set FACTVAULT_DATABASE_URL", err
