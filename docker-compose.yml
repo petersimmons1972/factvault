@@ -59,7 +59,10 @@ services:
     image: factvault-app:latest
     command: ["factvault", "migrate"]
     environment:
-      FACTVAULT_DATABASE_URL: "${FACTVAULT_DATABASE_URL:-postgres://factvault:factvault@postgres:5432/factvault?sslmode=disable}"
+      # Migrate runs as the Postgres superuser because the schema needs
+      # CREATE EXTENSION (pgcrypto, vector, pg_trgm). Application services
+      # (api/workers/mcp) connect as app_user instead — see *factvault-env.
+      FACTVAULT_DATABASE_URL: "${FACTVAULT_MIGRATE_DATABASE_URL:-postgres://factvault:factvault@postgres:5432/factvault?sslmode=disable}"
       FACTVAULT_AUTH_DIR: "/var/lib/factvault/auth"
     volumes:
       - factvault-auth:/var/lib/factvault/auth
@@ -75,7 +78,11 @@ services:
     ports:
       - "${FACTVAULT_API_PORT:-8080}:8080"
     environment: &factvault-env
-      FACTVAULT_DATABASE_URL: "${FACTVAULT_DATABASE_URL:-postgres://factvault:factvault@postgres:5432/factvault?sslmode=disable}"
+      # Application services connect as app_user (matching production), which
+      # exercises the GRANTs in the schema end-to-end. The default password
+      # tracks POSTGRES_APP_USER_PASSWORD; override FACTVAULT_DATABASE_URL
+      # entirely if you need a custom DSN.
+      FACTVAULT_DATABASE_URL: "${FACTVAULT_DATABASE_URL:-postgres://app_user:${POSTGRES_APP_USER_PASSWORD:-dev_only_local_password}@postgres:5432/factvault?sslmode=disable}"
       FACTVAULT_AUTH_DIR: "/var/lib/factvault/auth"
       FACTVAULT_DEV_TENANT_ID: "${FACTVAULT_DEV_TENANT_ID:-11111111-1111-1111-1111-111111111111}"
       FACTVAULT_EMBEDDER_URL: "${FACTVAULT_EMBEDDER_URL:-http://embedder:8080}"
