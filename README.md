@@ -79,6 +79,8 @@ go build -o bin/factvault ./cmd/factvault
 
 For the full five-minute path from clone to a JWT-authenticated dossier query, see [docs/getting-started.md](docs/getting-started.md). For day-two operations, see [docs/operator-guide.md](docs/operator-guide.md).
 
+Testing guidance is documented in [docs/testing.md](docs/testing.md).
+
 ---
 
 ## Dossier or Story?
@@ -152,6 +154,34 @@ GET /entities/{id}/dossier
 # On-demand cross-entity story
 POST /stories
 {"query": "biotech CFO departures and SEC inquiries", "depth": 2, "max_facts": 500}
+
+# Generate/list/get evidence briefs
+POST /briefs/generate
+GET /briefs
+GET /briefs/{id}
+```
+
+Example brief generation payload:
+```json
+{
+  "source_kind": "dossier",
+  "entity_id": "11111111-1111-1111-1111-111111111111",
+  "bundle": {
+    "entity_id": "11111111-1111-1111-1111-111111111111",
+    "tenant_id": "22222222-2222-2222-2222-222222222222",
+    "entities": [],
+    "statements": [],
+    "sources": [],
+    "assembled_at": "2026-01-01T00:00:00Z"
+  }
+}
+```
+
+RSS ingestion worker:
+```bash
+./bin/factvault worker rss --feeds config/feeds.yaml --once
+# loop mode (default): polls at configured interval/minimum interval
+./bin/factvault worker rss --feeds config/feeds.yaml --interval 15m
 ```
 
 **MCP server** — works with Claude Desktop, Cursor, or any agent stack supporting MCP:
