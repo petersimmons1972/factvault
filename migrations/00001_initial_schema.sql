@@ -4,10 +4,15 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+-- app_user is created by the database init layer (compose: docker-entrypoint-initdb.d/01-create-app-user.sh;
+-- K8s: the factvault-db-credentials Secret + init container). The migration only creates a NOLOGIN
+-- placeholder so that the GRANTs below succeed on a fresh cluster where the init layer has not yet run
+-- (e.g. migration tests). On compose and K8s, the init layer runs first and creates the role WITH LOGIN
+-- and the correct password from the environment; the IF NOT EXISTS guard here is a no-op in that case.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
-        CREATE ROLE app_user WITH LOGIN PASSWORD 'changeme_in_production';
+        CREATE ROLE app_user NOLOGIN;
     END IF;
 END;
 $$;

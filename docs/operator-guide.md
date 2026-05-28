@@ -148,9 +148,100 @@ Restore into a fresh database only after verifying the target DSN and volume. Av
 | Embedder is slow on first request | Model cold start | Wait for container health and keep the service warm. |
 | LLM costs appear unexpectedly | Frontier endpoint configured | See [Frontier Models](guides/frontier-models.md) and remove remote API env vars for local-only mode. |
 
+## Kubernetes Credentials
+
+The `app_user` Postgres login role is created by the database init layer, **not** the schema migration.
+The migration only places a `NOLOGIN` placeholder so that `GRANT` statements succeed on a cold cluster;
+in practice the init layer always runs first and the migration's `IF NOT EXISTS` guard is a no-op.
+
+### Local compose path
+
+`deploy/initdb/01-create-app-user.sh` is mounted into `docker-entrypoint-initdb.d/` and executes
+once on first Postgres initialisation (empty `pgdata`). It reads `POSTGRES_APP_USER_PASSWORD` from the
+compose environment. The default value (`dev_only_local_password`) is **only** safe for local
+development. Override it for any other environment.
+
+The compose DSN connects as `app_user` (matching production), so the script's `GRANT` set is
+exercised end-to-end on every dev session. If you previously ran compose with the superuser DSN
+(`factvault:factvault`), follow the rotation steps in **Migrating an existing deployment** below
+to converge.
+
+### Production / Kubernetes path
+
+1. **Store the DSN in Infisical** (project: `factvault`):
+   - key: `FACTVAULT_DATABASE_URL`
+   - value: `postgres://app_user:<password>@<host>:5432/factvault?sslmode=require`
+
+2. **Sync to a Kubernetes Secret** named `factvault-db-credentials` via the Infisical operator or
+   ExternalSecrets. The template in `deploy/k8s/examples/secret.example.yaml` shows the expected
+   key structure. For ad-hoc work, copy it to a working file:
+   ```bash
+   cp deploy/k8s/examples/secret.example.yaml deploy/k8s/secret.yaml
+   # edit deploy/k8s/secret.yaml: replace <REPLACE_WITH_INFISICAL_MANAGED_VALUE>
+   kubectl apply -f deploy/k8s/secret.yaml
+   ```
+   The working copy `deploy/k8s/secret.yaml` is gitignored. The example lives under `examples/`
+   so that `kubectl apply -f deploy/k8s/` (non-recursive) cannot accidentally deploy a
+   non-functional Secret.
+
+3. **Create `app_user` on first Postgres init.** The role must exist before migrations run. Options:
+   - Mount an init script (equivalent to `deploy/initdb/01-create-app-user.sh`) via a ConfigMap into
+     the Postgres pod's `docker-entrypoint-initdb.d/`.
+   - Run a pre-migration init container that executes:
+     ```sql
+     CREATE ROLE app_user WITH LOGIN PASSWORD '<password from secret>';
+     ```
+   - Use your managed Postgres provider's user management API (e.g. Cloud SQL IAM auth, RDS Users).
+
+4. **All Deployments, Jobs, and CronJobs** reference both `factvault-config` (non-secret config) and
+   `factvault-db-credentials` (DSN) via `envFrom`. Do not add `FACTVAULT_DATABASE_URL` back to the
+   ConfigMap.
+
+Credentials MUST NOT appear in `configmap.yaml` — they are audited by `TestK8sConfigMapContainsNoCredentials`.
+
+### Migrating an existing deployment
+
+If your cluster was provisioned before this change, `app_user` already exists with the legacy
+hardcoded password (`changeme_in_production`). Pulling this PR and redeploying alone will NOT
+rotate the credential — `CREATE ROLE ... IF NOT EXISTS` is a no-op when the role is present.
+
+**Rotate immediately**, in this order:
+
+1. **Decide on the new password** and store it where the new code expects it:
+   - **Compose**: set `POSTGRES_APP_USER_PASSWORD` in `.env` (override the default).
+   - **K8s**: update the `FACTVAULT_DATABASE_URL` value in Infisical (or whatever feeds
+     `factvault-db-credentials`).
+
+2. **Rotate the Postgres role.** Connect to the database as a superuser and run:
+   ```sql
+   ALTER ROLE app_user WITH LOGIN PASSWORD '<new password>';
+   ```
+   The Postgres server uses scram-sha-256 hashing, so the new password is salted and hashed
+   server-side — `pg_authid.rolpassword` no longer holds anything attacker-useful once the
+   ALTER completes.
+
+3. **Roll the application.**
+   - **Compose**: `docker compose up -d --force-recreate factvault-migrate factvault-api factvault-workers factvault-mcp`.
+   - **K8s**: trigger a rolling restart so pods pick up the new Secret:
+     ```bash
+     kubectl rollout restart deployment/factvault-api -n factvault
+     kubectl rollout restart deployment/factvault-mcp -n factvault
+     # CronJobs pick up the new Secret on their next scheduled run
+     ```
+
+4. **Verify.** `factvault doctor` should succeed end-to-end. A failed `postgres` check after
+   rotation means the application is still using the old password — re-check that the Secret
+   contains the new value and the pods restarted.
+
+**Do NOT** drop and recreate `app_user`. The `GRANT`s from the migration are attached to the
+role; dropping it requires re-running the GRANTs, which the migration does not idempotently
+re-apply on schema-current databases.
+
 ## Security Notes
 
 - Keep private JWT keys out of git; use `.local/`, Docker secrets, Kubernetes secrets, or a real secret manager.
 - Default local operation should not send fact content to hosted LLMs or hosted embedding providers.
 - RLS is part of the safety model; do not connect production application traffic as a Postgres superuser.
 - Source existence is a security property: preserve `raw_text`, `content_hash`, `archive_url`, and `statement_sources` offsets during migration and backup flows.
+- `POSTGRES_APP_USER_PASSWORD=dev_only_local_password` is for local development only. Treat any
+  environment that uses this default as compromised and rotate the credential immediately.

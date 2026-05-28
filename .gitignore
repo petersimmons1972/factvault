@@ -33,3 +33,6 @@ docker-compose.override.yml
 .local/
 bin/
 .agent-comms/bin/watchdog.log
+
+# operator-filled K8s Secret working copies (template lives in deploy/k8s/examples/)
+deploy/k8s/secret.yaml

@@ -21,6 +21,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: factvault-config
+            - secretRef:
+                name: factvault-db-credentials
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -34,6 +36,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: factvault-config
+            - secretRef:
+                name: factvault-db-credentials
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

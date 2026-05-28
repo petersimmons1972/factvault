@@ -361,10 +361,12 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- app_user role (non-superuser; owns all application queries)
+-- NOTE: The migration creates NOLOGIN only. The init layer (compose: docker-entrypoint-initdb.d/;
+-- K8s: init container from Secret) creates the role WITH LOGIN and the env-supplied password.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
-        CREATE ROLE app_user WITH LOGIN PASSWORD 'changeme_in_production';
+        CREATE ROLE app_user NOLOGIN;
     END IF;
 END
 $$;
