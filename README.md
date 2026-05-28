@@ -42,9 +42,32 @@ cp .env.example .env
 export FACTVAULT_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
 export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
 
+make setup
+```
+
+`make setup` starts Postgres and the embedder, waits for readiness, builds the binary, runs migrations, and runs `factvault init` (keygen, health checks, example load). The `init` command is idempotent — re-running it will not overwrite existing keys or reload data.
+
+The `doctor` command runs health checks — database reachability, RLS policies, Wayback API, embedding model, LLM endpoint, and a canary fact ingest end-to-end — and exits non-zero on any failure with a remediation command. Use `doctor --required-only` to exit 0 when only optional services (LLM, embedder, Wayback) are unavailable; the required checks (postgres, migrations, rls, canary) still gate the exit code.
+
+```
+postgres                     OK pgvector loaded
+migrations                   OK schema version 4
+rls                          OK cross-tenant row hidden
+canary                       OK assembled 312 bytes
+llm                          WARN connection refused  (optional)
+embedder                     OK http://localhost:8081/health
+wayback                      OK https://web.archive.org/
+```
+
+### Manual steps
+
+If you prefer to run each step explicitly:
+
+```bash
 docker compose up -d postgres embedder
 go build -o bin/factvault ./cmd/factvault
 ./bin/factvault migrate
+./bin/factvault init --dsn "$FACTVAULT_DATABASE_URL" --tenant "$FACTVAULT_DEV_TENANT_ID"
 
 # Load a bundled example and assemble its first dossier.
 ./bin/factvault example load ai-startup-tracking \
@@ -52,25 +75,6 @@ go build -o bin/factvault ./cmd/factvault
 ./bin/factvault worker dossier \
   --tenant "$FACTVAULT_DEV_TENANT_ID" \
   --limit 10
-
-# Verify the stack is ready
-./bin/factvault doctor \
-  --embedder-url http://localhost:8081 \
-  --llm-url http://localhost:11434/v1
-```
-
-Current supported Python versions for local development are 3.12 and 3.13. Python 3.14 is temporarily excluded because `pytest-asyncio` still emits an upstream deprecation warning there during test runs.
-
-The `doctor` command runs seven checks — database reachability, RLS policies, Wayback API, embedding model, LLM endpoint, and a canary fact ingest end-to-end — and exits non-zero on any failure with a remediation command.
-
-```
-[1/7] Database reachable ...................... OK
-[2/7] pgvector extension loaded .............. OK
-[3/7] RLS policies applied ................... OK
-[4/7] Wayback API reachable .................. OK
-[5/7] Embedding model loadable ............... OK (BGE-M3 / 1024d)
-[6/7] LLM endpoint responding ................ OK (http://localhost:11434/v1)
-[7/7] Canary fact ingest end-to-end .......... OK
 ```
 
 For the full five-minute path from clone to a JWT-authenticated dossier query, see [docs/getting-started.md](docs/getting-started.md). For day-two operations, see [docs/operator-guide.md](docs/operator-guide.md).
