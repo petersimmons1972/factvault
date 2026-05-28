@@ -10,9 +10,9 @@ import (
 )
 
 func TestRSSCollector_CollectParsesItems(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/rss+xml")
-		_, _ = w.Write([]byte(`<?xml version="1.0"?><rss><channel><title>Feed A</title><item><title>First</title><link>https://example.com/1</link><description>one</description><pubDate>Mon, 02 Jan 2006 15:04:05 MST</pubDate></item></channel></rss>`))
+		w.Write([]byte(`<?xml version="1.0"?><rss><channel><title>Feed A</title><item><title>First</title><link>https://example.com/1</link><description>one</description><pubDate>Mon, 02 Jan 2006 15:04:05 MST</pubDate></item></channel></rss>`)) //nolint:errcheck,gosec // test handler write, error not actionable
 	}))
 	defer srv.Close()
 
@@ -33,8 +33,8 @@ func TestRSSCollector_CollectParsesItems(t *testing.T) {
 }
 
 func TestRSSCollector_CollectRejectsInvalidFeed(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("not xml"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("not xml")) //nolint:errcheck,gosec // test handler write, error not actionable
 	}))
 	defer srv.Close()
 
@@ -47,7 +47,7 @@ func TestRSSCollector_CollectRejectsInvalidFeed(t *testing.T) {
 func TestLoadFeedConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "feeds.yaml")
-	if err := os.WriteFile(path, []byte("feeds:\n  - url: https://example.com/rss\n    tenant: t\n    topic: x\n    tags: [a,b]\n    interval: 10m\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("feeds:\n  - url: https://example.com/rss\n    tenant: t\n    topic: x\n    tags: [a,b]\n    interval: 10m\n"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 	cfg, err := LoadFeedConfig(path)

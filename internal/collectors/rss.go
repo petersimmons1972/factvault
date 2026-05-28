@@ -8,14 +8,17 @@ import (
 	"time"
 
 	"github.com/mmcdole/gofeed"
+
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
+// RSSCollector fetches and parses an RSS or Atom feed into Items.
 type RSSCollector struct {
 	Spec       FeedSpec
 	HTTPClient *http.Client
 }
 
+// Name returns the feed's configured name, or "rss" if none is set.
 func (c RSSCollector) Name() string {
 	if c.Spec.Name != "" {
 		return c.Spec.Name
@@ -23,6 +26,7 @@ func (c RSSCollector) Name() string {
 	return "rss"
 }
 
+// Collect fetches the configured feed URL and returns parsed Items.
 func (c RSSCollector) Collect(ctx context.Context) ([]Item, error) {
 	if c.Spec.URL == "" {
 		return nil, fmt.Errorf("rss collector: feed url required")
@@ -35,7 +39,7 @@ func (c RSSCollector) Collect(ctx context.Context) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // best-effort close on response body
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, fmt.Errorf("rss collector: status %d", resp.StatusCode)
 	}

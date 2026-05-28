@@ -32,7 +32,7 @@ func newBriefGenerateCmd(dsn, tenantID *string) *cobra.Command {
 		Use:   "generate",
 		Short: "Generate and persist a deterministic evidence brief",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			pool, tenant, err := openBriefPool(cmd, *dsn, *tenantID)
 			if err != nil {
 				return err
@@ -70,7 +70,7 @@ func newBriefListCmd(dsn, tenantID *string) *cobra.Command {
 		Use:   "list",
 		Short: "List persisted evidence briefs",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			pool, tenant, err := openBriefPool(cmd, *dsn, *tenantID)
 			if err != nil {
 				return err
@@ -131,7 +131,7 @@ func readBundle(inputPath string) (*assembler.Bundle, error) {
 	if inputPath == "" {
 		data, err = io.ReadAll(os.Stdin)
 	} else {
-		data, err = os.ReadFile(inputPath)
+		data, err = os.ReadFile(inputPath) //nolint:gosec // path provided by operator via --input flag, not from user-supplied HTTP input
 	}
 	if err != nil {
 		return nil, err
