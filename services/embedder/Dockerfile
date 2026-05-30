@@ -42,7 +42,9 @@ RUN python3.12 -m venv /opt/venv \
       "sentence-transformers>=3.3.1"
 
 # Remove pip/dev tools to trim the image; the venv is self-contained.
-RUN apk del python-3.12-dev py3.12-pip || true
+RUN if apk info python-3.12-dev >/dev/null 2>&1; then \
+      apk del python-3.12-dev py3.12-pip; \
+    fi
 
 # Pre-create the cache directory owned by the nonroot UID so a freshly
 # initialised Docker volume inherits the correct permissions.  Without this,
