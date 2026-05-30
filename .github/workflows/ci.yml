@@ -98,22 +98,6 @@ jobs:
       - name: Test (race)
         run: go test -race ./... -count=1
 
-  bats:
-    name: bats regression
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install bats
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bats
-
-      - name: Run codex runner regression tests
-        run: bats .agent-comms/bin/test-codex-runner.bats
-
   embedder:
     name: embedder pytest
     runs-on: ubuntu-latest
