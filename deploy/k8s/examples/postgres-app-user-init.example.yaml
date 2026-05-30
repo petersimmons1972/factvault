@@ -1,0 +1,116 @@
+# deploy/k8s/examples/postgres-app-user-init.example.yaml - EXAMPLE / TEMPLATE
+#
+# This file lives under examples/ so that a bare `kubectl apply -f deploy/k8s/`
+# (which does NOT recurse into subdirectories) cannot accidentally run a
+# bootstrap Job. Copy this file to a working manifest before applying it.
+#
+# Run this Job once per Postgres cluster, before the first factvault-migrate
+# Job. You can also adapt the container into a pre-migration init container if
+# your deployment controller owns the ordering.
+#
+# This example uses a separate bootstrap Secret so app pods do not receive
+# superuser credentials:
+#
+#   kubectl create secret generic factvault-postgres-bootstrap \
+#     --from-literal=POSTGRES_SUPERUSER_DATABASE_URL='postgres://postgres:<superuser-password>@postgres:5432/factvault?sslmode=require' \
+#     --from-literal=POSTGRES_APP_USER_PASSWORD='<app-user-password>' \
+#     -n factvault \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+# Match the DSN sslmode to your Postgres endpoint. Managed Postgres commonly
+# requires sslmode=require; an in-cluster test Postgres service may require
+# sslmode=disable instead.
+#
+# The POSTGRES_APP_USER_PASSWORD value MUST match the password embedded in the
+# FACTVAULT_DATABASE_URL value synced to factvault-db-credentials:
+#
+#   postgres://app_user:<app-user-password>@<host>:5432/factvault?sslmode=require
+#
+# Delete the factvault-postgres-bootstrap Secret after the Job succeeds unless
+# your operations process needs it for later password rotation.
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: factvault-postgres-app-user-init
+  namespace: factvault
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: factvault
+        app.kubernetes.io/component: postgres-app-user-init
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      containers:
+        - name: create-app-user
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          env:
+            - name: POSTGRES_SUPERUSER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: factvault-postgres-bootstrap
+                  key: POSTGRES_SUPERUSER_DATABASE_URL
+            - name: POSTGRES_APP_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: factvault-postgres-bootstrap
+                  key: POSTGRES_APP_USER_PASSWORD
+          command: ["/bin/sh", "-ceu"]
+          args:
+            - |
+              if [ -z "${POSTGRES_SUPERUSER_DATABASE_URL:-}" ]; then
+                echo "ERROR: POSTGRES_SUPERUSER_DATABASE_URL is not set." >&2
+                exit 1
+              fi
+              if [ -z "${POSTGRES_APP_USER_PASSWORD:-}" ]; then
+                echo "ERROR: POSTGRES_APP_USER_PASSWORD is not set." >&2
+                exit 1
+              fi
+
+              # Decide CREATE vs ALTER without exposing the password.
+              role_exists="$(
+                psql -v ON_ERROR_STOP=1 "$POSTGRES_SUPERUSER_DATABASE_URL" \
+                  -tAc "SELECT 1 FROM pg_roles WHERE rolname = 'app_user'"
+              )"
+
+              if [ "$role_exists" = "1" ]; then
+                sql_verb="ALTER"
+              else
+                sql_verb="CREATE"
+              fi
+
+              # IMPORTANT: use a single-quoted heredoc delimiter to suppress
+              # shell expansion. psql receives the literal SQL and substitutes
+              # :'password' at parse time.
+              #
+              # psql's :'password' form applies SQL string quoting: embedded
+              # single quotes, backslashes, and dollar signs are escaped before
+              # the password reaches Postgres.
+              #
+              # Depending on whether the role exists, the final SQL is one of:
+              #   CREATE ROLE app_user WITH LOGIN PASSWORD :'password'
+              #   ALTER ROLE app_user WITH LOGIN PASSWORD :'password'
+              #
+              # The superuser DSN and `psql -v password=$VALUE` value are
+              # briefly visible to `ps` inside the Job pod. That is why this
+              # manifest is documented to run once per cluster as a bootstrap
+              # step and why the bootstrap Secret should be deleted after
+              # success.
+              psql -v ON_ERROR_STOP=1 \
+                -v password="$POSTGRES_APP_USER_PASSWORD" \
+                -v sql_verb="$sql_verb" \
+                "$POSTGRES_SUPERUSER_DATABASE_URL" <<-'SQL'
+              	\set ON_ERROR_STOP on
+              	:sql_verb ROLE app_user WITH LOGIN PASSWORD :'password';
+              SQL
+
+              echo "app_user role: ${sql_verb} succeeded."

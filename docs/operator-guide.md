@@ -187,10 +187,30 @@ to converge.
 3. **Create `app_user` on first Postgres init.** The role must exist before migrations run. Options:
    - Mount an init script (equivalent to `deploy/initdb/01-create-app-user.sh`) via a ConfigMap into
      the Postgres pod's `docker-entrypoint-initdb.d/`.
-   - Run a pre-migration init container that executes:
-     ```sql
-     CREATE ROLE app_user WITH LOGIN PASSWORD '<password from secret>';
+   - Run the one-shot Job example at `deploy/k8s/examples/postgres-app-user-init.example.yaml`
+     before the first `factvault-migrate` Job. It uses a dedicated
+     `factvault-postgres-bootstrap` Secret for the superuser DSN and `POSTGRES_APP_USER_PASSWORD`,
+     then idempotently creates or alters `app_user` using the same safe SQL-string `psql` quoting
+     pattern as the compose init script. Copy it to a working file, run it, verify completion, and
+     delete the bootstrap Secret after success:
+     ```bash
+     kubectl create secret generic factvault-postgres-bootstrap \
+       --from-literal=POSTGRES_SUPERUSER_DATABASE_URL='postgres://postgres:<superuser-password>@<host>:5432/factvault?sslmode=require' \
+       --from-literal=POSTGRES_APP_USER_PASSWORD='<same password used in FACTVAULT_DATABASE_URL>' \
+       -n factvault \
+       --dry-run=client -o yaml | kubectl apply -f -
+
+     cp deploy/k8s/examples/postgres-app-user-init.example.yaml /tmp/factvault-postgres-app-user-init.yaml
+     kubectl apply -f /tmp/factvault-postgres-app-user-init.yaml
+     kubectl wait --for=condition=complete job/factvault-postgres-app-user-init -n factvault --timeout=120s
+     kubectl logs job/factvault-postgres-app-user-init -n factvault
+     kubectl delete job factvault-postgres-app-user-init -n factvault
+     kubectl delete secret factvault-postgres-bootstrap -n factvault
      ```
+     Replace `<host>` and `sslmode` to match your Postgres TLS mode. Managed Postgres commonly uses
+     `sslmode=require`; in-cluster test Postgres may use `sslmode=disable`. The superuser DSN and
+     `POSTGRES_APP_USER_PASSWORD` are visible to processes inside the short-lived Job pod, so keep
+     this as a bootstrap-only step.
    - Use your managed Postgres provider's user management API (e.g. Cloud SQL IAM auth, RDS Users).
 
 4. **All Deployments, Jobs, and CronJobs** reference both `factvault-config` (non-secret config) and
