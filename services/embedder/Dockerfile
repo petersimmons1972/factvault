@@ -39,7 +39,7 @@ RUN python3.12 -m venv /opt/venv \
  && /opt/venv/bin/pip install --no-cache-dir \
       "fastapi>=0.111.0" \
       "uvicorn>=0.30.0" \
-      "sentence-transformers>=3.3.1"
+      "sentence-transformers>=3.3.1,<6"
 
 # Remove pip/dev tools to trim the image; the venv is self-contained.
 RUN apk del python-3.12-dev py3.12-pip || true
