@@ -289,10 +289,7 @@ func nextRSSPollWait(schedules []rssSchedule, lastPolled map[int]time.Time, now 
 		if !ok {
 			return 0
 		}
-		wait := s.interval - now.Sub(last)
-		if wait < 0 {
-			wait = 0
-		}
+		wait := max(s.interval-now.Sub(last), 0)
 		if minWait < 0 || wait < minWait {
 			minWait = wait
 		}

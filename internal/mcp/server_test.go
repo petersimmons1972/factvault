@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/petersimmons1972/factvault/internal/assembler"
 	"github.com/petersimmons1972/factvault/internal/auth"
 	"github.com/petersimmons1972/factvault/internal/testdb"
@@ -60,7 +61,6 @@ func TestEntityLookupUsesAuthorizedTenant(t *testing.T) {
 	if !errors.Is(err, assembler.ErrEntityNotFound) {
 		t.Fatalf("expected entity not found error, got %T %v", err, err)
 	}
-
 }
 
 func mustPublicKey(t *testing.T) *rsa.PublicKey {

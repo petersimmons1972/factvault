@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -50,7 +51,7 @@ func TestVerifyExpiredToken(t *testing.T) {
 		t.Fatalf("SignRS256: %v", err)
 	}
 	_, err = (Verifier{PublicKey: pub, Now: func() time.Time { return time.Unix(3, 0) }}).Verify(token)
-	if err != ErrExpiredToken {
+	if !errors.Is(err, ErrExpiredToken) {
 		t.Fatalf("err=%v want %v", err, ErrExpiredToken)
 	}
 }
@@ -72,7 +73,7 @@ func TestVerifyRejectsMissingOrZeroExp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignRS256: %v", err)
 	}
-	if _, err := (Verifier{PublicKey: pub}).Verify(token); err != ErrExpiredToken {
+	if _, err := (Verifier{PublicKey: pub}).Verify(token); !errors.Is(err, ErrExpiredToken) {
 		t.Fatalf("err=%v want %v", err, ErrExpiredToken)
 	}
 }

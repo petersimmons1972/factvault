@@ -271,7 +271,7 @@ func TestFromCodexToClaudeRoundTrip(t *testing.T) {
 
 func TestQueueDepth(t *testing.T) {
 	s := newStore(t)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		m := mkMsg(t, KindNudge, AgentClaude, AgentCodex)
 		if err := s.Send(m); err != nil {
 			t.Fatal(err)

@@ -21,7 +21,6 @@ func TestValidatePublicHTTPURL(t *testing.T) {
 		{name: "private", rawURL: "http://10.0.0.1/", wantErr: true},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := ValidatePublicHTTPURL(context.Background(), tc.rawURL)
@@ -48,7 +47,6 @@ func TestValidateHTTPURLAllowPrivate(t *testing.T) {
 		{name: "unsupported scheme still blocked", rawURL: "file:///etc/passwd", wantErr: true},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := ValidateHTTPURL(context.Background(), tc.rawURL, true)

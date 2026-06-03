@@ -212,3 +212,99 @@ func TestRunAll_SetsRequiredField(t *testing.T) {
 		}
 	}
 }
+
+// TestNormThresholdFor verifies that BGE/E5 model names get the tight threshold
+// and unknown models get the loose (non-zero-only) threshold.
+func TestNormThresholdFor(t *testing.T) {
+	cases := []struct {
+		model         string
+		wantThreshold float64
+		wantLabel     string
+	}{
+		{"BAAI/bge-m3", 0.5, "BGE/E5 normalised"},
+		{"bge-large-en", 0.5, "BGE/E5 normalised"},
+		{"intfloat/e5-large-v2", 0.5, "BGE/E5 normalised"},
+		{"E5-small", 0.5, "BGE/E5 normalised"},
+		{"sentence-transformers/all-MiniLM-L6-v2", 1e-9, "non-zero"},
+		{"nomic-embed-text", 1e-9, "non-zero"},
+		{"", 1e-9, "non-zero"},
+	}
+	for _, tc := range cases {
+		thresh, label := normThresholdFor(tc.model)
+		if thresh != tc.wantThreshold {
+			t.Errorf("normThresholdFor(%q): threshold=%.6g, want %.6g", tc.model, thresh, tc.wantThreshold)
+		}
+		if label != tc.wantLabel {
+			t.Errorf("normThresholdFor(%q): label=%q, want %q", tc.model, label, tc.wantLabel)
+		}
+	}
+}
+
+// TestCheckEmbedder_NonBGEModelPassesWithLowNorm verifies that a non-BGE model
+// returning a low-but-nonzero 1024-dim vector is accepted (loose threshold).
+func TestCheckEmbedder_NonBGEModelPassesWithLowNorm(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/health", "/healthz":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"ok"}`)
+		case "/info":
+			// Non-BGE, non-E5 model name.
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"model":"nomic-embed-text","dim":1024}`)
+		case "/embed":
+			// Very small but non-zero norm — fine for non-normalised models.
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"vectors":[[0.000001`)
+			for i := 1; i < 1024; i++ {
+				fmt.Fprint(w, `,0.0`)
+			}
+			fmt.Fprint(w, `]]}`)
+		default:
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"ok"}`)
+		}
+	}))
+	defer server.Close()
+
+	cfg := Config{EmbedderURL: server.URL, HTTPClient: server.Client()}
+	res := CheckEmbedder(context.Background(), cfg)
+	if !res.OK {
+		t.Fatalf("expected CheckEmbedder to pass for non-BGE model with low-but-nonzero norm; got OK=false, detail=%q", res.Detail)
+	}
+}
+
+// TestCheckEmbedder_BGEModelFailsWithLowNorm verifies that a BGE model returning
+// a near-zero vector (norm=0.01, below the 0.5 threshold) is rejected.
+func TestCheckEmbedder_BGEModelFailsWithLowNorm(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/health", "/healthz":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"ok"}`)
+		case "/info":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"model":"BAAI/bge-m3","dim":1024}`)
+		case "/embed":
+			// norm = 0.01 — non-zero but well below the BGE threshold of 0.5.
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"vectors":[[0.01`)
+			for i := 1; i < 1024; i++ {
+				fmt.Fprint(w, `,0.0`)
+			}
+			fmt.Fprint(w, `]]}`)
+		default:
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"ok"}`)
+		}
+	}))
+	defer server.Close()
+
+	cfg := Config{EmbedderURL: server.URL, HTTPClient: server.Client()}
+	res := CheckEmbedder(context.Background(), cfg)
+	if res.OK {
+		t.Fatalf("expected CheckEmbedder to fail for BGE model with norm=0.01; got OK=true, detail=%q", res.Detail)
+	}
+}
