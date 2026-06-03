@@ -43,7 +43,7 @@ func newDoctorCmd() *cobra.Command {
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "%-28s %s %s\n", result.Name, status, result.Detail)
 				// Suppress remedy lines for optional failures when --required-only is set.
-				if !result.OK && result.Remedy != "" && !(requiredOnly && !result.Required) {
+				if !result.OK && result.Remedy != "" && (!requiredOnly || result.Required) {
 					fmt.Fprintf(cmd.OutOrStdout(), "  remedy: %s\n", result.Remedy)
 				}
 			}

@@ -39,8 +39,10 @@ type checkFunc func(context.Context, Config) CheckResult
 // requiredChecks are the checks that must pass for the system to function.
 // Optional checks (LLM, embedder, Wayback) are run separately and do not
 // block a healthy status when --required-only is used.
-var requiredChecks = []checkFunc{CheckPostgres, CheckMigrations, CheckRLS, CheckCanary}
-var optionalChecks = []checkFunc{CheckLLM, CheckEmbedder, CheckWayback}
+var (
+	requiredChecks = []checkFunc{CheckPostgres, CheckMigrations, CheckRLS, CheckCanary}
+	optionalChecks = []checkFunc{CheckLLM, CheckEmbedder, CheckWayback}
+)
 
 func RunAll(ctx context.Context, cfg Config) []CheckResult {
 	results := make([]CheckResult, 0, len(requiredChecks)+len(optionalChecks))

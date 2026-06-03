@@ -21,7 +21,7 @@ func TestNewULIDFormat(t *testing.T) {
 func TestNewULIDUniqueness(t *testing.T) {
 	seen := make(map[string]struct{})
 	now := time.Now()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		id, err := NewULID(now)
 		if err != nil {
 			t.Fatalf("NewULID: %v", err)

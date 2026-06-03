@@ -56,12 +56,12 @@ type BriefGenerator struct{}
 // briefDoc is the fixed-field struct that becomes the JSON payload.
 // Using a named struct guarantees stable key ordering in encoding/json output.
 type briefDoc struct {
-	KeyClaims    []keyClaim    `json:"key_claims"`
-	Citations    []citation    `json:"citations"`
-	Conflicts    []conflict    `json:"conflicts"`
-	SourceHealth []sourceEntry `json:"source_health"`
-	EvidenceGaps []evidenceGap `json:"evidence_gaps"`
-	WriterPrompts []string     `json:"writer_prompts"`
+	KeyClaims     []keyClaim    `json:"key_claims"`
+	Citations     []citation    `json:"citations"`
+	Conflicts     []conflict    `json:"conflicts"`
+	SourceHealth  []sourceEntry `json:"source_health"`
+	EvidenceGaps  []evidenceGap `json:"evidence_gaps"`
+	WriterPrompts []string      `json:"writer_prompts"`
 }
 
 type keyClaim struct {
@@ -99,11 +99,11 @@ type evidenceGap struct {
 // The output is stable across repeated calls for the same input.
 func (g BriefGenerator) Generate(b *assembler.Bundle) ([]byte, error) {
 	doc := briefDoc{
-		KeyClaims:    extractKeyClaims(b),
-		Citations:    extractCitations(b),
-		Conflicts:    detectConflicts(b),
-		SourceHealth: buildSourceHealth(b),
-		EvidenceGaps: findEvidenceGaps(b),
+		KeyClaims:     extractKeyClaims(b),
+		Citations:     extractCitations(b),
+		Conflicts:     detectConflicts(b),
+		SourceHealth:  buildSourceHealth(b),
+		EvidenceGaps:  findEvidenceGaps(b),
 		WriterPrompts: deriveWriterPrompts(b),
 	}
 	return json.Marshal(doc)

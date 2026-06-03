@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/petersimmons1972/factvault/internal/collectors"
 	"github.com/petersimmons1972/factvault/internal/netx"
 )

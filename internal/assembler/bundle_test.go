@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
 	"github.com/petersimmons1972/factvault/internal/testdb"
 )
 
@@ -127,11 +128,11 @@ func TestAssembleInvalidDepth(t *testing.T) {
 	for _, tt := range tests {
 		_, err := Assemble(ctx, tx, []string{entityID}, tt.depth, tenantID)
 		if tt.valid {
-			if err == ErrInvalidDepth {
+			if errors.Is(err, ErrInvalidDepth) {
 				t.Errorf("depth %d should be valid, got ErrInvalidDepth", tt.depth)
 			}
 		} else {
-			if err != ErrInvalidDepth {
+			if !errors.Is(err, ErrInvalidDepth) {
 				t.Errorf("depth %d should be invalid, expected ErrInvalidDepth, got %v", tt.depth, err)
 			}
 		}
@@ -158,7 +159,7 @@ func TestAssembleEmptyEntityList(t *testing.T) {
 
 	_, err = Assemble(ctx, tx, []string{}, 0, tenantID)
 
-	if err != ErrInvalidEntityCount {
+	if !errors.Is(err, ErrInvalidEntityCount) {
 		t.Errorf("expected ErrInvalidEntityCount, got %v", err)
 	}
 }

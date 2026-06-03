@@ -126,7 +126,7 @@ func Setup(ctx context.Context, t *testing.T) *pgxpool.Pool {
 
 func migrationsPath() string {
 	cwd, _ := os.Getwd()
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		candidate := filepath.Join(cwd, "migrations")
 		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
 			return candidate
@@ -195,7 +195,7 @@ func dockerMappedPort(containerName, containerPort string) (string, error) {
 
 func retry(attempts int, delay time.Duration, fn func() error) error {
 	var lastErr error
-	for i := 0; i < attempts; i++ {
+	for range attempts {
 		if err := fn(); err == nil {
 			return nil
 		} else {
