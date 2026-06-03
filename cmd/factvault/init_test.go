@@ -25,7 +25,7 @@ func TestInitKeys_WritesKeyFiles(t *testing.T) {
 		t.Fatalf("public.pem is empty or missing")
 	}
 	// Validate PEM blocks are decodable.
-	privData, err := os.ReadFile(privPath)
+	privData, err := os.ReadFile(filepath.Clean(privPath)) //nolint:gosec // G304: path is filepath.Join(t.TempDir(),...), not user input
 	if err != nil {
 		t.Fatalf("read private.pem: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestInitKeys_WritesKeyFiles(t *testing.T) {
 	if block == nil {
 		t.Fatal("private.pem: invalid PEM")
 	}
-	pubData, err := os.ReadFile(pubPath)
+	pubData, err := os.ReadFile(filepath.Clean(pubPath)) //nolint:gosec // G304: path is filepath.Join(t.TempDir(),...), not user input
 	if err != nil {
 		t.Fatalf("read public.pem: %v", err)
 	}
