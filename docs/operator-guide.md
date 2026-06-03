@@ -237,6 +237,102 @@ rotate the credential — `CREATE ROLE ... IF NOT EXISTS` is a no-op when the ro
 role; dropping it requires re-running the GRANTs, which the migration does not idempotently
 re-apply on schema-current databases.
 
+### Managed Postgres app_user requirements
+
+When using a managed Postgres provider (Cloud SQL, RDS, Azure Database, Neon, etc.), the `app_user`
+role must be pre-created with the following attributes before migrations run.
+
+**Required role attributes**
+
+| Attribute     | Value        | Reason                                              |
+|---------------|--------------|-----------------------------------------------------|
+| LOGIN         | yes          | The application must authenticate as this role.     |
+| NOSUPERUSER   | yes          | Principle of least privilege.                       |
+| NOCREATEDB    | yes          | The application never creates databases.            |
+
+**Required grants** (run as a superuser or owner after database/schema creation):
+
+```sql
+GRANT CONNECT ON DATABASE factvault TO app_user;
+GRANT USAGE ON SCHEMA public TO app_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
+-- Repeat the last line after each new migration that adds tables, or set as default:
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+```
+
+**Password / DSN sync check**
+
+Verify the Kubernetes Secret matches the database password:
+
+```bash
+# 1. Decode the current DSN from the Secret
+kubectl get secret factvault-db-credentials -n factvault \
+    -o jsonpath='{.data.FACTVAULT_DATABASE_URL}' | base64 -d
+
+# 2. Test connectivity with that DSN (run from a pod with psql, or use kubectl exec)
+psql "$(kubectl get secret factvault-db-credentials -n factvault \
+    -o jsonpath='{.data.FACTVAULT_DATABASE_URL}' | base64 -d)" -c '\conninfo'
+
+# 3. If the connection fails, the Secret and DB password are out of sync.
+#    Rotate via your managed provider console, update Infisical, then
+#    re-sync ExternalSecrets and restart affected Deployments.
+```
+
+### GitOps ordering: app_user bootstrap before migrations
+
+The `app_user` Postgres role **must exist before the migration Job runs**. Migrations apply
+`GRANT` statements that reference `app_user`; if the role is absent those statements fail and
+the migration is left in a broken state.
+
+**Dependency chain**
+
+```
+app_user bootstrap Job → MUST complete before factvault-migrate starts
+```
+
+**Concrete implementation: initContainer in the migration Job**
+
+Add an `initContainer` to `deploy/k8s/migrate-job.yaml` that gates execution on two conditions:
+
+1. Postgres is accepting connections (`pg_isready`).
+2. The `app_user` role exists (`SELECT 1 FROM pg_roles WHERE rolname='app_user'`).
+
+```yaml
+initContainers:
+  - name: wait-for-app-user
+    image: postgres:16-alpine          # lightweight; only needs psql / pg_isready
+    envFrom:
+      - secretRef:
+          name: factvault-db-credentials
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        echo "Waiting for Postgres to accept connections..."
+        until pg_isready -d "$FACTVAULT_DATABASE_URL" -q; do
+          echo "Postgres not ready — sleeping 2s"
+          sleep 2
+        done
+        echo "Postgres ready. Checking for app_user role..."
+        until psql "$FACTVAULT_DATABASE_URL" -Atc \
+          "SELECT 1 FROM pg_roles WHERE rolname='app_user'" | grep -q 1; do
+          echo "app_user role not found — sleeping 2s"
+          sleep 2
+        done
+        echo "app_user exists. Proceeding with migration."
+```
+
+This pattern is idempotent and safe to ship before the managed Postgres bootstrap automation is
+in place: the initContainer loops until the precondition is satisfied, so the migration Job
+will not start until the operator (or an upstream bootstrap Job) has created the role.
+
+For fully automated GitOps pipelines, schedule a short-lived `app_user-bootstrap` Job with an
+Argo CD or Flux dependency hook that runs *before* the `factvault-migrate` Job. The
+`wait-for-app-user` initContainer above provides a belt-and-suspenders guard for race
+conditions even when the bootstrap Job has completed successfully.
+
 ## Security Notes
 
 - Keep private JWT keys out of git; use `.local/`, Docker secrets, Kubernetes secrets, or a real secret manager.
