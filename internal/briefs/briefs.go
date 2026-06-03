@@ -7,6 +7,7 @@ package briefs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -281,7 +282,7 @@ func (s Service) tenantTx(ctx context.Context, tenantID string) (pgx.Tx, error) 
 	}
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
 		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-			return nil, fmt.Errorf("briefs: rollback: %w", rollbackErr)
+			return nil, errors.Join(fmt.Errorf("briefs: set tenant_id: %w", err), fmt.Errorf("briefs: rollback: %w", rollbackErr))
 		}
 		return nil, fmt.Errorf("briefs: set tenant_id: %w", err)
 	}

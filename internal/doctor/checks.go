@@ -177,7 +177,7 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 			resp, err := client.Do(req)
 			if err == nil {
 				if closeErr := resp.Body.Close(); closeErr != nil {
-					fmt.Fprintf(os.Stderr, "close: %v\n", err)
+					fmt.Fprintf(os.Stderr, "close: %v\n", closeErr)
 				}
 				if resp.StatusCode == http.StatusOK {
 					healthOK = true
