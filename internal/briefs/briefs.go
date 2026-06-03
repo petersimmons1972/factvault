@@ -48,6 +48,10 @@ type Brief struct {
 	SourceKind SourceKind
 	EntityID   *string
 	Payload    []byte // raw brief JSON
+	// BundleHash is an optional content-addressed hash of the assembled bundle.
+	// Populated when the brief is derived from a deduplicated bundle run.
+	// NULL means the brief was stored before bundle dedup was introduced (migration 00004).
+	BundleHash *string
 }
 
 // BriefGenerator derives a deterministic JSON brief from a Bundle.
