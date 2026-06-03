@@ -26,7 +26,11 @@ func TestDossierRouteRequiresAndAcceptsJWT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin tx: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			t.Logf("rollback (expected after commit): %v", err)
+		}
+	}()
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
 		t.Fatalf("set tenant: %v", err)
 	}
@@ -80,7 +84,11 @@ func TestBriefRoutesTenantScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin tx: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			t.Logf("rollback (expected after commit): %v", err)
+		}
+	}()
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
 		t.Fatalf("set tenant: %v", err)
 	}
@@ -95,8 +103,14 @@ func TestBriefRoutesTenantScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keys: %v", err)
 	}
-	priv, _ := auth.ParsePrivateKeyPEM(privPEM)
-	pub, _ := auth.ParsePublicKeyPEM(pubPEM)
+	priv, err := auth.ParsePrivateKeyPEM(privPEM)
+	if err != nil {
+		t.Fatalf("parse private key: %v", err)
+	}
+	pub, err := auth.ParsePublicKeyPEM(pubPEM)
+	if err != nil {
+		t.Fatalf("parse public key: %v", err)
+	}
 	token, err := auth.SignRS256(priv, auth.Claims{TenantID: tenantID, Subject: "tester", IssuedAt: time.Now().Unix(), ExpiresAt: time.Now().Add(time.Hour).Unix()})
 	if err != nil {
 		t.Fatalf("token: %v", err)

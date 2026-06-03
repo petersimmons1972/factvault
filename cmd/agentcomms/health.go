@@ -16,18 +16,33 @@ func newHealthCmd() *cobra.Command {
 		Short: "Report bus health as JSON (schema_valid, queue depths, dead-letter count)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			root, _ := cmd.Flags().GetString("root")
+			root, err := cmd.Flags().GetString("root")
+			if err != nil {
+				return err
+			}
 			store, err := agentcomms.NewStore(root)
 			if err != nil {
 				return err
 			}
-			claudeDepth, _ := store.QueueDepth(agentcomms.AgentClaude)
-			codexDepth, _ := store.QueueDepth(agentcomms.AgentCodex)
+			claudeDepth, err := store.QueueDepth(agentcomms.AgentClaude)
+			if err != nil {
+				return err
+			}
+			codexDepth, err := store.QueueDepth(agentcomms.AgentCodex)
+			if err != nil {
+				return err
+			}
 
 			// Run a stateless read on each inbox to surface dead-letter routing
 			// counts and validate schema on every undrained file.
-			claudeRes, _ := store.Read(agentcomms.ReadFilter{Inbox: agentcomms.AgentClaude})
-			codexRes, _ := store.Read(agentcomms.ReadFilter{Inbox: agentcomms.AgentCodex})
+			claudeRes, err := store.Read(agentcomms.ReadFilter{Inbox: agentcomms.AgentClaude})
+			if err != nil {
+				return err
+			}
+			codexRes, err := store.Read(agentcomms.ReadFilter{Inbox: agentcomms.AgentCodex})
+			if err != nil {
+				return err
+			}
 
 			out := map[string]any{
 				"schema_valid": (claudeRes != nil && codexRes != nil &&

@@ -26,7 +26,9 @@ func newAuthKeysCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\n%s", priv, pub)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\n%s", priv, pub); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -56,7 +58,9 @@ func newAuthTokenCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), token)
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), token); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -89,7 +93,9 @@ func newAuthVerifyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "tenant_id=%s sub=%s exp=%d\n", claims.TenantID, claims.Subject, claims.ExpiresAt)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "tenant_id=%s sub=%s exp=%d\n", claims.TenantID, claims.Subject, claims.ExpiresAt); err != nil {
+				return err
+			}
 			return nil
 		},
 	}

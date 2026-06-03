@@ -25,12 +25,18 @@ func TestInitKeys_WritesKeyFiles(t *testing.T) {
 		t.Fatalf("public.pem is empty or missing")
 	}
 	// Validate PEM blocks are decodable.
-	privData, _ := os.ReadFile(privPath)
+	privData, err := os.ReadFile(privPath)
+	if err != nil {
+		t.Fatalf("read private.pem: %v", err)
+	}
 	block, _ := pem.Decode(privData)
 	if block == nil {
 		t.Fatal("private.pem: invalid PEM")
 	}
-	pubData, _ := os.ReadFile(pubPath)
+	pubData, err := os.ReadFile(pubPath)
+	if err != nil {
+		t.Fatalf("read public.pem: %v", err)
+	}
 	block, _ = pem.Decode(pubData)
 	if block == nil {
 		t.Fatal("public.pem: invalid PEM")
@@ -76,11 +82,19 @@ func TestInitCmd_KeygenOutputMessages(t *testing.T) {
 		var buf bytes.Buffer
 		cmd.SetOut(&buf)
 		// Invalid DSN — command will fail at doctor, but keygen runs first.
-		_ = cmd.Flags().Set("dsn", "postgres://invalid:5432/nodb")
-		_ = cmd.Flags().Set("key-dir", dir)
-		_ = cmd.Flags().Set("skip-example", "true")
+		if err := cmd.Flags().Set("dsn", "postgres://invalid:5432/nodb"); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Flags().Set("key-dir", dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Flags().Set("skip-example", "true"); err != nil {
+			t.Fatal(err)
+		}
 		// RunE will error; we only care about what was printed before the error.
-		_ = cmd.Execute()
+		if err := cmd.Execute(); err == nil {
+			t.Log("cmd.Execute unexpectedly succeeded")
+		}
 		out := buf.String()
 		if !strings.Contains(out, "Generating JWT keys") {
 			t.Errorf("first run: expected output to contain 'Generating JWT keys', got:\n%s", out)
@@ -92,10 +106,18 @@ func TestInitCmd_KeygenOutputMessages(t *testing.T) {
 		// Pre-populate key files so initKeys is a no-op.
 		cmd1 := newInitCmd()
 		cmd1.SetOut(&bytes.Buffer{})
-		_ = cmd1.Flags().Set("dsn", "postgres://invalid:5432/nodb")
-		_ = cmd1.Flags().Set("key-dir", dir)
-		_ = cmd1.Flags().Set("skip-example", "true")
-		_ = cmd1.Execute()
+		if err := cmd1.Flags().Set("dsn", "postgres://invalid:5432/nodb"); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd1.Flags().Set("key-dir", dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd1.Flags().Set("skip-example", "true"); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd1.Execute(); err == nil {
+			t.Log("cmd1.Execute unexpectedly succeeded")
+		}
 		// Keys should now exist; confirm before second run.
 		privPath := filepath.Join(dir, "private.pem")
 		pubPath := filepath.Join(dir, "public.pem")
@@ -107,10 +129,18 @@ func TestInitCmd_KeygenOutputMessages(t *testing.T) {
 		cmd2 := newInitCmd()
 		var buf bytes.Buffer
 		cmd2.SetOut(&buf)
-		_ = cmd2.Flags().Set("dsn", "postgres://invalid:5432/nodb")
-		_ = cmd2.Flags().Set("key-dir", dir)
-		_ = cmd2.Flags().Set("skip-example", "true")
-		_ = cmd2.Execute()
+		if err := cmd2.Flags().Set("dsn", "postgres://invalid:5432/nodb"); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd2.Flags().Set("key-dir", dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd2.Flags().Set("skip-example", "true"); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd2.Execute(); err == nil {
+			t.Log("cmd2.Execute unexpectedly succeeded")
+		}
 		out := buf.String()
 		if strings.Contains(out, "Generating JWT keys") {
 			t.Errorf("second run: output must NOT contain 'Generating JWT keys' on skip path, got:\n%s", out)

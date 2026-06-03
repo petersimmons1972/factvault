@@ -92,7 +92,10 @@ func TestDeadLetterOnMalformed(t *testing.T) {
 	if res.DeadLetter != 1 {
 		t.Fatalf("DeadLetter=%d, want 1", res.DeadLetter)
 	}
-	dlEntries, _ := os.ReadDir(filepath.Join(s.Root, "dead-letter"))
+	dlEntries, err := os.ReadDir(filepath.Join(s.Root, "dead-letter"))
+	if err != nil {
+		t.Fatalf("ReadDir dead-letter: %v", err)
+	}
 	if len(dlEntries) != 2 { // file + sidecar
 		t.Fatalf("dead-letter entries: %d, want 2", len(dlEntries))
 	}
@@ -143,11 +146,17 @@ func TestReadFilterByKindAndFrom(t *testing.T) {
 	if err := s.Send(b); err != nil {
 		t.Fatal(err)
 	}
-	res, _ := s.Read(ReadFilter{Inbox: AgentCodex, Kind: KindAck})
+	res, err := s.Read(ReadFilter{Inbox: AgentCodex, Kind: KindAck})
+	if err != nil {
+		t.Fatalf("Read kind filter: %v", err)
+	}
 	if len(res.Messages) != 1 || res.Messages[0].Kind != KindAck {
 		t.Fatalf("kind filter failed: %+v", res.Messages)
 	}
-	res, _ = s.Read(ReadFilter{Inbox: AgentCodex, From: AgentClaude})
+	res, err = s.Read(ReadFilter{Inbox: AgentCodex, From: AgentClaude})
+	if err != nil {
+		t.Fatalf("Read from filter: %v", err)
+	}
 	if len(res.Messages) != 2 {
 		t.Fatalf("from filter: got %d", len(res.Messages))
 	}
@@ -162,11 +171,17 @@ func TestArchive(t *testing.T) {
 	if err := s.Archive(m.ID, "handled"); err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
-	res, _ := s.Read(ReadFilter{Inbox: AgentCodex})
+	res, err := s.Read(ReadFilter{Inbox: AgentCodex})
+	if err != nil {
+		t.Fatalf("Read after archive: %v", err)
+	}
 	if len(res.Messages) != 0 {
 		t.Fatalf("after archive, inbox has %d", len(res.Messages))
 	}
-	processed, _ := os.ReadDir(filepath.Join(s.Root, "processed"))
+	processed, err := os.ReadDir(filepath.Join(s.Root, "processed"))
+	if err != nil {
+		t.Fatalf("ReadDir processed: %v", err)
+	}
 	if len(processed) != 1 {
 		t.Fatalf("processed dir count: %d", len(processed))
 	}
@@ -190,7 +205,10 @@ func TestArchiveRejectsPartialMessageID(t *testing.T) {
 	if len(res.Messages) != 1 {
 		t.Fatalf("expected inbox to remain unchanged, got %d messages", len(res.Messages))
 	}
-	processed, _ := os.ReadDir(filepath.Join(s.Root, "processed"))
+	processed, err := os.ReadDir(filepath.Join(s.Root, "processed"))
+	if err != nil {
+		t.Fatalf("ReadDir processed: %v", err)
+	}
 	if len(processed) != 0 {
 		t.Fatalf("processed dir count: %d, want 0", len(processed))
 	}
@@ -223,7 +241,10 @@ func TestArchiveRejectsAmbiguousPrefixAcrossMessages(t *testing.T) {
 	if len(res.Messages) != 2 {
 		t.Fatalf("expected both messages to remain, got %d", len(res.Messages))
 	}
-	processed, _ := os.ReadDir(filepath.Join(s.Root, "processed"))
+	processed, err := os.ReadDir(filepath.Join(s.Root, "processed"))
+	if err != nil {
+		t.Fatalf("ReadDir processed: %v", err)
+	}
 	if len(processed) != 0 {
 		t.Fatalf("processed dir count: %d, want 0", len(processed))
 	}
@@ -236,7 +257,10 @@ func TestAtomicWriteNoTmpLeak(t *testing.T) {
 	if err := s.Send(m); err != nil {
 		t.Fatal(err)
 	}
-	entries, _ := os.ReadDir(s.inboxDir(AgentCodex))
+	entries, err := os.ReadDir(s.inboxDir(AgentCodex))
+	if err != nil {
+		t.Fatalf("ReadDir inbox: %v", err)
+	}
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".tmp") {
 			t.Fatalf("leftover .tmp file: %s", e.Name())
@@ -260,7 +284,10 @@ func TestFromCodexToClaudeRoundTrip(t *testing.T) {
 	if err := s.Send(m); err != nil {
 		t.Fatal(err)
 	}
-	res, _ := s.Read(ReadFilter{Inbox: AgentClaude})
+	res, err := s.Read(ReadFilter{Inbox: AgentClaude})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
 	if len(res.Messages) != 1 {
 		t.Fatalf("got %d, want 1", len(res.Messages))
 	}
@@ -294,11 +321,17 @@ func TestSendWritesValidSchema(t *testing.T) {
 	if err := s.Send(m); err != nil {
 		t.Fatal(err)
 	}
-	entries, _ := os.ReadDir(s.inboxDir(AgentCodex))
+	entries, err := os.ReadDir(s.inboxDir(AgentCodex))
+	if err != nil {
+		t.Fatalf("ReadDir inbox: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("entries=%d", len(entries))
 	}
-	data, _ := os.ReadFile(filepath.Join(s.inboxDir(AgentCodex), entries[0].Name()))
+	data, err := os.ReadFile(filepath.Join(s.inboxDir(AgentCodex), entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("unmarshal: %v", err)

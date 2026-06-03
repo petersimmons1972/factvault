@@ -81,7 +81,11 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(txCtx)
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil {
+			// Expected after commit; ignore.
+		}
+	}()
 
 	logger := p.logger()
 	rows, err := tx.Query(txCtx, `

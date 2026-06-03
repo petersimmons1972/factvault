@@ -79,7 +79,11 @@ func StartContainer() {
 			startErr = err
 			return
 		}
-		defer sqlDB.Close()
+		defer func() {
+			if err := sqlDB.Close(); err != nil {
+				// Best-effort close of migration DB connection.
+			}
+		}()
 
 		if err := goose.SetDialect("postgres"); err != nil {
 			startErr = err
@@ -98,7 +102,9 @@ func StartContainer() {
 
 func StopContainer() {
 	if contName != "" {
-		_ = runDockerCommand("rm", "-f", contName)
+		if err := runDockerCommand("rm", "-f", contName); err != nil {
+			// Best-effort container removal; ignore error.
+		}
 		contName = ""
 	}
 }
@@ -125,7 +131,10 @@ func Setup(ctx context.Context, t *testing.T) *pgxpool.Pool {
 }
 
 func migrationsPath() string {
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
 	for range 8 {
 		candidate := filepath.Join(cwd, "migrations")
 		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
@@ -143,12 +152,18 @@ func testDBStartupLock() (func(), error) {
 		return nil, fmt.Errorf("open testdb startup lock: %w", err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		_ = f.Close()
+		if closeErr := f.Close(); closeErr != nil {
+			// Best-effort close on error path.
+		}
 		return nil, fmt.Errorf("lock testdb startup: %w", err)
 	}
 	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
+			// Best-effort unlock; ignore error.
+		}
+		if err := f.Close(); err != nil {
+			// Best-effort close; ignore error.
+		}
 	}, nil
 }
 

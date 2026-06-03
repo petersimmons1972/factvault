@@ -23,7 +23,10 @@ func newReadCmd() *cobra.Command {
 			if unread {
 				return fmt.Errorf("--unread is not implemented yet")
 			}
-			root, _ := cmd.Flags().GetString("root")
+			root, err := cmd.Flags().GetString("root")
+			if err != nil {
+				return err
+			}
 			store, err := agentcomms.NewStore(root)
 			if err != nil {
 				return err

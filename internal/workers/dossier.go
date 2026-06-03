@@ -41,7 +41,11 @@ func (w DossierWorker) RunOnce(ctx context.Context, opts DossierOptions) (int, e
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(txCtx)
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil {
+			// Expected after commit; ignore.
+		}
+	}()
 
 	ids, err := dossierEntityIDs(txCtx, tx, opts)
 	if err != nil {

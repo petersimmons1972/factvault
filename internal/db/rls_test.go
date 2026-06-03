@@ -26,7 +26,11 @@ func TestTenantContext_GUCIsSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TenantContext: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			t.Logf("rollback (expected after commit): %v", err)
+		}
+	}()
 
 	var got string
 	if err := tx.QueryRow(ctx, "SELECT current_setting('app.tenant_id', true)").Scan(&got); err != nil {
@@ -62,7 +66,11 @@ func TestTenantContext_RLSFiltersRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TenantContext: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			t.Logf("rollback (expected after commit): %v", err)
+		}
+	}()
 
 	rows, err := tx.Query(ctx, "SELECT label FROM entities ORDER BY label")
 	if err != nil {

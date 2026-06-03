@@ -90,7 +90,11 @@ func (c *LLMClient) Extract(ctx context.Context, source *db.Source, rawText stri
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			// Best-effort close; ignore on error.
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

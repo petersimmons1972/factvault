@@ -16,7 +16,10 @@ func newAckCmd() *cobra.Command {
 		Short: "Acknowledge a message and archive it",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			root, _ := cmd.Flags().GetString("root")
+			root, err := cmd.Flags().GetString("root")
+			if err != nil {
+				return err
+			}
 			store, err := agentcomms.NewStore(root)
 			if err != nil {
 				return err

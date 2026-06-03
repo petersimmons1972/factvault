@@ -45,7 +45,11 @@ func (c *Corroborator) CorroborateOnce(ctx context.Context, tenantID string) err
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(txCtx)
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil {
+			// Expected after commit; ignore.
+		}
+	}()
 
 	rows, err := tx.Query(txCtx, `
 		SELECT ss.statement_id::text, ss.source_id::text, s.url, COALESCE(s.publisher, ''), COALESCE(s.raw_text, ''), COALESCE(ss.confidence::float8, 0.5)

@@ -25,13 +25,21 @@ func runCLI(t *testing.T, args ...string) (string, error) {
 	// Capture stdout (cobra writes the actual command output to os.Stdout in
 	// our commands; reroute it).
 	origStdout := os.Stdout
-	r, w, _ := os.Pipe()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
 	os.Stdout = w
-	err := root.Execute()
-	_ = w.Close()
+	execErr := root.Execute()
+	if err := w.Close(); err != nil {
+		t.Fatalf("w.Close: %v", err)
+	}
 	os.Stdout = origStdout
-	data, _ := readAll(r)
-	return data, err
+	data, readErr := readAll(r)
+	if readErr != nil && readErr.Error() != "EOF" {
+		t.Fatalf("readAll: %v", readErr)
+	}
+	return data, execErr
 }
 
 func readAll(r *os.File) (string, error) {
@@ -104,7 +112,10 @@ func TestCLIArchive(t *testing.T) {
 	if _, err := runCLI(t, "--root", dir, "archive", id, "--reason", "test"); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
-	processed, _ := os.ReadDir(filepath.Join(dir, "processed"))
+	processed, err := os.ReadDir(filepath.Join(dir, "processed"))
+	if err != nil {
+		t.Fatalf("ReadDir processed: %v", err)
+	}
 	if len(processed) != 1 {
 		t.Fatalf("processed count=%d", len(processed))
 	}

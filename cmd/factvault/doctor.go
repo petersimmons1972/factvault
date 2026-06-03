@@ -41,10 +41,14 @@ func newDoctorCmd() *cobra.Command {
 				default:
 					status = "FAIL"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%-28s %s %s\n", result.Name, status, result.Detail)
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-28s %s %s\n", result.Name, status, result.Detail); err != nil {
+					return err
+				}
 				// Suppress remedy lines for optional failures when --required-only is set.
 				if !result.OK && result.Remedy != "" && (!requiredOnly || result.Required) {
-					fmt.Fprintf(cmd.OutOrStdout(), "  remedy: %s\n", result.Remedy)
+					if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  remedy: %s\n", result.Remedy); err != nil {
+						return err
+					}
 				}
 			}
 			if requiredOnly {

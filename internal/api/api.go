@@ -193,5 +193,8 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeJSONStatus(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		// Client disconnected before we could finish writing; nothing to do.
+		_ = err
+	}
 }

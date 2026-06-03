@@ -107,7 +107,11 @@ func withTenantTx[T any](ctx context.Context, pool *pgxpool.Pool, tenantID strin
 	if err != nil {
 		return zero, err
 	}
-	defer tx.Rollback(txCtx)
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil {
+			// Expected after commit; ignore.
+		}
+	}()
 	return fn(txCtx, tx)
 }
 
