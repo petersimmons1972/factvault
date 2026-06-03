@@ -2,6 +2,7 @@ package assembler
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
