@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/jackc/pgx/v5/stdlib" // registers pgx driver for database/sql
 	"github.com/pressly/goose/v3"
 
 	"github.com/petersimmons1972/factvault/internal/db"
@@ -81,7 +81,7 @@ func StartContainer() {
 		}
 		defer func() {
 			if err := sqlDB.Close(); err != nil {
-				// Best-effort close of migration DB connection.
+				fmt.Fprintf(os.Stderr, "close migration db: %v\n", err)
 			}
 		}()
 
@@ -103,7 +103,7 @@ func StartContainer() {
 func StopContainer() {
 	if contName != "" {
 		if err := runDockerCommand("rm", "-f", contName); err != nil {
-			// Best-effort container removal; ignore error.
+			fmt.Fprintf(os.Stderr, "remove container: %v\n", err)
 		}
 		contName = ""
 	}
@@ -124,7 +124,7 @@ func New(t *testing.T) *pgxpool.Pool {
 
 // Setup initializes the test database container and returns a connection pool.
 // This is a convenience wrapper that calls StartContainer once and New for each test.
-func Setup(ctx context.Context, t *testing.T) *pgxpool.Pool {
+func Setup(_ context.Context, t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	StartContainer()
 	return New(t)
@@ -153,16 +153,16 @@ func testDBStartupLock() (func(), error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		if closeErr := f.Close(); closeErr != nil {
-			// Best-effort close on error path.
+			fmt.Fprintf(os.Stderr, "close on error: %v\n", closeErr)
 		}
 		return nil, fmt.Errorf("lock testdb startup: %w", err)
 	}
 	return func() {
 		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
-			// Best-effort unlock; ignore error.
+			fmt.Fprintf(os.Stderr, "unlock: %v\n", err)
 		}
 		if err := f.Close(); err != nil {
-			// Best-effort close; ignore error.
+			fmt.Fprintf(os.Stderr, "close: %v\n", err)
 		}
 	}, nil
 }
@@ -211,11 +211,11 @@ func dockerMappedPort(containerName, containerPort string) (string, error) {
 func retry(attempts int, delay time.Duration, fn func() error) error {
 	var lastErr error
 	for range attempts {
-		if err := fn(); err == nil {
+		err := fn()
+		if err == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
+		lastErr = err
 		time.Sleep(delay)
 	}
 	return fmt.Errorf("retry exhausted after %d attempts: %w", attempts, lastErr)

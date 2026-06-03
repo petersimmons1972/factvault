@@ -1,3 +1,4 @@
+// Package doctor implements first-boot health checks for factvault service dependencies.
 package doctor
 
 import (
@@ -5,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"math"
 	"net/http"
 	"strings"
@@ -130,7 +132,7 @@ func CheckRLS(ctx context.Context, cfg Config) CheckResult {
 		}
 		defer func() {
 			if err := tx.Rollback(ctx); err != nil {
-				// Expected after commit; ignore.
+				fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
 			}
 		}()
 		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantA); err != nil {
@@ -175,7 +177,7 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 			resp, err := client.Do(req)
 			if err == nil {
 				if closeErr := resp.Body.Close(); closeErr != nil {
-					// Best-effort close; ignore on error.
+					fmt.Fprintf(os.Stderr, "close: %v\n", err)
 				}
 				if resp.StatusCode == http.StatusOK {
 					healthOK = true
@@ -194,7 +196,7 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 			if infoResp, err := client.Do(infoReq); err == nil {
 				defer func() {
 					if err := infoResp.Body.Close(); err != nil {
-						// Best-effort close; ignore on error.
+						fmt.Fprintf(os.Stderr, "close: %v\n", err)
 					}
 				}()
 				if infoResp.StatusCode == http.StatusOK {
@@ -226,7 +228,7 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 		}
 		defer func() {
 			if err := embedResp.Body.Close(); err != nil {
-				// Best-effort close; ignore on error.
+				fmt.Fprintf(os.Stderr, "close: %v\n", err)
 			}
 		}()
 		if embedResp.StatusCode != http.StatusOK {
@@ -291,7 +293,7 @@ func CheckCanary(ctx context.Context, cfg Config) CheckResult {
 		}
 		defer func() {
 			if err := tx.Rollback(ctx); err != nil {
-				// Expected after commit; ignore.
+				fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
 			}
 		}()
 		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
@@ -341,7 +343,7 @@ func checkHTTP(ctx context.Context, cfg Config, name, url string, want int) Chec
 		}
 		defer func() {
 			if err := resp.Body.Close(); err != nil {
-				// Best-effort close; ignore on error.
+				fmt.Fprintf(os.Stderr, "close: %v\n", err)
 			}
 		}()
 		if resp.StatusCode != want {

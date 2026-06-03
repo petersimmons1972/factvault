@@ -18,7 +18,7 @@ func newHeartbeatCmd() *cobra.Command {
 		Long: "Heartbeat is shipped as a `nudge` to the peer with a status body.\n" +
 			"Schema v1 has no dedicated `heartbeat` kind; v2 uses `nudge` until\n" +
 			"the schema is extended (see §20.7 queue_depth backpressure TODO).",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			root, err := cmd.Flags().GetString("root")
 			if err != nil {
 				return err

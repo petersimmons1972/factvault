@@ -16,7 +16,7 @@ func newDoctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Run first-boot health checks",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if cfg.DatabaseURL == "" {
 				cfg.DatabaseURL = os.Getenv("FACTVAULT_DATABASE_URL")
 			}

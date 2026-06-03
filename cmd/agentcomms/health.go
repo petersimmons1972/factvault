@@ -15,7 +15,7 @@ func newHealthCmd() *cobra.Command {
 		Use:   "health",
 		Short: "Report bus health as JSON (schema_valid, queue depths, dead-letter count)",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			root, err := cmd.Flags().GetString("root")
 			if err != nil {
 				return err

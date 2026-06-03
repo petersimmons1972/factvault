@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -43,7 +44,7 @@ func (w DossierWorker) RunOnce(ctx context.Context, opts DossierOptions) (int, e
 	}
 	defer func() {
 		if err := tx.Rollback(txCtx); err != nil {
-			// Expected after commit; ignore.
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
 		}
 	}()
 

@@ -1,3 +1,4 @@
+// Package netx provides safe HTTP client construction with SSRF protection and redirect controls.
 package netx
 
 import (

@@ -16,7 +16,7 @@ func newSendCmd() *cobra.Command {
 		Use:   "send",
 		Short: "Send a message to an agent inbox",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			root, err := cmd.Flags().GetString("root")
 			if err != nil {
 				return err

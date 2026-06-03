@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"io"
 	"net/http"
 	"strings"
@@ -154,7 +155,7 @@ func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) 
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			// Best-effort close; ignore on error.
+			fmt.Fprintf(os.Stderr, "close: %v\n", err)
 		}
 	}()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -220,7 +221,7 @@ func decompress(b []byte) ([]byte, error) {
 	}
 	defer func() {
 		if err := zr.Close(); err != nil {
-			// Best-effort close on zlib reader.
+			fmt.Fprintf(os.Stderr, "close zlib reader: %v\n", err)
 		}
 	}()
 	return io.ReadAll(zr)
@@ -260,7 +261,7 @@ func submitWayback(ctx context.Context, client *http.Client, url string) string 
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			// Best-effort close; ignore on error.
+			fmt.Fprintf(os.Stderr, "close: %v\n", err)
 		}
 	}()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

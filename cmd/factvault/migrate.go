@@ -18,7 +18,7 @@ func newMigrateCmd() *cobra.Command {
 		Use:   "migrate",
 		Short: "Run goose database migrations",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runMigrations(cmd.Context(), dsn)
 		},
 	}
@@ -40,7 +40,7 @@ func runMigrations(ctx context.Context, dsn string) error {
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
-			// Best-effort close after migration.
+			fmt.Fprintf(os.Stderr, "close db: %v\n", err)
 		}
 	}()
 

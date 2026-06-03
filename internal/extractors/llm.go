@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"io"
 	"net/http"
 	"strings"
@@ -92,7 +93,7 @@ func (c *LLMClient) Extract(ctx context.Context, source *db.Source, rawText stri
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			// Best-effort close; ignore on error.
+			fmt.Fprintf(os.Stderr, "close: %v\n", err)
 		}
 	}()
 

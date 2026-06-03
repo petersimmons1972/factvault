@@ -1,3 +1,4 @@
+// Package workers implements background worker processes: fact extraction, dossier assembly, and corroboration.
 package workers
 
 import (
@@ -47,7 +48,7 @@ func (c *Corroborator) CorroborateOnce(ctx context.Context, tenantID string) err
 	}
 	defer func() {
 		if err := tx.Rollback(txCtx); err != nil {
-			// Expected after commit; ignore.
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
 		}
 	}()
 

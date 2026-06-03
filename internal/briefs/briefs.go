@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"time"
 
@@ -302,7 +303,7 @@ func (s Service) GenerateAndStore(ctx context.Context, tenantID string, req Gene
 	}
 	defer func() {
 		if err := tx.Rollback(ctx); err != nil {
-			// Expected after commit; ignore.
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
 		}
 	}()
 
@@ -337,7 +338,7 @@ func (s Service) List(ctx context.Context, tenantID string, opts ListOptions) ([
 	}
 	defer func() {
 		if err := tx.Rollback(ctx); err != nil {
-			// Expected after commit; ignore.
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
 		}
 	}()
 
@@ -410,7 +411,7 @@ func (s Service) Get(ctx context.Context, tenantID, id string) (Brief, error) {
 	}
 	defer func() {
 		if err := tx.Rollback(ctx); err != nil {
-			// Expected after commit; ignore.
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
 		}
 	}()
 

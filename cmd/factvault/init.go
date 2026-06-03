@@ -27,7 +27,7 @@ func newInitCmd() *cobra.Command {
 		Use:   "init",
 		Short: "One-shot first-boot initialiser: keygen, health checks, and optional example load",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Resolve DSN.
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")

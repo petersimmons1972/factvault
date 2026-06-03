@@ -21,7 +21,7 @@ func newAuthKeysCmd() *cobra.Command {
 		Use:   "keys",
 		Short: "Generate a development RSA key pair",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			priv, pub, err := auth.GenerateKeyPair()
 			if err != nil {
 				return err
@@ -41,7 +41,7 @@ func newAuthTokenCmd() *cobra.Command {
 		Use:   "token",
 		Short: "Issue a development RS256 JWT",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if tenantID == "" || subject == "" || privateKeyPath == "" {
 				return fmt.Errorf("--tenant, --sub, and --private-key are required")
 			}
@@ -77,7 +77,7 @@ func newAuthVerifyCmd() *cobra.Command {
 		Use:   "verify",
 		Short: "Verify an RS256 JWT",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if publicKeyPath == "" || token == "" {
 				return fmt.Errorf("--public-key and --token are required")
 			}

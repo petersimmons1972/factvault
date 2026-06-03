@@ -1,3 +1,4 @@
+// Package db manages PostgreSQL connection pools and row-level security context helpers.
 package db
 
 import (
