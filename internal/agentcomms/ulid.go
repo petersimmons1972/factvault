@@ -23,12 +23,12 @@ func NewULID(t time.Time) (string, error) {
 
 	// Build 16 bytes: 6 bytes timestamp || 10 bytes entropy.
 	var raw [16]byte
-	raw[0] = byte(ms >> 40)
-	raw[1] = byte(ms >> 32)
-	raw[2] = byte(ms >> 24)
-	raw[3] = byte(ms >> 16)
-	raw[4] = byte(ms >> 8)
-	raw[5] = byte(ms)
+	raw[0] = byte((ms >> 40) & 0xFF)
+	raw[1] = byte((ms >> 32) & 0xFF)
+	raw[2] = byte((ms >> 24) & 0xFF)
+	raw[3] = byte((ms >> 16) & 0xFF)
+	raw[4] = byte((ms >> 8) & 0xFF)
+	raw[5] = byte(ms & 0xFF)
 	copy(raw[6:], entropy[:])
 
 	return encodeULID(raw), nil

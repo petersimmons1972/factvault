@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,7 +46,7 @@ func newAuthTokenCmd() *cobra.Command {
 			if tenantID == "" || subject == "" || privateKeyPath == "" {
 				return fmt.Errorf("--tenant, --sub, and --private-key are required")
 			}
-			data, err := os.ReadFile(privateKeyPath)
+			data, err := os.ReadFile(filepath.Clean(privateKeyPath))
 			if err != nil {
 				return err
 			}
@@ -81,7 +82,7 @@ func newAuthVerifyCmd() *cobra.Command {
 			if publicKeyPath == "" || token == "" {
 				return fmt.Errorf("--public-key and --token are required")
 			}
-			data, err := os.ReadFile(publicKeyPath)
+			data, err := os.ReadFile(filepath.Clean(publicKeyPath))
 			if err != nil {
 				return err
 			}

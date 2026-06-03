@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -31,7 +32,7 @@ func newAPICmd() *cobra.Command {
 			if publicKeyPath == "" {
 				return fmt.Errorf("JWT public key required: set --jwt-public-key or FACTVAULT_JWT_PUBLIC_KEY")
 			}
-			data, err := os.ReadFile(publicKeyPath)
+			data, err := os.ReadFile(filepath.Clean(publicKeyPath))
 			if err != nil {
 				return err
 			}

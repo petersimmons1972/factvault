@@ -151,14 +151,19 @@ func testDBStartupLock() (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("open testdb startup lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	fd := f.Fd()
+	if fd > uintptr(^uint(0)>>1) { // fd exceeds max int
+		return nil, fmt.Errorf("file descriptor %d overflows int", fd)
+	}
+	if err := syscall.Flock(int(fd), syscall.LOCK_EX); err != nil {
 		if closeErr := f.Close(); closeErr != nil {
 			fmt.Fprintf(os.Stderr, "close on error: %v\n", closeErr)
 		}
 		return nil, fmt.Errorf("lock testdb startup: %w", err)
 	}
 	return func() {
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
+		unlockFd := f.Fd()
+		if err := syscall.Flock(int(unlockFd), syscall.LOCK_UN); err != nil {
 			fmt.Fprintf(os.Stderr, "unlock: %v\n", err)
 		}
 		if err := f.Close(); err != nil {
