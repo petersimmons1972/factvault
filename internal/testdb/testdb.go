@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/jackc/pgx/v5/stdlib" // registers pgx driver for database/sql
 	"github.com/pressly/goose/v3"
 
 	"github.com/petersimmons1972/factvault/internal/db"
@@ -79,7 +79,11 @@ func StartContainer() {
 			startErr = err
 			return
 		}
-		defer sqlDB.Close()
+		defer func() {
+			if err := sqlDB.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "close migration db: %v\n", err)
+			}
+		}()
 
 		if err := goose.SetDialect("postgres"); err != nil {
 			startErr = err
@@ -98,7 +102,9 @@ func StartContainer() {
 
 func StopContainer() {
 	if contName != "" {
-		_ = runDockerCommand("rm", "-f", contName)
+		if err := runDockerCommand("rm", "-f", contName); err != nil {
+			fmt.Fprintf(os.Stderr, "remove container: %v\n", err)
+		}
 		contName = ""
 	}
 }
@@ -118,14 +124,17 @@ func New(t *testing.T) *pgxpool.Pool {
 
 // Setup initializes the test database container and returns a connection pool.
 // This is a convenience wrapper that calls StartContainer once and New for each test.
-func Setup(ctx context.Context, t *testing.T) *pgxpool.Pool {
+func Setup(_ context.Context, t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	StartContainer()
 	return New(t)
 }
 
 func migrationsPath() string {
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
 	for range 8 {
 		candidate := filepath.Join(cwd, "migrations")
 		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
@@ -142,13 +151,24 @@ func testDBStartupLock() (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("open testdb startup lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		_ = f.Close()
+	fd := f.Fd()
+	if fd > uintptr(^uint(0)>>1) { // fd exceeds max int
+		return nil, fmt.Errorf("file descriptor %d overflows int", fd)
+	}
+	if err := syscall.Flock(int(fd), syscall.LOCK_EX); err != nil {
+		if closeErr := f.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "close on error: %v\n", closeErr)
+		}
 		return nil, fmt.Errorf("lock testdb startup: %w", err)
 	}
 	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
+		unlockFd := f.Fd()
+		if err := syscall.Flock(int(unlockFd), syscall.LOCK_UN); err != nil {
+			fmt.Fprintf(os.Stderr, "unlock: %v\n", err)
+		}
+		if err := f.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close: %v\n", err)
+		}
 	}, nil
 }
 
@@ -196,11 +216,11 @@ func dockerMappedPort(containerName, containerPort string) (string, error) {
 func retry(attempts int, delay time.Duration, fn func() error) error {
 	var lastErr error
 	for range attempts {
-		if err := fn(); err == nil {
+		err := fn()
+		if err == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
+		lastErr = err
 		time.Sleep(delay)
 	}
 	return fmt.Errorf("retry exhausted after %d attempts: %w", attempts, lastErr)

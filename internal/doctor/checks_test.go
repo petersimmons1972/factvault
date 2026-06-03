@@ -18,10 +18,14 @@ func mockEmbedderServer(t *testing.T) *httptest.Server {
 		switch r.URL.Path {
 		case "/health", "/healthz":
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"ok"}`)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
 		case "/info":
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"model":"BAAI/bge-m3","dim":1024}`)
+			if _, err := fmt.Fprint(w, `{"model":"BAAI/bge-m3","dim":1024}`); err != nil {
+				panic(err)
+			}
 		case "/embed":
 			// Return a 1024-dim vector with one non-zero component so norm > 0.
 			vec := make([]float64, 1024)
@@ -29,14 +33,22 @@ func mockEmbedderServer(t *testing.T) *httptest.Server {
 			// Build a minimal JSON response.
 			w.WriteHeader(http.StatusOK)
 			// Emit a compact 1024-element JSON array manually.
-			fmt.Fprint(w, `{"vectors":[[1.0`)
-			for i := 1; i < 1024; i++ {
-				fmt.Fprint(w, `,0.0`)
+			if _, err := fmt.Fprint(w, `{"vectors":[[1.0`); err != nil {
+				panic(err)
 			}
-			fmt.Fprint(w, `]]}`)
+			for i := 1; i < 1024; i++ {
+				if _, err := fmt.Fprint(w, `,0.0`); err != nil {
+					panic(err)
+				}
+			}
+			if _, err := fmt.Fprint(w, `]]}`); err != nil {
+				panic(err)
+			}
 		default:
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"ok"}`)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
 		}
 	}))
 }
@@ -45,7 +57,9 @@ func TestHTTPChecks(t *testing.T) {
 	// LLM and Wayback only need a simple 200 OK server.
 	simpleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"status":"ok"}`)
+		if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+			panic(err)
+		}
 	}))
 	defer simpleServer.Close()
 
@@ -84,18 +98,28 @@ func TestCheckEmbedder_RejectsZeroVector(t *testing.T) {
 		switch r.URL.Path {
 		case "/health", "/healthz":
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"ok"}`)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
 		case "/embed":
 			w.WriteHeader(http.StatusOK)
 			// All-zero 1024-dim vector — the old stub behavior.
-			fmt.Fprint(w, `{"vectors":[[0.0`)
-			for i := 1; i < 1024; i++ {
-				fmt.Fprint(w, `,0.0`)
+			if _, err := fmt.Fprint(w, `{"vectors":[[0.0`); err != nil {
+				panic(err)
 			}
-			fmt.Fprint(w, `]]}`)
+			for i := 1; i < 1024; i++ {
+				if _, err := fmt.Fprint(w, `,0.0`); err != nil {
+					panic(err)
+				}
+			}
+			if _, err := fmt.Fprint(w, `]]}`); err != nil {
+				panic(err)
+			}
 		default:
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"ok"}`)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
 		}
 	}))
 	defer server.Close()
@@ -114,18 +138,28 @@ func TestCheckEmbedder_RejectsWrongDimension(t *testing.T) {
 		switch r.URL.Path {
 		case "/health", "/healthz":
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"ok"}`)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
 		case "/embed":
 			// 384-dim non-zero vector (wrong model).
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"vectors":[[1.0`)
-			for i := 1; i < 384; i++ {
-				fmt.Fprint(w, `,0.0`)
+			if _, err := fmt.Fprint(w, `{"vectors":[[1.0`); err != nil {
+				panic(err)
 			}
-			fmt.Fprint(w, `]]}`)
+			for i := 1; i < 384; i++ {
+				if _, err := fmt.Fprint(w, `,0.0`); err != nil {
+					panic(err)
+				}
+			}
+			if _, err := fmt.Fprint(w, `]]}`); err != nil {
+				panic(err)
+			}
 		default:
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"ok"}`)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
 		}
 	}))
 	defer server.Close()
@@ -188,7 +222,9 @@ func TestRunAll_SetsRequiredField(t *testing.T) {
 
 	simpleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"object":"list","data":[]}`)
+		if _, err := fmt.Fprint(w, `{"object":"list","data":[]}`); err != nil {
+			panic(err)
+		}
 	}))
 	defer simpleServer.Close()
 
@@ -248,22 +284,34 @@ func TestCheckEmbedder_NonBGEModelPassesWithLowNorm(t *testing.T) {
 		switch r.URL.Path {
 		case "/health", "/healthz":
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"ok"}`)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
 		case "/info":
 			// Non-BGE, non-E5 model name.
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"model":"nomic-embed-text","dim":1024}`)
+			if _, err := fmt.Fprint(w, `{"model":"nomic-embed-text","dim":1024}`); err != nil {
+				panic(err)
+			}
 		case "/embed":
 			// Very small but non-zero norm — fine for non-normalised models.
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"vectors":[[0.000001`)
-			for i := 1; i < 1024; i++ {
-				fmt.Fprint(w, `,0.0`)
+			if _, err := fmt.Fprint(w, `{"vectors":[[0.000001`); err != nil {
+				panic(err)
 			}
-			fmt.Fprint(w, `]]}`)
+			for i := 1; i < 1024; i++ {
+				if _, err := fmt.Fprint(w, `,0.0`); err != nil {
+					panic(err)
+				}
+			}
+			if _, err := fmt.Fprint(w, `]]}`); err != nil {
+				panic(err)
+			}
 		default:
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"ok"}`)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
 		}
 	}))
 	defer server.Close()
@@ -283,21 +331,33 @@ func TestCheckEmbedder_BGEModelFailsWithLowNorm(t *testing.T) {
 		switch r.URL.Path {
 		case "/health", "/healthz":
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"ok"}`)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
 		case "/info":
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"model":"BAAI/bge-m3","dim":1024}`)
+			if _, err := fmt.Fprint(w, `{"model":"BAAI/bge-m3","dim":1024}`); err != nil {
+				panic(err)
+			}
 		case "/embed":
 			// norm = 0.01 — non-zero but well below the BGE threshold of 0.5.
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"vectors":[[0.01`)
-			for i := 1; i < 1024; i++ {
-				fmt.Fprint(w, `,0.0`)
+			if _, err := fmt.Fprint(w, `{"vectors":[[0.01`); err != nil {
+				panic(err)
 			}
-			fmt.Fprint(w, `]]}`)
+			for i := 1; i < 1024; i++ {
+				if _, err := fmt.Fprint(w, `,0.0`); err != nil {
+					panic(err)
+				}
+			}
+			if _, err := fmt.Fprint(w, `]]}`); err != nil {
+				panic(err)
+			}
 		default:
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"ok"}`)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
 		}
 	}))
 	defer server.Close()

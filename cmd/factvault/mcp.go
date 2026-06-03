@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -18,7 +19,7 @@ func newMCPCmd() *cobra.Command {
 		Use:   "mcp",
 		Short: "Run the factvault MCP server over stdio",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
 			}
@@ -34,7 +35,7 @@ func newMCPCmd() *cobra.Command {
 			if authToken == "" {
 				authToken = os.Getenv("FACTVAULT_MCP_AUTH_TOKEN")
 			}
-			keyData, err := os.ReadFile(publicKeyPath)
+			keyData, err := os.ReadFile(filepath.Clean(publicKeyPath))
 			if err != nil {
 				return err
 			}

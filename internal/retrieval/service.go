@@ -1,8 +1,10 @@
+// Package retrieval provides semantic search and entity retrieval over the fact store.
 package retrieval
 
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -107,7 +109,11 @@ func withTenantTx[T any](ctx context.Context, pool *pgxpool.Pool, tenantID strin
 	if err != nil {
 		return zero, err
 	}
-	defer tx.Rollback(txCtx)
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+		}
+	}()
 	return fn(txCtx, tx)
 }
 

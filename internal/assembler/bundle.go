@@ -1,3 +1,4 @@
+// Package assembler builds entity bundles from the database for dossier generation.
 package assembler
 
 import (

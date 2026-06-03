@@ -57,7 +57,7 @@ func newWorkerCmd() *cobra.Command {
 			Use:   name,
 			Short: "Run " + name + " worker once",
 			Args:  cobra.NoArgs,
-			RunE: func(cmd *cobra.Command, args []string) error {
+			RunE: func(cmd *cobra.Command, _ []string) error {
 				if dsn == "" {
 					dsn = os.Getenv("FACTVAULT_DATABASE_URL")
 				}
@@ -115,7 +115,7 @@ func newWorkerCmd() *cobra.Command {
 		Use:   "corroborate",
 		Short: "Run corroborate worker once",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
 			}
@@ -137,7 +137,7 @@ func newWorkerCmd() *cobra.Command {
 		Use:   "rss",
 		Short: "Poll RSS/Atom feeds and ingest source items",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
 			}
@@ -204,7 +204,7 @@ func newWorkerCmd() *cobra.Command {
 		Use:   "dossier",
 		Short: "Precompute dossier bundles",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
 			}

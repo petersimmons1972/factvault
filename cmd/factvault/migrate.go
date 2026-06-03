@@ -18,7 +18,7 @@ func newMigrateCmd() *cobra.Command {
 		Use:   "migrate",
 		Short: "Run goose database migrations",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runMigrations(cmd.Context(), dsn)
 		},
 	}
@@ -38,7 +38,11 @@ func runMigrations(ctx context.Context, dsn string) error {
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close db: %v\n", err)
+		}
+	}()
 
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("set dialect: %w", err)

@@ -25,7 +25,11 @@ func TestAssembleDossier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			t.Logf("rollback (expected after commit): %v", err)
+		}
+	}()
 
 	// Set tenant context for RLS
 	_, err = tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID)
@@ -78,7 +82,11 @@ func TestAssembleEntityNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			t.Logf("rollback (expected after commit): %v", err)
+		}
+	}()
 
 	_, err = tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID)
 	if err != nil {
@@ -107,7 +115,11 @@ func TestAssembleInvalidDepth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			t.Logf("rollback (expected after commit): %v", err)
+		}
+	}()
 
 	_, err = tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID)
 	if err != nil {
@@ -151,7 +163,11 @@ func TestAssembleEmptyEntityList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			t.Logf("rollback (expected after commit): %v", err)
+		}
+	}()
 
 	_, err = tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID)
 	if err != nil {

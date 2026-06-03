@@ -7,7 +7,9 @@ package briefs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"time"
 
@@ -279,7 +281,9 @@ func (s Service) tenantTx(ctx context.Context, tenantID string) (pgx.Tx, error) 
 		return nil, fmt.Errorf("briefs: begin tx: %w", err)
 	}
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
-		_ = tx.Rollback(ctx)
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			return nil, errors.Join(fmt.Errorf("briefs: set tenant_id: %w", err), fmt.Errorf("briefs: rollback: %w", rollbackErr))
+		}
 		return nil, fmt.Errorf("briefs: set tenant_id: %w", err)
 	}
 	return tx, nil
@@ -298,7 +302,11 @@ func (s Service) GenerateAndStore(ctx context.Context, tenantID string, req Gene
 	if err != nil {
 		return Brief{}, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+		}
+	}()
 
 	var id string
 	err = tx.QueryRow(ctx, `
@@ -329,7 +337,11 @@ func (s Service) List(ctx context.Context, tenantID string, opts ListOptions) ([
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+		}
+	}()
 
 	query := `
 		SELECT id::text, source_kind, entity_id::text, payload
@@ -398,7 +410,11 @@ func (s Service) Get(ctx context.Context, tenantID, id string) (Brief, error) {
 	if err != nil {
 		return Brief{}, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+		}
+	}()
 
 	var b Brief
 	var entityID *string

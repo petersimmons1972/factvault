@@ -66,7 +66,10 @@ func (s *Store) Send(msg *Message) error {
 	if depth >= MaxQueueDepth {
 		return ErrQueueFull
 	}
-	ts, _ := time.Parse(time.RFC3339, msg.TS)
+	ts, err := time.Parse(time.RFC3339, msg.TS)
+	if err != nil {
+		ts = time.Time{}
+	}
 	final := filepath.Join(dir, filename(ts, msg.ID))
 	return atomicWriteJSON(final, msg)
 }
@@ -84,22 +87,22 @@ func atomicWriteJSON(final string, v any) error {
 		return fmt.Errorf("open tmp: %w", err)
 	}
 	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("write: %w", err)
+		closeErr := f.Close()
+		removeErr := os.Remove(tmp)
+		return errors.Join(fmt.Errorf("write: %w", err), closeErr, removeErr)
 	}
 	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("fsync: %w", err)
+		closeErr := f.Close()
+		removeErr := os.Remove(tmp)
+		return errors.Join(fmt.Errorf("fsync: %w", err), closeErr, removeErr)
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close: %w", err)
+		removeErr := os.Remove(tmp)
+		return errors.Join(fmt.Errorf("close: %w", err), removeErr)
 	}
 	if err := os.Rename(tmp, final); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename: %w", err)
+		removeErr := os.Remove(tmp)
+		return errors.Join(fmt.Errorf("rename: %w", err), removeErr)
 	}
 	return nil
 }
@@ -252,11 +255,11 @@ func (s *Store) appendAudit(row map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("audit open: %w", err)
 	}
-	defer f.Close()
 	if _, err := f.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("audit write: %w", err)
+		closeErr := f.Close()
+		return errors.Join(fmt.Errorf("audit write: %w", err), closeErr)
 	}
-	return nil
+	return f.Close()
 }
 
 // Archive moves a message file to processed/ with an optional reason logged

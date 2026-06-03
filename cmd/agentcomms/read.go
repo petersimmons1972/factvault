@@ -19,11 +19,14 @@ func newReadCmd() *cobra.Command {
 		Use:   "read",
 		Short: "Read messages from an inbox (JSON-encoded list)",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if unread {
 				return fmt.Errorf("--unread is not implemented yet")
 			}
-			root, _ := cmd.Flags().GetString("root")
+			root, err := cmd.Flags().GetString("root")
+			if err != nil {
+				return err
+			}
 			store, err := agentcomms.NewStore(root)
 			if err != nil {
 				return err

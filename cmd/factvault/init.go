@@ -27,7 +27,7 @@ func newInitCmd() *cobra.Command {
 		Use:   "init",
 		Short: "One-shot first-boot initialiser: keygen, health checks, and optional example load",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Resolve DSN.
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
@@ -49,18 +49,28 @@ func newInitCmd() *cobra.Command {
 			privPath := filepath.Join(keyDir, "private.pem")
 			pubPath := filepath.Join(keyDir, "public.pem")
 			if fileNonEmpty(privPath) && fileNonEmpty(pubPath) {
-				fmt.Fprintf(out, "==> JWT keys already exist in %s — skipping keygen\n", keyDir)
+				if _, err := fmt.Fprintf(out, "==> JWT keys already exist in %s — skipping keygen\n", keyDir); err != nil {
+					return err
+				}
 			} else {
-				fmt.Fprintf(out, "==> Generating JWT keys in %s\n", keyDir)
+				if _, err := fmt.Fprintf(out, "==> Generating JWT keys in %s\n", keyDir); err != nil {
+					return err
+				}
 				if err := initKeys(keyDir); err != nil {
 					return fmt.Errorf("keygen: %w", err)
 				}
-				fmt.Fprintf(out, "    private.pem: %s\n", privPath)
-				fmt.Fprintf(out, "    public.pem:  %s\n", pubPath)
+				if _, err := fmt.Fprintf(out, "    private.pem: %s\n", privPath); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintf(out, "    public.pem:  %s\n", pubPath); err != nil {
+					return err
+				}
 			}
 
 			// --- Doctor checks ---
-			fmt.Fprintf(out, "==> Running health checks\n")
+			if _, err := fmt.Fprintf(out, "==> Running health checks\n"); err != nil {
+				return err
+			}
 			cfg := doctor.Config{
 				DatabaseURL: dsn,
 				LLMURL:      firstNonEmpty(os.Getenv("FACTVAULT_LLM_BASE_URL"), os.Getenv("FACTVAULT_LLM_URL")),
@@ -75,7 +85,9 @@ func newInitCmd() *cobra.Command {
 				} else if !r.Required {
 					status = "WARN"
 				}
-				fmt.Fprintf(out, "    %-28s %s %s\n", r.Name, status, r.Detail)
+				if _, err := fmt.Fprintf(out, "    %-28s %s %s\n", r.Name, status, r.Detail); err != nil {
+					return err
+				}
 			}
 			if !doctor.RequiredOK(results) {
 				return fmt.Errorf("one or more required health checks failed; fix them before proceeding")
@@ -83,7 +95,9 @@ func newInitCmd() *cobra.Command {
 
 			// --- Example load ---
 			if !skipExample && exampleName != "" {
-				fmt.Fprintf(out, "==> Loading example %q for tenant %s\n", exampleName, tenantID)
+				if _, err := fmt.Fprintf(out, "==> Loading example %q for tenant %s\n", exampleName, tenantID); err != nil {
+					return err
+				}
 				ex, err := fvexamples.Load("examples", exampleName)
 				if err != nil {
 					return fmt.Errorf("load example: %w", err)
@@ -96,17 +110,33 @@ func newInitCmd() *cobra.Command {
 				if err := ex.Insert(cmd.Context(), pool, tenantID); err != nil {
 					return fmt.Errorf("insert example: %w", err)
 				}
-				fmt.Fprintf(out, "    loaded %s: %d properties, %d seeds\n", ex.Name, len(ex.Properties), len(ex.Seeds))
+				if _, err := fmt.Fprintf(out, "    loaded %s: %d properties, %d seeds\n", ex.Name, len(ex.Properties), len(ex.Seeds)); err != nil {
+					return err
+				}
 			}
 
 			// --- Next steps summary ---
-			fmt.Fprintf(out, "\n==> Next steps\n")
-			fmt.Fprintf(out, "    Start the API:\n")
-			fmt.Fprintf(out, "      ./bin/factvault api --jwt-public-key %s\n", pubPath)
-			fmt.Fprintf(out, "    Obtain a dev auth token:\n")
-			fmt.Fprintf(out, "      ./bin/factvault auth token --tenant %s --jwt-private-key %s\n", tenantID, privPath)
-			fmt.Fprintf(out, "    Run the worker pipeline:\n")
-			fmt.Fprintf(out, "      ./bin/factvault worker dossier --tenant %s --dsn \"$FACTVAULT_DATABASE_URL\"\n", tenantID)
+			if _, err := fmt.Fprintf(out, "\n==> Next steps\n"); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(out, "    Start the API:\n"); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(out, "      ./bin/factvault api --jwt-public-key %s\n", pubPath); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(out, "    Obtain a dev auth token:\n"); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(out, "      ./bin/factvault auth token --tenant %s --jwt-private-key %s\n", tenantID, privPath); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(out, "    Run the worker pipeline:\n"); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(out, "      ./bin/factvault worker dossier --tenant %s --dsn \"$FACTVAULT_DATABASE_URL\"\n", tenantID); err != nil {
+				return err
+			}
 			return nil
 		},
 	}

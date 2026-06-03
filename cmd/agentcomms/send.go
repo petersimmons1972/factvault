@@ -16,8 +16,11 @@ func newSendCmd() *cobra.Command {
 		Use:   "send",
 		Short: "Send a message to an agent inbox",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			root, _ := cmd.Flags().GetString("root")
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			root, err := cmd.Flags().GetString("root")
+			if err != nil {
+				return err
+			}
 			store, err := agentcomms.NewStore(root)
 			if err != nil {
 				return err
@@ -52,10 +55,18 @@ func newSendCmd() *cobra.Command {
 	cmd.Flags().StringVar(&reply, "reply", "", "ULID this replies to")
 	cmd.Flags().StringVar(&refsCSV, "refs", "", "comma-separated refs (e.g. '#85,commit:abc')")
 	cmd.Flags().StringVar(&body, "body", "", "message body [required]")
-	_ = cmd.MarkFlagRequired("from")
-	_ = cmd.MarkFlagRequired("to")
-	_ = cmd.MarkFlagRequired("kind")
-	_ = cmd.MarkFlagRequired("body")
+	if err := cmd.MarkFlagRequired("from"); err != nil {
+		panic(err)
+	}
+	if err := cmd.MarkFlagRequired("to"); err != nil {
+		panic(err)
+	}
+	if err := cmd.MarkFlagRequired("kind"); err != nil {
+		panic(err)
+	}
+	if err := cmd.MarkFlagRequired("body"); err != nil {
+		panic(err)
+	}
 	return cmd
 }
 

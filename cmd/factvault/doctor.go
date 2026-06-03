@@ -16,7 +16,7 @@ func newDoctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Run first-boot health checks",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if cfg.DatabaseURL == "" {
 				cfg.DatabaseURL = os.Getenv("FACTVAULT_DATABASE_URL")
 			}
@@ -41,10 +41,14 @@ func newDoctorCmd() *cobra.Command {
 				default:
 					status = "FAIL"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%-28s %s %s\n", result.Name, status, result.Detail)
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-28s %s %s\n", result.Name, status, result.Detail); err != nil {
+					return err
+				}
 				// Suppress remedy lines for optional failures when --required-only is set.
 				if !result.OK && result.Remedy != "" && (!requiredOnly || result.Required) {
-					fmt.Fprintf(cmd.OutOrStdout(), "  remedy: %s\n", result.Remedy)
+					if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  remedy: %s\n", result.Remedy); err != nil {
+						return err
+					}
 				}
 			}
 			if requiredOnly {

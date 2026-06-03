@@ -37,7 +37,11 @@ func TestMigrationsRunClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pool.RunWithOptions: %v", err)
 	}
-	t.Cleanup(func() { _ = pool.Purge(resource) })
+	t.Cleanup(func() {
+		if err := pool.Purge(resource); err != nil {
+			t.Logf("pool.Purge: %v", err)
+		}
+	})
 
 	dsn := fmt.Sprintf("postgres://factvault:factvault@localhost:%s/factvault?sslmode=disable", resource.GetPort("5432/tcp"))
 	var db *sql.DB
@@ -51,7 +55,11 @@ func TestMigrationsRunClean(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("postgres not ready: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Logf("db.Close: %v", err)
+		}
+	}()
 
 	if err := goose.SetDialect("postgres"); err != nil {
 		t.Fatalf("goose.SetDialect: %v", err)

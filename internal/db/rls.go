@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -36,12 +37,12 @@ func TenantContext(ctx context.Context, tenantID pgtype.UUID) (context.Context, 
 	}
 
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID.String()); err != nil {
-		_ = tx.Rollback(ctx)
-		return ctx, nil, fmt.Errorf("db.TenantContext: SET LOCAL: %w", err)
+		rollbackErr := tx.Rollback(ctx)
+		return ctx, nil, errors.Join(fmt.Errorf("db.TenantContext: SET LOCAL: %w", err), rollbackErr)
 	}
 	if _, err := tx.Exec(ctx, "SET LOCAL ROLE app_user"); err != nil {
-		_ = tx.Rollback(ctx)
-		return ctx, nil, fmt.Errorf("db.TenantContext: SET LOCAL ROLE: %w", err)
+		rollbackErr := tx.Rollback(ctx)
+		return ctx, nil, errors.Join(fmt.Errorf("db.TenantContext: SET LOCAL ROLE: %w", err), rollbackErr)
 	}
 	return ctx, tx, nil
 }

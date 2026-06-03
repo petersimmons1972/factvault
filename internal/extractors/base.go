@@ -1,3 +1,4 @@
+// Package extractors defines the Extractor interface and shared types for fact extraction.
 package extractors
 
 import (

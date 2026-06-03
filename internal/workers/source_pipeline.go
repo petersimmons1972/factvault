@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -144,12 +145,19 @@ func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) 
 	if err := netx.ValidatePublicHTTPURL(ctx, url); err != nil {
 		return "link-rot", "", err.Error()
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "link-rot", "", err.Error()
+	}
 	resp, err := p.client().Do(req)
 	if err != nil {
 		return "link-rot", "", err.Error()
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close: %v\n", err)
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "link-rot", "", fmt.Sprintf("status %d", resp.StatusCode)
 	}
@@ -211,7 +219,11 @@ func decompress(b []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer zr.Close()
+	defer func() {
+		if err := zr.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close zlib reader: %v\n", err)
+		}
+	}()
 	return io.ReadAll(zr)
 }
 
@@ -247,7 +259,11 @@ func submitWayback(ctx context.Context, client *http.Client, url string) string 
 	if err != nil {
 		return ""
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close: %v\n", err)
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return ""
 	}

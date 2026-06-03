@@ -1,3 +1,4 @@
+// Package testdb contains integration tests for container image security requirements.
 package testdb
 
 import "testing"

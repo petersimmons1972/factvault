@@ -1,3 +1,4 @@
+// Package doctor implements first-boot health checks for factvault service dependencies.
 package doctor
 
 import (
@@ -7,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -128,7 +130,11 @@ func CheckRLS(ctx context.Context, cfg Config) CheckResult {
 		if err != nil {
 			return "", "check database", err
 		}
-		defer tx.Rollback(ctx)
+		defer func() {
+			if err := tx.Rollback(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+			}
+		}()
 		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantA); err != nil {
 			return "", "check app.tenant_id GUC", err
 		}
@@ -170,7 +176,9 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 			}
 			resp, err := client.Do(req)
 			if err == nil {
-				resp.Body.Close()
+				if closeErr := resp.Body.Close(); closeErr != nil {
+					fmt.Fprintf(os.Stderr, "close: %v\n", closeErr)
+				}
 				if resp.StatusCode == http.StatusOK {
 					healthOK = true
 					break
@@ -186,7 +194,11 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 		infoReq, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/info", nil)
 		if err == nil {
 			if infoResp, err := client.Do(infoReq); err == nil {
-				defer infoResp.Body.Close()
+				defer func() {
+					if err := infoResp.Body.Close(); err != nil {
+						fmt.Fprintf(os.Stderr, "close: %v\n", err)
+					}
+				}()
 				if infoResp.StatusCode == http.StatusOK {
 					var infoBody struct {
 						Model string `json:"model"`
@@ -200,7 +212,10 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 		}
 
 		// 3. POST /embed with a probe text; verify non-zero 1024-dim vector.
-		probeBody, _ := json.Marshal(map[string]any{"texts": []string{"factvault embedder probe"}})
+		probeBody, err := json.Marshal(map[string]any{"texts": []string{"factvault embedder probe"}})
+		if err != nil {
+			return "", "internal error", err
+		}
 		embedReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/embed",
 			bytes.NewReader(probeBody))
 		if err != nil {
@@ -211,7 +226,11 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 		if err != nil {
 			return "", "start embedder service", err
 		}
-		defer embedResp.Body.Close()
+		defer func() {
+			if err := embedResp.Body.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "close: %v\n", err)
+			}
+		}()
 		if embedResp.StatusCode != http.StatusOK {
 			return "", "check embedder /embed endpoint", fmt.Errorf("embed status=%d", embedResp.StatusCode)
 		}
@@ -272,7 +291,11 @@ func CheckCanary(ctx context.Context, cfg Config) CheckResult {
 		if err != nil {
 			return "", "check database", err
 		}
-		defer tx.Rollback(ctx)
+		defer func() {
+			if err := tx.Rollback(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+			}
+		}()
 		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
 			return "", "check app.tenant_id GUC", err
 		}
@@ -283,7 +306,10 @@ func CheckCanary(ctx context.Context, cfg Config) CheckResult {
 		if err != nil {
 			return "", "check assembler", err
 		}
-		data, _ := json.Marshal(bundle)
+		data, err := json.Marshal(bundle)
+		if err != nil {
+			return "", "marshal bundle", err
+		}
 		return fmt.Sprintf("assembled %d bytes", len(data)), "", nil
 	})
 }
@@ -315,7 +341,11 @@ func checkHTTP(ctx context.Context, cfg Config, name, url string, want int) Chec
 		if err != nil {
 			return "", "start dependent service", err
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "close: %v\n", err)
+			}
+		}()
 		if resp.StatusCode != want {
 			return "", "check service health", fmt.Errorf("status=%d", resp.StatusCode)
 		}

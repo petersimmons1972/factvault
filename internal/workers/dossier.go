@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -41,7 +42,11 @@ func (w DossierWorker) RunOnce(ctx context.Context, opts DossierOptions) (int, e
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(txCtx)
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+		}
+	}()
 
 	ids, err := dossierEntityIDs(txCtx, tx, opts)
 	if err != nil {
