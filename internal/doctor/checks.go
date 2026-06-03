@@ -230,16 +230,23 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 			return "", fmt.Sprintf("expect %d-dim vectors", wantDim),
 				fmt.Errorf("vector dim=%d, want %d", len(vec), wantDim)
 		}
-		// Verify at least one component is non-zero (real model, not stub).
+		// Verify the vector norm is above the model-appropriate threshold.
+		//
+		// BGE-M3 and E5 models return L2-normalised vectors (norm≈1.0).
+		// A norm below 0.5 for these models almost certainly means a stub.
+		// Other models may return un-normalised vectors of arbitrary scale, so
+		// we only guard against the all-zero case (norm > 1e-9).
 		var norm float64
 		for _, v := range vec {
 			norm += v * v
 		}
-		if math.Sqrt(norm) < 1e-6 {
-			return "", "embedder returned zero vector — stub still active?",
-				fmt.Errorf("vector norm≈0, expected real BGE-M3 embedding")
+		norm = math.Sqrt(norm)
+		normThreshold, normLabel := normThresholdFor(modelName)
+		if norm < normThreshold {
+			return "", "embedder returned near-zero vector — stub still active?",
+				fmt.Errorf("vector norm=%.6g < %s threshold %.6g (model=%q)", norm, normLabel, normThreshold, modelName)
 		}
-		detail := fmt.Sprintf("dim=%d norm=%.4f", wantDim, math.Sqrt(norm))
+		detail := fmt.Sprintf("dim=%d norm=%.4f", wantDim, norm)
 		if modelName != "" {
 			detail = fmt.Sprintf("%s model=%s", detail, modelName)
 		}
@@ -279,6 +286,23 @@ func CheckCanary(ctx context.Context, cfg Config) CheckResult {
 		data, _ := json.Marshal(bundle)
 		return fmt.Sprintf("assembled %d bytes", len(data)), "", nil
 	})
+}
+
+// normThresholdFor returns the minimum acceptable L2-norm for a vector from
+// the named model, plus a short label for error messages.
+//
+//   - BGE-M3 and E5 models are L2-normalised (norm≈1.0).  Anything below 0.5
+//     means the model is not actually running.
+//   - All other models may return un-normalised vectors of arbitrary scale.
+//     We only reject the all-zero case (true stubs).  Threshold is 1e-9.
+//
+// The model name is matched case-insensitively against "bge" and "e5".
+func normThresholdFor(modelName string) (threshold float64, label string) {
+	lower := strings.ToLower(modelName)
+	if strings.Contains(lower, "bge") || strings.Contains(lower, "e5") {
+		return 0.5, "BGE/E5 normalised"
+	}
+	return 1e-9, "non-zero"
 }
 
 func checkHTTP(ctx context.Context, cfg Config, name, url string, want int) CheckResult {
