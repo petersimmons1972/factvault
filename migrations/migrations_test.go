@@ -37,6 +37,9 @@ func TestMigrationsRunClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pool.RunWithOptions: %v", err)
 	}
+	if err := resource.Expire(120); err != nil {
+		t.Fatalf("resource.Expire: %v", err)
+	}
 	t.Cleanup(func() {
 		if err := pool.Purge(resource); err != nil {
 			t.Logf("pool.Purge: %v", err)
