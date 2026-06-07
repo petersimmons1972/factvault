@@ -19,6 +19,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
+// CheckResult is the result of one doctor health check.
 type CheckResult struct {
 	Name     string `json:"name"`
 	OK       bool   `json:"ok"`
@@ -28,6 +29,7 @@ type CheckResult struct {
 	Elapsed  string `json:"elapsed"`
 }
 
+// Config carries the dependencies used by each doctor check.
 type Config struct {
 	DatabaseURL string
 	LLMURL      string
@@ -46,6 +48,8 @@ var (
 	optionalChecks = []checkFunc{CheckLLM, CheckEmbedder, CheckWayback}
 )
 
+// RunAll executes required checks first, then optional checks, and marks each
+// result as required or optional.
 func RunAll(ctx context.Context, cfg Config) []CheckResult {
 	results := make([]CheckResult, 0, len(requiredChecks)+len(optionalChecks))
 	for _, check := range requiredChecks {
@@ -61,6 +65,7 @@ func RunAll(ctx context.Context, cfg Config) []CheckResult {
 	return results
 }
 
+// AllOK reports whether every check in results completed successfully.
 func AllOK(results []CheckResult) bool {
 	for _, result := range results {
 		if !result.OK {
@@ -81,6 +86,7 @@ func RequiredOK(results []CheckResult) bool {
 	return true
 }
 
+// CheckPostgres verifies connectivity and pgvector extension presence.
 func CheckPostgres(ctx context.Context, cfg Config) CheckResult {
 	return timed("postgres", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -96,6 +102,7 @@ func CheckPostgres(ctx context.Context, cfg Config) CheckResult {
 	})
 }
 
+// CheckMigrations verifies at least one migration has been applied.
 func CheckMigrations(ctx context.Context, cfg Config) CheckResult {
 	return timed("migrations", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -114,6 +121,7 @@ func CheckMigrations(ctx context.Context, cfg Config) CheckResult {
 	})
 }
 
+// CheckRLS verifies tenant-isolated row-level security is enforced.
 func CheckRLS(ctx context.Context, cfg Config) CheckResult {
 	return timed("rls", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -152,6 +160,7 @@ func CheckRLS(ctx context.Context, cfg Config) CheckResult {
 	})
 }
 
+// CheckLLM verifies that the configured LLM endpoint responds.
 func CheckLLM(ctx context.Context, cfg Config) CheckResult {
 	url := strings.TrimRight(defaultString(cfg.LLMURL, "http://localhost:11434/v1"), "/") + "/models"
 	return checkHTTP(ctx, cfg, "llm", url, http.StatusOK)
@@ -162,6 +171,8 @@ func CheckLLM(ctx context.Context, cfg Config) CheckResult {
 // (Required=false) — operators running without an embedder should not see a
 // required failure.  If /info is available, the model name is included in the
 // detail string.
+// CheckEmbedder verifies that the embedder is reachable and producing non-zero
+// vectors of the expected dimension.
 func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 	return timed("embedder", func() (string, string, error) {
 		base := strings.TrimRight(defaultString(cfg.EmbedderURL, "http://localhost:8080"), "/")
@@ -273,11 +284,13 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 	})
 }
 
+// CheckWayback verifies the Wayback archive endpoint responds as healthy.
 func CheckWayback(ctx context.Context, cfg Config) CheckResult {
 	url := strings.TrimRight(defaultString(cfg.WaybackURL, "https://web.archive.org"), "/") + "/"
 	return checkHTTP(ctx, cfg, "wayback", url, http.StatusOK)
 }
 
+// CheckCanary performs a lightweight end-to-end persistence path check.
 func CheckCanary(ctx context.Context, cfg Config) CheckResult {
 	return timed("canary", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -351,18 +364,6 @@ func checkHTTP(ctx context.Context, cfg Config, name, url string, want int) Chec
 		}
 		return url, "", nil
 	})
-}
-
-func checkHTTPAny(ctx context.Context, cfg Config, name string, urls []string) CheckResult {
-	var last CheckResult
-	for _, url := range urls {
-		res := checkHTTP(ctx, cfg, name, url, http.StatusOK)
-		if res.OK {
-			return res
-		}
-		last = res
-	}
-	return last
 }
 
 func timed(name string, fn func() (detail, remedy string, err error)) CheckResult {

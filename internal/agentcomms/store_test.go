@@ -63,7 +63,7 @@ func TestReadIgnoresTmpFiles(t *testing.T) {
 	// §20.1: readers MUST ignore .tmp files.
 	s := newStore(t)
 	tmpPath := filepath.Join(s.inboxDir(AgentCodex), "2026-05-23T01:00:00Z-01HXYZABCDEFGHJKMNPQRSTVWX.json.tmp")
-	if err := os.WriteFile(tmpPath, []byte("{garbage"), 0o644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte("{garbage"), 0o600); err != nil {
 		t.Fatalf("write tmp: %v", err)
 	}
 	res, err := s.Read(ReadFilter{Inbox: AgentCodex})
@@ -82,7 +82,7 @@ func TestDeadLetterOnMalformed(t *testing.T) {
 	// §20.5: malformed JSON → dead-letter/ with sidecar, audit row appended.
 	s := newStore(t)
 	bad := filepath.Join(s.inboxDir(AgentCodex), "2026-05-23T01:00:00Z-01HXYZABCDEFGHJKMNPQRSTVWX.json")
-	if err := os.WriteFile(bad, []byte("{not json"), 0o644); err != nil {
+	if err := os.WriteFile(bad, []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("write bad: %v", err)
 	}
 	res, err := s.Read(ReadFilter{Inbox: AgentCodex})

@@ -55,7 +55,7 @@ func mockEmbedderServer(t *testing.T) *httptest.Server {
 
 func TestHTTPChecks(t *testing.T) {
 	// LLM and Wayback only need a simple 200 OK server.
-	simpleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	simpleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
 			panic(err)
@@ -220,7 +220,7 @@ func TestRunAll_SetsRequiredField(t *testing.T) {
 	embedderServer := mockEmbedderServer(t)
 	defer embedderServer.Close()
 
-	simpleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	simpleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := fmt.Fprint(w, `{"object":"list","data":[]}`); err != nil {
 			panic(err)

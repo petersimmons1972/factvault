@@ -1,3 +1,4 @@
+// Package deterministic implements deterministic extraction logic for factual values.
 package deterministic
 
 import (
@@ -11,6 +12,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/extractors"
 )
 
+// IdentifierExtractor extracts known ID-like values (CIK/CUSIP/ISIN/doi/etc).
 type IdentifierExtractor struct{}
 
 var (
@@ -22,6 +24,7 @@ var (
 	isbn13Pattern = regexp.MustCompile(`(?i)\b(?:ISBN(?:-13)?[:\s]*)?((?:97[89])(?:[-\s]?\d){10})\b`)
 )
 
+// Extract returns identifier-style facts parsed from raw text.
 func (IdentifierExtractor) Extract(ctx context.Context, source *db.Source, rawText string) ([]extractors.ExtractedFact, error) {
 	_ = ctx
 

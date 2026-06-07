@@ -25,7 +25,7 @@ func TestInitKeys_WritesKeyFiles(t *testing.T) {
 		t.Fatalf("public.pem is empty or missing")
 	}
 	// Validate PEM blocks are decodable.
-	privData, err := os.ReadFile(filepath.Clean(privPath)) //nolint:gosec // G304: path is filepath.Join(t.TempDir(),...), not user input
+	privData, err := os.ReadFile(filepath.Clean(privPath)) //nolint:gosec // G304: path from filepath.Join(t.TempDir(),...), not user input
 	if err != nil {
 		t.Fatalf("read private.pem: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestInitKeys_WritesKeyFiles(t *testing.T) {
 	if block == nil {
 		t.Fatal("private.pem: invalid PEM")
 	}
-	pubData, err := os.ReadFile(filepath.Clean(pubPath)) //nolint:gosec // G304: path is filepath.Join(t.TempDir(),...), not user input
+	pubData, err := os.ReadFile(filepath.Clean(pubPath)) //nolint:gosec // G304: path from filepath.Join(t.TempDir(),...), not user input
 	if err != nil {
 		t.Fatalf("read public.pem: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestInitKeys_IsIdempotent(t *testing.T) {
 		t.Fatalf("first initKeys: %v", err)
 	}
 	privPath := filepath.Join(dir, "private.pem")
-	first, err := os.ReadFile(privPath)
+	first, err := os.ReadFile(filepath.Clean(privPath)) //nolint:gosec // G304: path is built from t.TempDir() fixture path.
 	if err != nil {
 		t.Fatalf("read private.pem: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestInitKeys_IsIdempotent(t *testing.T) {
 	if err := initKeys(dir); err != nil {
 		t.Fatalf("second initKeys: %v", err)
 	}
-	second, err := os.ReadFile(privPath)
+	second, err := os.ReadFile(filepath.Clean(privPath)) //nolint:gosec // G304: path is built from t.TempDir() fixture path.
 	if err != nil {
 		t.Fatalf("read private.pem after second call: %v", err)
 	}

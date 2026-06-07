@@ -15,6 +15,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
+// StatementProposal is a candidate factual statement extracted from raw source text.
 type StatementProposal struct {
 	SubjectText        string `json:"subject_text"`
 	PropertySlug       string `json:"property_slug"`
@@ -25,6 +26,7 @@ type StatementProposal struct {
 	ExcerptOffsetEnd   int    `json:"excerpt_offset_end"`
 }
 
+// LLMClient queries an LLM completion endpoint and parses statement proposals.
 type LLMClient struct {
 	BaseURL    string
 	APIKey     string
@@ -52,7 +54,8 @@ type chatCompletionResponse struct {
 	} `json:"choices"`
 }
 
-func (c *LLMClient) Extract(ctx context.Context, source *db.Source, rawText string) ([]StatementProposal, error) {
+// Extract sends source text to the configured LLM and returns candidate proposals.
+func (c *LLMClient) Extract(ctx context.Context, _ *db.Source, rawText string) ([]StatementProposal, error) {
 	client := c.httpClient()
 	requestBody := chatCompletionRequest{
 		Model: c.Model,
@@ -150,6 +153,7 @@ func parseStatementProposals(content []byte) ([]StatementProposal, error) {
 	return nil, fmt.Errorf("unable to parse statement proposals")
 }
 
+// VerifyExcerptOffset checks that an excerpt appears at the claimed rune offsets.
 func VerifyExcerptOffset(rawText, excerpt string, offsetStart, offsetEnd int) bool {
 	if offsetStart < 0 || offsetEnd < offsetStart {
 		return false
@@ -169,6 +173,7 @@ func VerifyExcerptOffset(rawText, excerpt string, offsetStart, offsetEnd int) bo
 	return rawText[startByte:endByte] == excerpt
 }
 
+// FilterVerifiedStatementProposals drops proposals that fail excerpt verification.
 func FilterVerifiedStatementProposals(rawText string, proposals []StatementProposal) []StatementProposal {
 	out := make([]StatementProposal, 0, len(proposals))
 	for _, proposal := range proposals {

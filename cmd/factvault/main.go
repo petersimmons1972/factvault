@@ -1,3 +1,4 @@
+// Package main implements the factvault CLI entrypoint and command wiring.
 package main
 
 import (

@@ -10,6 +10,7 @@ import (
 	pgxvec "github.com/pgvector/pgvector-go/pgx"
 )
 
+// NewPool builds and verifies a pgx connection pool for the provided DSN.
 func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {

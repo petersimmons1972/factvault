@@ -16,6 +16,7 @@ import (
 // Agent identifies a participant on the bus.
 type Agent string
 
+// AgentClaude and AgentCodex identify participants in the filesystem message bus.
 const (
 	AgentClaude Agent = "claude"
 	AgentCodex  Agent = "codex"
@@ -24,6 +25,7 @@ const (
 // Kind enumerates the message kinds defined in schema.json.
 type Kind string
 
+// Message kinds recognized by the bus protocol v1.
 const (
 	KindQuestion Kind = "question"
 	KindAnswer   Kind = "answer"

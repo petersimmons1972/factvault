@@ -28,17 +28,6 @@ func (emptyExtractor) Extract(context.Context, *db.Source, string) ([]extractors
 	return nil, nil
 }
 
-type scriptedExtractor struct {
-	factsBySource map[string][]extractors.ExtractedFact
-}
-
-func (s scriptedExtractor) Extract(_ context.Context, source *db.Source, _ string) ([]extractors.ExtractedFact, error) {
-	if source == nil {
-		return nil, nil
-	}
-	return s.factsBySource[source.ID.String()], nil
-}
-
 type fixedExtractor struct {
 	facts []extractors.ExtractedFact
 }

@@ -1,3 +1,4 @@
+// Package deterministic implements deterministic extraction logic for factual values.
 package deterministic
 
 import (
@@ -11,10 +12,12 @@ import (
 	"github.com/petersimmons1972/factvault/internal/extractors"
 )
 
+// MoneyExtractor extracts monetary values with optional magnitude suffixes.
 type MoneyExtractor struct{}
 
 var moneyPattern = regexp.MustCompile(`(?i)(?:USD|US\$|\$)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.\d+)?|[0-9]+(?:\.\d+)?)(?:\s*(BILLION|MILLION|THOUSAND|BN|B|M|K))?\b`)
 
+// Extract returns USD-based number facts from raw text.
 func (MoneyExtractor) Extract(ctx context.Context, source *db.Source, rawText string) ([]extractors.ExtractedFact, error) {
 	_ = ctx
 

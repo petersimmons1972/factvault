@@ -1,3 +1,4 @@
+// Package deterministic implements deterministic extraction logic for factual values.
 package deterministic
 
 import (
@@ -10,6 +11,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/extractors"
 )
 
+// GazetteerExtractor extracts common named-entity facts from predefined lists.
 type GazetteerExtractor struct{}
 
 type gazetteerEntry struct {
@@ -46,6 +48,7 @@ var defaultGazetteerEntries = []gazetteerEntry{
 	},
 }
 
+// Extract returns dictionary-backed facts when alias matches are found.
 func (GazetteerExtractor) Extract(ctx context.Context, source *db.Source, rawText string) ([]extractors.ExtractedFact, error) {
 	_ = ctx
 

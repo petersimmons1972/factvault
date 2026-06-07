@@ -36,7 +36,7 @@ func NewStore(root string) (*Store, error) {
 	for _, sub := range []string{
 		"inbox/claude", "inbox/codex", "processed", "dead-letter", "audit",
 	} {
-		if err := os.MkdirAll(filepath.Join(root, sub), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, sub), 0o750); err != nil {
 			return nil, fmt.Errorf("mkdir %s: %w", sub, err)
 		}
 	}
@@ -81,8 +81,9 @@ func atomicWriteJSON(final string, v any) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	tmp := final + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	tmp := filepath.Clean(final + ".tmp")
+	// tmp is derived from the final destination in this package; directory traversal is not user-driven.
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // G304: path constructed from internal message filename.
 	if err != nil {
 		return fmt.Errorf("open tmp: %w", err)
 	}
@@ -171,8 +172,8 @@ func (s *Store) Read(filter ReadFilter) (*ReadResult, error) {
 		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		p := filepath.Join(dir, name)
-		data, rerr := os.ReadFile(p)
+		p := filepath.Join(dir, filepath.Base(name))
+		data, rerr := os.ReadFile(filepath.Clean(p)) //nolint:gosec // G304: directory and filename are from trusted inbox entry list.
 		if rerr != nil {
 			// Race with concurrent archive — skip silently.
 			if errors.Is(rerr, os.ErrNotExist) {
@@ -217,8 +218,8 @@ func sortByTS(ms []*Message) {
 // row to the audit log (§20.5).
 func (s *Store) routeDeadLetter(origPath string, data []byte, parseErr error) error {
 	base := filepath.Base(origPath)
-	dl := filepath.Join(s.Root, "dead-letter", base)
-	if err := os.WriteFile(dl, data, 0o644); err != nil {
+	dl := filepath.Clean(filepath.Join(s.Root, "dead-letter", base))
+	if err := os.WriteFile(dl, data, 0o600); err != nil { //nolint:gosec // G703: dead-letter path is rooted in s.Root and basename-sanitized.
 		return fmt.Errorf("dead-letter write: %w", err)
 	}
 	if err := os.Remove(origPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -251,7 +252,7 @@ func (s *Store) appendAudit(row map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("audit marshal: %w", err)
 	}
-	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // G304: path rooted under configured store root.
 	if err != nil {
 		return fmt.Errorf("audit open: %w", err)
 	}
