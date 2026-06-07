@@ -1,3 +1,4 @@
+// Package deterministic implements deterministic extraction logic for factual values.
 package deterministic
 
 import (
@@ -10,6 +11,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/extractors"
 )
 
+// DateExtractor extracts date facts from text.
 type DateExtractor struct{}
 
 var (
@@ -19,6 +21,7 @@ var (
 	dayMonthYearPattern = regexp.MustCompile(`\b\d{1,2} (?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4}\b`)
 )
 
+// Extract returns date facts discovered in raw text using deterministic regex patterns.
 func (DateExtractor) Extract(ctx context.Context, source *db.Source, rawText string) ([]extractors.ExtractedFact, error) {
 	_ = ctx
 

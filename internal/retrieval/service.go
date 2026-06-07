@@ -14,15 +14,18 @@ import (
 	"github.com/petersimmons1972/factvault/internal/db"
 )
 
+// Service provides tenant-aware retrieval APIs.
 type Service struct {
 	Pool *pgxpool.Pool
 }
 
+// DossierResponse is the HTTP response payload for a single-entity dossier request.
 type DossierResponse struct {
 	Bundle   *assembler.Bundle `json:"bundle"`
 	CachedAt *string           `json:"cached_at,omitempty"`
 }
 
+// StoryRequest captures search and depth controls for a story build.
 type StoryRequest struct {
 	Query         string  `json:"query"`
 	Depth         int     `json:"depth,omitempty"`
@@ -30,20 +33,24 @@ type StoryRequest struct {
 	MinConfidence float64 `json:"min_confidence,omitempty"`
 }
 
+// StoryResponse returns a built bundle for a story request.
 type StoryResponse struct {
 	Bundle *assembler.Bundle `json:"bundle"`
 }
 
+// FactsQueryRequest captures a full-text style query and confidence filters.
 type FactsQueryRequest struct {
 	Query         string  `json:"query"`
 	MaxFacts      *int    `json:"max_facts,omitempty"`
 	MinConfidence float64 `json:"min_confidence,omitempty"`
 }
 
+// FactsQueryResponse returns bundles for a facts-like query.
 type FactsQueryResponse struct {
 	Bundle *assembler.Bundle `json:"bundle"`
 }
 
+// Dossier returns the root bundle for one entity.
 func (s Service) Dossier(ctx context.Context, tenantID, entityID string) (*DossierResponse, error) {
 	return withTenantTx(ctx, s.Pool, tenantID, func(ctx context.Context, tx pgx.Tx) (*DossierResponse, error) {
 		bundle, err := assembler.Assemble(ctx, tx, []string{entityID}, 0, tenantID)
@@ -54,6 +61,7 @@ func (s Service) Dossier(ctx context.Context, tenantID, entityID string) (*Dossi
 	})
 }
 
+// Story builds a story bundle from query-matched seeds.
 func (s Service) Story(ctx context.Context, tenantID string, req StoryRequest) (*StoryResponse, error) {
 	depth := req.Depth
 	if depth == 0 {
@@ -78,6 +86,7 @@ func (s Service) Story(ctx context.Context, tenantID string, req StoryRequest) (
 	})
 }
 
+// FactsQuery builds bundles for a general facts search query.
 func (s Service) FactsQuery(ctx context.Context, tenantID string, req FactsQueryRequest) (*FactsQueryResponse, error) {
 	return withTenantTx(ctx, s.Pool, tenantID, func(ctx context.Context, tx pgx.Tx) (*FactsQueryResponse, error) {
 		seeds, err := seedEntities(ctx, tx, tenantID, req.Query, 10)

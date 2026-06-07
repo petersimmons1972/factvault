@@ -14,10 +14,13 @@ type contextKey int
 
 const poolKey contextKey = iota
 
+// WithPool stores the pool in context for downstream transaction-aware helpers.
+// Callers are expected to pass this context to tenant-aware helpers.
 func WithPool(ctx context.Context, pool *pgxpool.Pool) context.Context {
 	return context.WithValue(ctx, poolKey, pool)
 }
 
+// poolFromCtx returns the tenant context pool or an explanatory error.
 func poolFromCtx(ctx context.Context) (*pgxpool.Pool, error) {
 	pool, ok := ctx.Value(poolKey).(*pgxpool.Pool)
 	if !ok || pool == nil {
@@ -26,6 +29,8 @@ func poolFromCtx(ctx context.Context) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
+// TenantContext sets app.tenant_id and app_user role inside a transaction.
+// Returns the tx-backed context for tenant-scoped execution.
 func TenantContext(ctx context.Context, tenantID pgtype.UUID) (context.Context, pgx.Tx, error) {
 	pool, err := poolFromCtx(ctx)
 	if err != nil {

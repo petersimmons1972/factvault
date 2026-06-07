@@ -17,7 +17,7 @@ func TestK8sWorkerCronJobsIncludeTenantArg(t *testing.T) {
 	}
 
 	for _, path := range files {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // G304: path is static test fixture names
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
@@ -42,7 +42,7 @@ func TestK8sWorkerCronJobsIncludeMigrationInitContainer(t *testing.T) {
 	}
 
 	for _, path := range files {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // G304: path is static test fixture names
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}

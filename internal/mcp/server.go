@@ -1,3 +1,4 @@
+// Package mcpserver implements the Model Context Protocol tooling surface for factvault.
 package mcpserver
 
 import (
@@ -14,29 +15,34 @@ import (
 	"github.com/petersimmons1972/factvault/internal/version"
 )
 
+// Server owns MCP handlers and verification dependencies.
 type Server struct {
 	Service      retrieval.Service
 	Verifier     auth.Verifier
 	DefaultToken string
 }
 
+// EntityLookupArgs contains authorization and target entity for dossier lookup.
 type EntityLookupArgs struct {
 	Authorization string `json:"authorization" jsonschema:"Bearer token"`
 	EntityID      string `json:"entity_id" jsonschema:"entity UUID"`
 	Depth         int    `json:"depth,omitempty" jsonschema:"graph depth, normally 0 for dossier"`
 }
 
+// StoryQueryArgs contains authorization and query constraints for story search.
 type StoryQueryArgs struct {
 	Authorization string `json:"authorization" jsonschema:"Bearer token"`
 	Query         string `json:"query" jsonschema:"story query text"`
 	Depth         int    `json:"depth,omitempty" jsonschema:"graph depth from 1 to 3"`
 }
 
+// FactQueryArgs contains authorization and query text for fact search.
 type FactQueryArgs struct {
 	Authorization string `json:"authorization" jsonschema:"Bearer token"`
 	Query         string `json:"query" jsonschema:"fact query text"`
 }
 
+// New builds a new MCP server wrapper around retrieval and auth dependencies.
 func New(pool *pgxpool.Pool, publicKey *rsa.PublicKey, defaultToken string) *Server {
 	return &Server{
 		Service:      retrieval.Service{Pool: pool},
@@ -45,6 +51,7 @@ func New(pool *pgxpool.Pool, publicKey *rsa.PublicKey, defaultToken string) *Ser
 	}
 }
 
+// MCPServer builds the configured MCP tool surface.
 func (s *Server) MCPServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "factvault", Version: version.Version}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "factvault__entity_lookup", Description: "Return an entity dossier bundle."}, s.entityLookup)
@@ -53,6 +60,7 @@ func (s *Server) MCPServer() *mcp.Server {
 	return server
 }
 
+// RunStdio runs the MCP server using stdio transport.
 func (s *Server) RunStdio(ctx context.Context) error {
 	return s.MCPServer().Run(ctx, &mcp.StdioTransport{})
 }

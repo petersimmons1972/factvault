@@ -9,7 +9,7 @@ import (
 func TestLoadExample(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "demo")
-	if err := os.MkdirAll(filepath.Join(dir, "fixtures"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "fixtures"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	mustWrite(t, filepath.Join(dir, "properties.yaml"), "- slug: founded_in\n  label: Founded in\n  value_type: date\n")
@@ -33,7 +33,7 @@ func TestLoadExample(t *testing.T) {
 
 func mustWrite(t *testing.T, path string, data string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

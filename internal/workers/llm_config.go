@@ -7,6 +7,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/extractors"
 )
 
+// LLMRuntimeConfig captures runtime settings for LLM extraction.
 type LLMRuntimeConfig struct {
 	Provider string
 	Model    string
@@ -14,6 +15,7 @@ type LLMRuntimeConfig struct {
 	APIKey   string
 }
 
+// BuildLLMExtractor constructs an LLM extractor implementation from config.
 func BuildLLMExtractor(cfg LLMRuntimeConfig) (LLMExtractor, string, error) {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	model := strings.TrimSpace(cfg.Model)

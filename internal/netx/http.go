@@ -18,10 +18,12 @@ const (
 	maxRedirects       = 5
 )
 
+// ClientPolicy controls host validation behavior for client requests.
 type ClientPolicy struct {
 	AllowPrivateHosts bool
 }
 
+// NewHTTPClient builds an HTTP client with safe defaults and SSRF checks.
 func NewHTTPClient(timeout time.Duration, policy ClientPolicy) *http.Client {
 	if timeout <= 0 {
 		timeout = defaultHTTPTimeout
@@ -52,14 +54,17 @@ func NewHTTPClient(timeout time.Duration, policy ClientPolicy) *http.Client {
 	}
 }
 
+// NewSafeHTTPClient builds an HTTP client that blocks private addresses.
 func NewSafeHTTPClient(timeout time.Duration) *http.Client {
 	return NewHTTPClient(timeout, ClientPolicy{AllowPrivateHosts: false})
 }
 
+// ValidatePublicHTTPURL verifies URL syntax and blocks private hosts.
 func ValidatePublicHTTPURL(ctx context.Context, raw string) error {
 	return ValidateHTTPURL(ctx, raw, false)
 }
 
+// ValidateHTTPURL verifies URL syntax and optionally allows private hosts.
 func ValidateHTTPURL(ctx context.Context, raw string, allowPrivateHosts bool) error {
 	u, err := url.Parse(raw)
 	if err != nil {

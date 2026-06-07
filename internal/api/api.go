@@ -1,3 +1,4 @@
+// Package api exposes the HTTP endpoints for factvault service operations.
 package api
 
 import (
@@ -18,20 +19,24 @@ import (
 	"github.com/petersimmons1972/factvault/internal/retrieval"
 )
 
+// Server hosts HTTP handlers for retrieval, briefs, and liveness endpoints.
 type Server struct {
 	Service  retrieval.Service
 	Verifier auth.Verifier
 }
 
+// HealthResponse is the JSON payload for /healthz.
 type HealthResponse struct {
 	Status string `json:"status"`
 }
 
+// ReadyResponse is the JSON payload for /readyz.
 type ReadyResponse struct {
 	Ready  bool     `json:"ready"`
 	Errors []string `json:"errors,omitempty"`
 }
 
+// Problem follows RFC 7807-compatible error response structure.
 type Problem struct {
 	Type   string `json:"type"`
 	Title  string `json:"title"`
@@ -39,6 +44,7 @@ type Problem struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// New constructs a Server with retrieval service and verifier dependencies.
 func New(pool *pgxpool.Pool, publicKey *rsa.PublicKey) *Server {
 	return &Server{
 		Service:  retrieval.Service{Pool: pool},
@@ -46,12 +52,13 @@ func New(pool *pgxpool.Pool, publicKey *rsa.PublicKey) *Server {
 	}
 }
 
+// Router wires API routes and middleware.
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, HealthResponse{Status: "ok"})
 	})
-	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		ready := s.Service.Pool != nil
 		resp := ReadyResponse{Ready: ready}
 		if !ready {

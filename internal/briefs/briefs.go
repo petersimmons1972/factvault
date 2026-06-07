@@ -23,8 +23,10 @@ import (
 type SourceKind string
 
 const (
+	// SourceKindDossier indicates a brief derived from an entity dossier.
 	SourceKindDossier SourceKind = "dossier"
-	SourceKindStory   SourceKind = "story"
+	// SourceKindStory indicates a brief derived from a story query.
+	SourceKindStory SourceKind = "story"
 )
 
 // GenerateRequest carries all inputs needed to generate and store a brief.

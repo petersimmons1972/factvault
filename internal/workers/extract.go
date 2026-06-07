@@ -38,6 +38,7 @@ func VerifyExcerptOffset(rawText, excerpt string, offsetStart, offsetEnd int) bo
 	return rawText[startBytePos:endBytePos] == excerpt
 }
 
+// FactPipeline orchestrates extraction from archived source text into statements.
 type FactPipeline struct {
 	DB                     *pgxpool.Pool
 	Deterministic          extractors.Extractor
@@ -49,6 +50,7 @@ type FactPipeline struct {
 	Logger                 *slog.Logger
 }
 
+// LLMExtractor submits source text to an LLM and returns statement proposals.
 type LLMExtractor interface {
 	Extract(ctx context.Context, source *db.Source, rawText string) ([]extractors.StatementProposal, error)
 }
@@ -59,6 +61,7 @@ type queryExecutor interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// ExtractOnce runs deterministic extraction (and optional LLM augmentation) once.
 func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit int) error {
 	if p == nil || p.DB == nil {
 		return fmt.Errorf("extract worker: nil db pool")

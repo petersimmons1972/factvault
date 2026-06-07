@@ -16,6 +16,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/db"
 )
 
+// Corroborator validates and re-weights statement confidence across sources.
 type Corroborator struct {
 	DB     *pgxpool.Pool
 	Logger *slog.Logger
@@ -30,6 +31,7 @@ type sourceEvidence struct {
 	Confidence  float64
 }
 
+// CorroborateOnce verifies corroboration evidence for extracted statements.
 func (c *Corroborator) CorroborateOnce(ctx context.Context, tenantID string) error {
 	if c == nil || c.DB == nil {
 		return fmt.Errorf("corroborate worker: nil db pool")
@@ -97,6 +99,7 @@ type sourceCluster struct {
 	texts  []string
 }
 
+// CountIndependentSources estimates independent evidence clusters across domains.
 func CountIndependentSources(evidence []sourceEvidence) int {
 	var clusters []sourceCluster
 	for _, ev := range evidence {

@@ -12,6 +12,7 @@ import (
 )
 
 // Bundle is the canonical JSON structure produced by Assemble.
+// Bundle is the complete assembled response returned by dossier/story endpoints.
 type Bundle struct {
 	EntityID    string            `json:"entity_id"`
 	Entities    []BundleEntity    `json:"entities"`
@@ -23,6 +24,7 @@ type Bundle struct {
 	TenantID    string            `json:"tenant_id"`
 }
 
+// BundleEntity represents one entity included in a bundle.
 type BundleEntity struct {
 	ID            string  `json:"id"`
 	Name          string  `json:"name"`
@@ -31,6 +33,7 @@ type BundleEntity struct {
 	Description   *string `json:"description,omitempty"`
 }
 
+// BundleStatement represents one fact statement included in a bundle.
 type BundleStatement struct {
 	ID           string   `json:"id"`
 	EntityID     string   `json:"entity_id"`
@@ -43,6 +46,7 @@ type BundleStatement struct {
 	QualifierIDs []string `json:"qualifier_ids,omitempty"`
 }
 
+// BundleSource tracks source material used by a statement.
 type BundleSource struct {
 	ID                 string  `json:"id"`
 	URL                string  `json:"url"`
@@ -54,6 +58,7 @@ type BundleSource struct {
 	ExcerptOffsetEnd   int32   `json:"excerpt_offset_end"`
 }
 
+// BundleQualifier represents qualifying context for a statement.
 type BundleQualifier struct {
 	ID           string `json:"id"`
 	StatementID  string `json:"statement_id"`
@@ -62,6 +67,7 @@ type BundleQualifier struct {
 	ValueType    string `json:"value_type"`
 }
 
+// BundleRelation connects a pair of entities in an assembly graph.
 type BundleRelation struct {
 	ID               string  `json:"id"`
 	SourceEntityID   string  `json:"source_entity_id"`
@@ -92,6 +98,7 @@ func Assemble(
 	if len(entityIDs) == 0 {
 		return nil, ErrInvalidEntityCount
 	}
+	primaryEntityID := entityIDs[0]
 	if depth < 0 || depth > 3 {
 		return nil, ErrInvalidDepth
 	}
@@ -140,7 +147,7 @@ func Assemble(
 	}
 
 	return &Bundle{
-		EntityID:    entityIDs[0],
+		EntityID:    primaryEntityID,
 		Entities:    entities,
 		Statements:  statements,
 		Sources:     sources,

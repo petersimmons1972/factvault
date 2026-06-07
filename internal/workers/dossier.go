@@ -15,10 +15,12 @@ import (
 	"github.com/petersimmons1972/factvault/internal/db"
 )
 
+// DossierWorker builds and persists dossier bundles.
 type DossierWorker struct {
 	DB *pgxpool.Pool
 }
 
+// DossierOptions controls the scope for dossier generation.
 type DossierOptions struct {
 	TenantID string
 	EntityID string
@@ -26,6 +28,7 @@ type DossierOptions struct {
 	Limit    int
 }
 
+// RunOnce builds dossier bundles for one batch of entities.
 func (w DossierWorker) RunOnce(ctx context.Context, opts DossierOptions) (int, error) {
 	if w.DB == nil {
 		return 0, fmt.Errorf("dossier worker: nil db pool")

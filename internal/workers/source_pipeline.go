@@ -20,6 +20,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
+// SourcePipeline coordinates collection, archiving, and re-verification of sources.
 type SourcePipeline struct {
 	DB         *pgxpool.Pool
 	HTTPClient *http.Client
@@ -27,6 +28,7 @@ type SourcePipeline struct {
 
 const maxVerifyBodyBytes = 10 * 1024 * 1024
 
+// CollectOnce fetches source candidates and persists them as collected sources.
 func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c collectors.Collector) error {
 	items, err := c.Collect(ctx)
 	if err != nil {
@@ -57,6 +59,7 @@ ON CONFLICT (tenant_id, url) DO NOTHING
 	return nil
 }
 
+// ArchiveOnce fetches collected sources and stores archived text artifacts.
 func (p *SourcePipeline) ArchiveOnce(ctx context.Context, tenantID string, limit int) error {
 	if limit <= 0 {
 		limit = 100
@@ -96,6 +99,7 @@ WHERE id = $3
 	return rows.Err()
 }
 
+// VerifyOnce validates source links and records verification outcomes.
 func (p *SourcePipeline) VerifyOnce(ctx context.Context, tenantID string, ageDays int, limit int) error {
 	if ageDays <= 0 {
 		ageDays = 7
@@ -230,7 +234,7 @@ func decompress(b []byte) ([]byte, error) {
 func stripHTML(html string) string {
 	s := html
 	repl := []string{"<br>", "\n", "<br/>", "\n", "<br />", "\n", "</p>", "\n", "</div>", "\n"}
-	for i := 0; i < len(repl); i += 2 {
+	for i := 0; i+1 < len(repl); i += 2 {
 		s = strings.ReplaceAll(s, repl[i], repl[i+1])
 	}
 	inTag := false

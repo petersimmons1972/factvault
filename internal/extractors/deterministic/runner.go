@@ -1,3 +1,4 @@
+// Package deterministic implements deterministic extraction logic for factual values.
 package deterministic
 
 import (
@@ -9,6 +10,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/extractors"
 )
 
+// Runner coordinates deterministic extractors over deterministic inputs.
 type Runner struct {
 	IdentifierExtractor extractors.Extractor
 	MoneyExtractor      extractors.Extractor
@@ -16,6 +18,7 @@ type Runner struct {
 	GazetteerExtractor  extractors.Extractor
 }
 
+// NewRunner constructs a Runner with the built-in extractor implementations.
 func NewRunner() Runner {
 	return Runner{
 		IdentifierExtractor: IdentifierExtractor{},
@@ -25,6 +28,7 @@ func NewRunner() Runner {
 	}
 }
 
+// Extract runs each configured extractor and deduplicates extracted facts.
 func (r Runner) Extract(ctx context.Context, source *db.Source, rawText string) ([]extractors.ExtractedFact, error) {
 	if r.IdentifierExtractor == nil || r.MoneyExtractor == nil || r.DateExtractor == nil || r.GazetteerExtractor == nil {
 		defaultRunner := NewRunner()

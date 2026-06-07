@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -45,7 +46,15 @@ func newAPICmd() *cobra.Command {
 				return err
 			}
 			defer pool.Close()
-			return http.ListenAndServe(addr, api.New(pool, pub).Router())
+			httpServer := http.Server{
+				Addr:              addr,
+				Handler:           api.New(pool, pub).Router(),
+				ReadTimeout:       5 * time.Second,
+				ReadHeaderTimeout: 5 * time.Second,
+				WriteTimeout:      30 * time.Second,
+				IdleTimeout:       60 * time.Second,
+			}
+			return httpServer.ListenAndServe()
 		},
 	}
 	cmd.Flags().StringVar(&dsn, "dsn", "", "Postgres DSN (or FACTVAULT_DATABASE_URL)")

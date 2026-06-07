@@ -29,6 +29,7 @@ var (
 	dsn      string
 )
 
+// StartContainer launches a shared PostgreSQL container for tests in this process.
 func StartContainer() {
 	once.Do(func() {
 		var err error
@@ -100,6 +101,7 @@ func StartContainer() {
 	})
 }
 
+// StopContainer stops and removes the shared PostgreSQL test container.
 func StopContainer() {
 	if contName != "" {
 		if err := runDockerCommand("rm", "-f", contName); err != nil {
@@ -109,12 +111,13 @@ func StopContainer() {
 	}
 }
 
+// New returns a pgx pool connected to the current test database.
 func New(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if startErr != nil {
 		t.Fatalf("testdb startup failed: %v", startErr)
 	}
-	pool, err := db.NewPool(context.Background(), dsn)
+	pool, err := db.NewPool(t.Context(), dsn)
 	if err != nil {
 		t.Fatalf("db.NewPool: %v", err)
 	}
@@ -124,10 +127,25 @@ func New(t *testing.T) *pgxpool.Pool {
 
 // Setup initializes the test database container and returns a connection pool.
 // This is a convenience wrapper that calls StartContainer once and New for each test.
-func Setup(_ context.Context, t *testing.T) *pgxpool.Pool {
+func Setup(ctx context.Context, t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	StartContainer()
-	return New(t)
+	return NewWithContext(ctx, t)
+}
+
+// NewWithContext returns a connection pool bound to the provided context.
+// This should be preferred over New when callers already have an active context.
+func NewWithContext(ctx context.Context, t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	if startErr != nil {
+		t.Fatalf("testdb startup failed: %v", startErr)
+	}
+	pool, err := db.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("db.NewPool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
 }
 
 func migrationsPath() string {
@@ -147,29 +165,48 @@ func migrationsPath() string {
 
 func testDBStartupLock() (func(), error) {
 	lockPath := filepath.Join(os.TempDir(), "factvault-testdb-start.lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	// lockPath is constrained to os.TempDir()+filename and not user-provided.
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: lock path is fixed in test code.
 	if err != nil {
 		return nil, fmt.Errorf("open testdb startup lock: %w", err)
 	}
-	fd := f.Fd()
-	if fd > uintptr(^uint(0)>>1) { // fd exceeds max int
-		return nil, fmt.Errorf("file descriptor %d overflows int", fd)
+	fd, err := fileDescriptor(f)
+	if err != nil {
+		if closeErr := f.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "close on error: %v\n", closeErr)
+		}
+		return nil, err
 	}
-	if err := syscall.Flock(int(fd), syscall.LOCK_EX); err != nil {
+	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
 		if closeErr := f.Close(); closeErr != nil {
 			fmt.Fprintf(os.Stderr, "close on error: %v\n", closeErr)
 		}
 		return nil, fmt.Errorf("lock testdb startup: %w", err)
 	}
 	return func() {
-		unlockFd := f.Fd()
-		if err := syscall.Flock(int(unlockFd), syscall.LOCK_UN); err != nil {
+		unlockFd, derr := fileDescriptor(f)
+		if derr != nil {
+			fmt.Fprintf(os.Stderr, "testdb startup lock descriptor: %v\n", derr)
+			if err := f.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "close: %v\n", err)
+			}
+			return
+		}
+		if err := syscall.Flock(unlockFd, syscall.LOCK_UN); err != nil {
 			fmt.Fprintf(os.Stderr, "unlock: %v\n", err)
 		}
 		if err := f.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "close: %v\n", err)
 		}
 	}, nil
+}
+
+func fileDescriptor(f *os.File) (int, error) {
+	fd := f.Fd()
+	if fd > uintptr(^uint(0)>>1) {
+		return 0, fmt.Errorf("file descriptor %d overflows int", fd)
+	}
+	return int(fd), nil
 }
 
 func postgresImage() (repository, tag string) {
@@ -186,7 +223,7 @@ func postgresImage() (repository, tag string) {
 }
 
 func runDockerCommand(args ...string) error {
-	cmd := exec.Command("docker", args...)
+	cmd := exec.Command("docker", args...) //nolint:gosec // G204: command is fixed, args are constrained and validated by test environment
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -194,7 +231,7 @@ func runDockerCommand(args ...string) error {
 }
 
 func dockerMappedPort(containerName, containerPort string) (string, error) {
-	cmd := exec.Command("docker", "port", containerName, containerPort)
+	cmd := exec.Command("docker", "port", containerName, containerPort) //nolint:gosec // G204: command is fixed; container identifiers are sourced from test fixtures and validated
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("docker port %s %s: %w: %s", containerName, containerPort, err, strings.TrimSpace(string(out)))
