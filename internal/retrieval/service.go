@@ -12,11 +12,37 @@ import (
 
 	"github.com/petersimmons1972/factvault/internal/assembler"
 	"github.com/petersimmons1972/factvault/internal/db"
+	"github.com/petersimmons1972/factvault/internal/store"
 )
+
+// cosineSeedThreshold is the minimum cosine similarity score (1 - distance)
+// for an entity to be returned by the cosine seed search path.
+// Entities with score below this threshold are excluded from cosine results;
+// when no entity meets the threshold, the search falls back to ILIKE.
+const cosineSeedThreshold = 0.6
+
+// Embedder abstracts the embed.Client so tests can inject a stub without
+// requiring a live HTTP server.
+type Embedder interface {
+	Embed(ctx context.Context, texts []string) ([][]float32, error)
+}
 
 // Service provides tenant-aware retrieval APIs.
 type Service struct {
-	Pool *pgxpool.Pool
+	Pool        *pgxpool.Pool
+	vectorStore store.VectorStore
+	embedder    Embedder
+}
+
+// NewService constructs a Service with all required dependencies.
+// embedder and vectorStore may be nil; if either is nil the cosine seed path
+// is skipped and seedEntities falls back to ILIKE for all queries.
+func NewService(pool *pgxpool.Pool, embedder Embedder, vectorStore store.VectorStore) Service {
+	return Service{
+		Pool:        pool,
+		vectorStore: vectorStore,
+		embedder:    embedder,
+	}
 }
 
 // DossierResponse is the HTTP response payload for a single-entity dossier request.
@@ -71,7 +97,7 @@ func (s Service) Story(ctx context.Context, tenantID string, req StoryRequest) (
 		return nil, assembler.ErrInvalidDepth
 	}
 	return withTenantTx(ctx, s.Pool, tenantID, func(ctx context.Context, tx pgx.Tx) (*StoryResponse, error) {
-		seeds, err := seedEntities(ctx, tx, tenantID, req.Query, 10)
+		seeds, err := s.seedEntities(ctx, tx, tenantID, req.Query, 10)
 		if err != nil {
 			return nil, err
 		}
@@ -89,7 +115,7 @@ func (s Service) Story(ctx context.Context, tenantID string, req StoryRequest) (
 // FactsQuery builds bundles for a general facts search query.
 func (s Service) FactsQuery(ctx context.Context, tenantID string, req FactsQueryRequest) (*FactsQueryResponse, error) {
 	return withTenantTx(ctx, s.Pool, tenantID, func(ctx context.Context, tx pgx.Tx) (*FactsQueryResponse, error) {
-		seeds, err := seedEntities(ctx, tx, tenantID, req.Query, 10)
+		seeds, err := s.seedEntities(ctx, tx, tenantID, req.Query, 10)
 		if err != nil {
 			return nil, err
 		}
@@ -126,10 +152,72 @@ func withTenantTx[T any](ctx context.Context, pool *pgxpool.Pool, tenantID strin
 	return fn(txCtx, tx)
 }
 
-func seedEntities(ctx context.Context, tx pgx.Tx, tenantID, query string, limit int) ([]string, error) {
+// seedEntities finds seed entity IDs for the given query.
+//
+// Strategy (cosine-first with ILIKE fallback):
+//  1. Empty query → ILIKE path (returns most recent entities, existing behavior).
+//  2. Non-empty query with embedder + vectorStore available → embed the query,
+//     call SearchNearest, filter by cosineSeedThreshold.
+//     If cosine returns at least one result, return those IDs.
+//  3. Fallback to ILIKE when:
+//     - embedder or vectorStore is nil, OR
+//     - embedder call fails (e.g. service unreachable), OR
+//     - cosine returns zero results above threshold.
+//
+// The ILIKE fallback is always graceful — a down embedder must never 500 callers.
+func (s Service) seedEntities(ctx context.Context, tx pgx.Tx, tenantID, query string, limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 10
 	}
+
+	// Cosine path: only attempted for non-empty queries with both deps wired.
+	if query != "" && s.embedder != nil && s.vectorStore != nil {
+		ids, err := s.cosineSeed(ctx, tenantID, query, limit)
+		if err == nil && len(ids) > 0 {
+			return ids, nil
+		}
+		// err != nil means embedder unreachable or SearchNearest failed — fall through to ILIKE.
+		// len(ids) == 0 means nothing above threshold — fall through to ILIKE.
+	}
+
+	return ilikeSeed(ctx, tx, tenantID, query, limit)
+}
+
+// cosineSeed embeds the query and searches for nearest entities by cosine similarity.
+// Returns entity IDs whose similarity score exceeds cosineSeedThreshold.
+// Returns a non-nil error only when the embedder itself fails (network/HTTP error);
+// callers treat any error here as a signal to fall back to ILIKE.
+func (s Service) cosineSeed(ctx context.Context, tenantID, query string, limit int) ([]string, error) {
+	var tenantUUID pgtype.UUID
+	if err := tenantUUID.Scan(tenantID); err != nil {
+		return nil, fmt.Errorf("retrieval: invalid tenant id for cosine seed: %w", err)
+	}
+
+	vecs, err := s.embedder.Embed(ctx, []string{query})
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: embed query: %w", err)
+	}
+	if len(vecs) == 0 || len(vecs[0]) == 0 {
+		return nil, fmt.Errorf("retrieval: embedder returned empty vector")
+	}
+
+	results, err := s.vectorStore.SearchNearest(ctx, tenantUUID, vecs[0], limit)
+	if err != nil {
+		return nil, fmt.Errorf("retrieval: SearchNearest: %w", err)
+	}
+
+	ids := make([]string, 0, len(results))
+	for _, r := range results {
+		if r.Score >= cosineSeedThreshold {
+			ids = append(ids, uuidToString(r.Entity.ID))
+		}
+	}
+	return ids, nil
+}
+
+// ilikeSeed is the original ILIKE-based seed lookup. Unchanged behavior:
+// empty query returns most-recent entities; non-empty query filters by label/description.
+func ilikeSeed(ctx context.Context, tx pgx.Tx, tenantID, query string, limit int) ([]string, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id::text
 		FROM entities
@@ -150,4 +238,14 @@ func seedEntities(ctx context.Context, tx pgx.Tx, tenantID, query string, limit 
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// uuidToString converts a pgtype.UUID to its string representation.
+func uuidToString(id pgtype.UUID) string {
+	if !id.Valid {
+		return ""
+	}
+	b := id.Bytes
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

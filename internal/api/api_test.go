@@ -58,7 +58,7 @@ func TestDossierRouteRequiresAndAcceptsJWT(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 
-	h := New(pool, pub).Router()
+	h := New(pool, pub, "").Router()
 	unauth := httptest.NewRecorder()
 	h.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "/entities/"+entityID+"/dossier", nil))
 	if unauth.Code != http.StatusUnauthorized {
@@ -116,7 +116,7 @@ func TestBriefRoutesTenantScoped(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 
-	h := New(pool, pub).Router()
+	h := New(pool, pub, "").Router()
 	body := []byte(`{"source_kind":"dossier","entity_id":"` + entityID + `","bundle":{"entity_id":"` + entityID + `","tenant_id":"` + tenantID + `","entities":[],"statements":[],"sources":[],"assembled_at":"2026-01-01T00:00:00Z"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/briefs/generate", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
