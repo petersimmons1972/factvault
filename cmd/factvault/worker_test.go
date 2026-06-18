@@ -114,3 +114,33 @@ func TestRSSOnceUsesAllScheduledFeeds(t *testing.T) {
 		t.Fatalf("once indexes=%v", idx)
 	}
 }
+
+// TestWorkerCmdHasEmbedSubcommand verifies the embed subcommand is registered.
+func TestWorkerCmdHasEmbedSubcommand(t *testing.T) {
+	cmd := newWorkerCmd()
+	var found bool
+	for _, sub := range cmd.Commands() {
+		if sub.Use == "embed" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("worker command does not have an 'embed' subcommand")
+	}
+}
+
+// TestEmbedSubcommandHasEmbedderURLFlag verifies the --embedder-url flag is present.
+func TestEmbedSubcommandHasEmbedderURLFlag(t *testing.T) {
+	cmd := newWorkerCmd()
+	for _, sub := range cmd.Commands() {
+		if sub.Use == "embed" {
+			f := sub.Flags().Lookup("embedder-url")
+			if f == nil {
+				t.Fatal("embed subcommand missing --embedder-url flag")
+			}
+			return
+		}
+	}
+	t.Fatal("embed subcommand not found")
+}

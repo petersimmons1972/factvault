@@ -11,6 +11,7 @@ import (
 
 	"github.com/petersimmons1972/factvault/internal/collectors"
 	"github.com/petersimmons1972/factvault/internal/db"
+	"github.com/petersimmons1972/factvault/internal/embed"
 	"github.com/petersimmons1972/factvault/internal/research"
 	"github.com/petersimmons1972/factvault/internal/vocabulary"
 	"github.com/petersimmons1972/factvault/internal/workers"
@@ -339,6 +340,60 @@ archive→extract→verify processing.`,
 	researchCmd.Flags().Int("max-fetches", 40, "Hard ceiling on page fetches")
 	researchCmd.Flags().String("entity-type", "", "Entity type (e.g. Person, City, Company)")
 	cmd.AddCommand(researchCmd)
+
+	embedCmd := &cobra.Command{
+		Use:   "embed",
+		Short: "Populate NULL embedding columns for entities, statements, and sources",
+		Long: `Backfill the vector(1024) embedding columns that are left NULL by the
+extract and collect workers. Rows that already have embeddings are skipped
+(idempotent). Run repeatedly to make incremental progress.
+
+The embedder service URL is taken from --embedder-url or FACTVAULT_EMBEDDER_URL.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if dsn == "" {
+				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+			}
+			if dsn == "" {
+				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
+			}
+			if tenantID == "" {
+				return fmt.Errorf("tenant required: set --tenant")
+			}
+			embedderURL, err := cmd.Flags().GetString("embedder-url")
+			if err != nil {
+				return fmt.Errorf("--embedder-url: %w", err)
+			}
+			if embedderURL == "" {
+				embedderURL = os.Getenv("FACTVAULT_EMBEDDER_URL")
+			}
+			if embedderURL == "" {
+				embedderURL = "http://localhost:8080"
+			}
+
+			pool, err := db.NewPool(cmd.Context(), dsn)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+
+			w := &workers.EmbedWorker{
+				DB:     pool,
+				Client: embed.NewClient(embedderURL, nil),
+			}
+			result, err := w.RunOnce(cmd.Context(), tenantID, workers.EmbedOptions{Limit: limit})
+			if err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "embed: populated=%d skipped=%d\n", result.Populated, result.Skipped); err != nil {
+				return fmt.Errorf("write output: %w", err)
+			}
+			return nil
+		},
+	}
+	embedCmd.Flags().String("embedder-url", "", "Embedder service URL (or FACTVAULT_EMBEDDER_URL)")
+	cmd.AddCommand(embedCmd)
+
 	return cmd
 }
 
