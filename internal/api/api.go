@@ -16,7 +16,10 @@ import (
 	"github.com/petersimmons1972/factvault/internal/assembler"
 	"github.com/petersimmons1972/factvault/internal/auth"
 	"github.com/petersimmons1972/factvault/internal/briefs"
+	"github.com/petersimmons1972/factvault/internal/embed"
 	"github.com/petersimmons1972/factvault/internal/retrieval"
+	"github.com/petersimmons1972/factvault/internal/store"
+	pgstore "github.com/petersimmons1972/factvault/internal/store/postgres"
 )
 
 // Server hosts HTTP handlers for retrieval, briefs, and liveness endpoints.
@@ -45,9 +48,19 @@ type Problem struct {
 }
 
 // New constructs a Server with retrieval service and verifier dependencies.
-func New(pool *pgxpool.Pool, publicKey *rsa.PublicKey) *Server {
+// embedderURL is the base URL for the embedder service (e.g. FACTVAULT_EMBEDDER_URL).
+// If empty, the cosine seed-search path is disabled and all queries fall back to ILIKE.
+func New(pool *pgxpool.Pool, publicKey *rsa.PublicKey, embedderURL string) *Server {
+	var embedder retrieval.Embedder
+	if embedderURL != "" {
+		embedder = embed.NewClient(embedderURL, nil)
+	}
+	var vs store.VectorStore
+	if pool != nil {
+		vs = pgstore.New(pool)
+	}
 	return &Server{
-		Service:  retrieval.Service{Pool: pool},
+		Service:  retrieval.NewService(pool, embedder, vs),
 		Verifier: auth.Verifier{PublicKey: publicKey},
 	}
 }
