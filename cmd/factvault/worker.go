@@ -11,6 +11,7 @@ import (
 
 	"github.com/petersimmons1972/factvault/internal/collectors"
 	"github.com/petersimmons1972/factvault/internal/db"
+	"github.com/petersimmons1972/factvault/internal/research"
 	"github.com/petersimmons1972/factvault/internal/vocabulary"
 	"github.com/petersimmons1972/factvault/internal/workers"
 )
@@ -223,6 +224,121 @@ func newWorkerCmd() *cobra.Command {
 			return err
 		},
 	})
+
+	// research subcommand: generate queries → fetch candidate URLs → CollectOnce.
+	researchCmd := &cobra.Command{
+		Use:   "research <entity>",
+		Short: "Actively research an entity: generate queries → web search → collect URLs",
+		Long: `Generate perspective-angled web search queries for a seed entity using 2 LLM
+calls, then fetch candidate URLs and feed them into the existing collect pipeline.
+
+Bounds (moderate defaults; adjust with flags):
+  --perspectives       5   LLM-generated research angles
+  --questions-per      4   search queries per perspective
+  --results-per-query  5   search results fetched per query
+  --max-fetches        40  hard ceiling on page fetches per run (cost guarantee)
+
+A run consumes: 2 LLM calls + ≤(perspectives×questions) searches + ≤max-fetches page fetches.
+Sources are tagged with meta.trust_tier="web" and land in status=collected for normal
+archive→extract→verify processing.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if dsn == "" {
+				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+			}
+			if dsn == "" {
+				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
+			}
+			if tenantID == "" {
+				return fmt.Errorf("tenant required: set --tenant")
+			}
+
+			perspectives, err := cmd.Flags().GetInt("perspectives")
+			if err != nil {
+				return err
+			}
+			questionsPerPerspective, err := cmd.Flags().GetInt("questions-per")
+			if err != nil {
+				return err
+			}
+			resultsPerQuery, err := cmd.Flags().GetInt("results-per-query")
+			if err != nil {
+				return err
+			}
+			maxFetches, err := cmd.Flags().GetInt("max-fetches")
+			if err != nil {
+				return err
+			}
+			entityType, err := cmd.Flags().GetString("entity-type")
+			if err != nil {
+				return err
+			}
+
+			cfg := research.Config{
+				Perspectives:            perspectives,
+				QuestionsPerPerspective: questionsPerPerspective,
+				ResultsPerQuery:         resultsPerQuery,
+				MaxTotalFetches:         maxFetches,
+			}
+			entity := research.Entity{
+				Label: args[0],
+				Type:  entityType,
+			}
+			llmCfg := research.LLMConfig{
+				BaseURL: firstNonEmpty(llmBaseURL, os.Getenv("FACTVAULT_LLM_BASE_URL"), os.Getenv("FACTVAULT_LLM_URL")),
+				APIKey:  firstNonEmpty(llmAPIKey, os.Getenv("FACTVAULT_LLM_API_KEY")),
+				Model:   firstNonEmpty(llmModel, os.Getenv("FACTVAULT_LLM_MODEL")),
+			}
+			if llmCfg.BaseURL == "" {
+				return fmt.Errorf("LLM base URL required: set --llm-base-url or FACTVAULT_LLM_BASE_URL")
+			}
+			if llmCfg.Model == "" {
+				return fmt.Errorf("LLM model required: set --llm-model or FACTVAULT_LLM_MODEL")
+			}
+
+			maxPossible := cfg.Perspectives * cfg.QuestionsPerPerspective * cfg.ResultsPerQuery
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(),
+				"research: entity=%q type=%q perspectives=%d questions-per=%d results-per-query=%d max-fetches=%d (projected ceiling: %d searches, %d fetches)\n",
+				entity.Label, entity.Type, cfg.Perspectives, cfg.QuestionsPerPerspective, cfg.ResultsPerQuery, cfg.MaxTotalFetches, cfg.Perspectives*cfg.QuestionsPerPerspective, min(maxPossible, cfg.MaxTotalFetches)); err != nil {
+				return fmt.Errorf("write output: %w", err)
+			}
+
+			pool, err := db.NewPool(cmd.Context(), dsn)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+
+			queries, err := research.GenerateQueries(cmd.Context(), entity, cfg, nil, llmCfg)
+			if err != nil {
+				return fmt.Errorf("generate queries: %w", err)
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "research: generated %d unique queries\n", len(queries)); err != nil {
+				return fmt.Errorf("write output: %w", err)
+			}
+
+			collector := &research.SearchCollector{
+				Queries:         queries,
+				ResultsPerQuery: cfg.ResultsPerQuery,
+				MaxTotalFetches: cfg.MaxTotalFetches,
+			}
+
+			p := &workers.SourcePipeline{DB: pool}
+			if err := p.CollectOnce(cmd.Context(), tenantID, collector); err != nil {
+				return fmt.Errorf("collect: %w", err)
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "research: collection complete (trust_tier=web, status=collected)\n"); err != nil {
+				return fmt.Errorf("write output: %w", err)
+			}
+			return nil
+		},
+	}
+	researchCmd.Flags().Int("perspectives", 5, "Number of research perspectives")
+	researchCmd.Flags().Int("questions-per", 4, "Questions per perspective")
+	researchCmd.Flags().Int("results-per-query", 5, "Search results per query")
+	researchCmd.Flags().Int("max-fetches", 40, "Hard ceiling on page fetches")
+	researchCmd.Flags().String("entity-type", "", "Entity type (e.g. Person, City, Company)")
+	cmd.AddCommand(researchCmd)
 	return cmd
 }
 
