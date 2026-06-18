@@ -83,15 +83,21 @@ func TestGenerateQueries_ColdStart(t *testing.T) {
 }
 
 func TestGenerateQueries_CapsEnforcedOnOverproduction(t *testing.T) {
-	// LLM returns more perspectives and queries than caps allow.
-	// Caps: Perspectives=2, QuestionsPerPerspective=2 → max 4 queries.
+	// The (mocked) LLM over-produces at BOTH stages:
+	//   - 5 perspectives returned, cap is 2  → only A, B survive
+	//   - per perspective: A returns 4 queries, B returns 3, cap is 2 each
+	// With caps Perspectives=2, QuestionsPerPerspective=2 the result must be
+	// truncated to EXACTLY 4 queries (2 perspectives × 2 questions).
+	// All query strings are distinct and share no normalized form, so dedup
+	// removes nothing and the count is deterministic.
 	perspectivesResp := mustJSON(map[string]any{
-		"perspectives": []string{"A", "B", "C", "D", "E"}, // over-produces 5, cap=2
+		"perspectives": []string{"alpha", "bravo", "charlie", "delta", "echo"}, // over-produces 5, cap=2
 	})
 	questionsResp := mustJSON(map[string]any{
 		"items": []map[string]any{
-			{"perspective": "A", "queries": []string{"q1", "q2", "q3", "q4"}}, // cap=2 per perspective
-			{"perspective": "B", "queries": []string{"q5", "q6", "q7"}},
+			{"perspective": "alpha", "queries": []string{"redwood forest height", "kelp tidal zone", "magnetic compass drift", "obsidian volcanic glass"}}, // over-produces 4, cap=2
+			{"perspective": "bravo", "queries": []string{"jupiter moon europa", "saharan dust transport", "tungsten melting point"}},                       // over-produces 3, cap=2
+			// charlie/delta/echo intentionally absent — perspective cap already dropped them.
 		},
 	})
 	srv := stubLLMServer(t, perspectivesResp, questionsResp)
@@ -112,8 +118,21 @@ func TestGenerateQueries_CapsEnforcedOnOverproduction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(queries) > 4 {
-		t.Errorf("expected at most 4 queries (2 perspectives × 2 questions), got %d", len(queries))
+	// Exact count: the cap must be REACHED (not under-shot) and not exceeded.
+	if len(queries) != 4 {
+		t.Errorf("expected exactly 4 queries (2 perspectives × 2 questions, caps reached), got %d: %v", len(queries), queries)
+	}
+	// And the survivors must be the first-2-of-2 from each surviving perspective.
+	want := map[research.Query]bool{
+		"redwood forest height":  true,
+		"kelp tidal zone":        true,
+		"jupiter moon europa":    true,
+		"saharan dust transport": true,
+	}
+	for _, q := range queries {
+		if !want[q] {
+			t.Errorf("unexpected query %q — expected only the first 2 from each capped perspective", q)
+		}
 	}
 }
 
