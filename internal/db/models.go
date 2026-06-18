@@ -104,6 +104,7 @@ type Source struct {
 	LastVerifiedAt pgtype.Timestamptz `json:"last_verified_at"`
 	Status         string             `json:"status"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	Meta           []byte             `json:"meta"`
 }
 
 type SourceVerification struct {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,11 +48,17 @@ func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c col
 		if item.Topic != "" || len(item.Tags) > 0 {
 			publisher = strings.TrimSpace(publisher + " topic=" + item.Topic + " tags=" + strings.Join(item.Tags, ","))
 		}
+		metaJSON := []byte("{}")
+		if len(item.Meta) > 0 {
+			if b, merr := json.Marshal(item.Meta); merr == nil {
+				metaJSON = b
+			}
+		}
 		_, err = p.DB.Exec(ctx, `
-INSERT INTO sources (id, tenant_id, url, content_hash, raw_html, status, title, publisher, published_at)
-VALUES ($1, $2, $3, $4, $5, 'collected', NULLIF($6, ''), NULLIF($7, ''), $8)
+INSERT INTO sources (id, tenant_id, url, content_hash, raw_html, status, title, publisher, published_at, meta)
+VALUES ($1, $2, $3, $4, $5, 'collected', NULLIF($6, ''), NULLIF($7, ''), $8, $9)
 ON CONFLICT (tenant_id, url) DO NOTHING
-`, uuid.NewString(), tenantID, item.URL, hash, compressed, item.Title, publisher, item.PublishedAt)
+`, uuid.NewString(), tenantID, item.URL, hash, compressed, item.Title, publisher, item.PublishedAt, metaJSON)
 		if err != nil {
 			return fmt.Errorf("insert source: %w", err)
 		}

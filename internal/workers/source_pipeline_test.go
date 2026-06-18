@@ -2,6 +2,7 @@ package workers_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -235,4 +236,37 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestCollectOnce_WritesMeta(t *testing.T) {
+	pool := testdb.New(t)
+	p := &workers.SourcePipeline{DB: pool}
+	c := collectors.StaticCollector{
+		CollectorName: "test-meta",
+		Items: []collectors.Item{
+			{
+				URL:  "https://example.com/meta-test",
+				HTML: []byte("<html><body>meta test page</body></html>"),
+				Meta: map[string]any{"trust_tier": "web"},
+			},
+		},
+	}
+	if err := p.CollectOnce(context.Background(), tenantID, c); err != nil {
+		t.Fatalf("CollectOnce: %v", err)
+	}
+
+	var rawMeta []byte
+	err := pool.QueryRow(context.Background(), `
+SELECT meta FROM sources WHERE tenant_id = $1 AND url = 'https://example.com/meta-test'
+`, tenantID).Scan(&rawMeta)
+	if err != nil {
+		t.Fatalf("select meta: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(rawMeta, &meta); err != nil {
+		t.Fatalf("unmarshal meta: %v", err)
+	}
+	if meta["trust_tier"] != "web" {
+		t.Errorf("expected meta.trust_tier=web, got %v", meta["trust_tier"])
+	}
 }

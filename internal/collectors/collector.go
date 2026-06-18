@@ -16,6 +16,10 @@ type Item struct {
 	PublishedAt *time.Time
 	Topic       string
 	Tags        []string
+	// Meta holds arbitrary key-value metadata for this item. CollectOnce writes
+	// this into the sources.meta JSONB column. SearchCollector sets
+	// Meta: {"trust_tier": "web"} on every web-sourced item.
+	Meta map[string]any
 }
 
 // Collector is the interface implemented by all source collectors.
