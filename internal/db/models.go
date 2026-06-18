@@ -30,6 +30,17 @@ type Entity struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type EvidenceBrief struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	SourceKind string             `json:"source_kind"`
+	EntityID   pgtype.UUID        `json:"entity_id"`
+	Query      pgtype.Text        `json:"query"`
+	Payload    []byte             `json:"payload"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	BundleHash pgtype.Text        `json:"bundle_hash"`
+}
+
 type Property struct {
 	ID          pgtype.UUID `json:"id"`
 	TenantID    pgtype.UUID `json:"tenant_id"`
