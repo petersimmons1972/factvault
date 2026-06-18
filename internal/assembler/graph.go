@@ -26,15 +26,25 @@ func ExpandGraph(
 		return uniqueStrings(seedEntityIDs), nil
 	}
 
-	// Two separate recursive parts (target_id + source_id) cannot both reference the
-	// CTE under UNION in Postgres — only UNION ALL is allowed in recursive terms that
-	// contain multiple recursive references (PG error: "recursive reference to query
-	// must not appear within its non-recursive term"). Merge the two traversal
-	// directions with UNION ALL inside a subquery, then DISTINCT-select at the top.
+	// The original query had TWO recursive references (one per edge direction)
+	// combined with UNION, which Postgres rejects: "recursive reference to query
+	// must not appear within its non-recursive term". Both traversal directions
+	// (source->target and target->source) are merged into a SINGLE inner subquery
+	// so there is exactly one recursive reference, which Postgres accepts.
+	//
+	// The outer combiner is UNION (set semantics), not UNION ALL: with a single
+	// recursive reference UNION is legal, and it dedups the intermediate frontier
+	// on (entity_id, depth). On cyclic/dense graphs this keeps the frontier linear
+	// in depth*|V| instead of the O(2^depth) blowup UNION ALL would produce; the
+	// final result set is identical either way. The dedup identity is intentionally
+	// the full (entity_id, depth) row — a node reached at multiple depths re-emits
+	// once per depth level, which is correct for a depth-bounded traversal. Do not
+	// add per-row accumulator columns (path arrays, running confidence) to the
+	// recursive projection: that would defeat the dedup and could break termination.
 	rows, err := tx.Query(ctx, `
 		WITH RECURSIVE graph(entity_id, depth) AS (
 			SELECT unnest($1::uuid[]), 0
-			UNION ALL
+			UNION
 			SELECT next_id, g.depth + 1
 			FROM graph g
 			JOIN (
