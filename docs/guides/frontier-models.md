@@ -77,3 +77,52 @@ export FACTVAULT_LLM_MODEL='llama3.1:8b'
 ```
 
 Restart workers and rerun `factvault doctor --llm-url "$FACTVAULT_LLM_URL"`.
+
+## worker extract CLI Flags
+
+The `worker extract` subcommand exposes the LLM configuration as CLI flags. These are equivalent
+to the environment variables above and take precedence over them:
+
+| Flag | Env var equivalent | Description |
+|------|-------------------|-------------|
+| `--llm-provider` | -- | Provider hint: `local` or `openai` |
+| `--llm-model` | `FACTVAULT_LLM_MODEL` | Model name (e.g. `llama3.1:8b`, `gpt-4o-mini`) |
+| `--llm-base-url` | `FACTVAULT_LLM_BASE_URL` | OpenAI-compatible base URL |
+| `--llm-api-key` | `FACTVAULT_LLM_API_KEY` | API key for hosted endpoints |
+| `--confirm-cost` | -- | Confirm extraction batches above the guardrail threshold |
+| `--llm-cost-guardrail-threshold` | -- | Guardrail threshold in (default: 1000) |
+
+Example with flags:
+
+```bash
+./bin/factvault worker extract \
+  --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --llm-provider openai \
+  --llm-model gpt-4o-mini \
+  --llm-base-url https://api.openai.com/v1 \
+  --llm-api-key "$OPENAI_API_KEY" \
+  --confirm-cost \
+  --limit 25
+```
+
+## Local Model Setup
+
+Before running `worker extract` with a local Ollama model, pull the model:
+
+```bash
+ollama pull llama3.1:8b
+# verify it loads:
+ollama run llama3.1:8b "hello"
+```
+
+Then run extraction pointing at the local endpoint:
+
+```bash
+./bin/factvault worker extract \
+  --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --llm-model llama3.1:8b \
+  --llm-base-url http://localhost:11434/v1 \
+  --limit 25
+```
+
+Larger models (e.g. `qwen3:32b`) produce better extraction quality at higher compute cost.
