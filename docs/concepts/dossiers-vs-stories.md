@@ -113,3 +113,22 @@ The dossier worker opens a tenant-scoped `pgx.Tx` and calls `assembler.Assemble(
 The story endpoint (`POST /stories`) accepts a query body, runs embedding similarity search against `entities.embedding` to find seed entities (cosine threshold 0.6), and calls `assembler.Assemble(ctx, tx, seedIDs, 2, tenantID)` — adjustable to `depth=3` for deeper traversal. The recursive CTE that expands the graph gates each edge traversal at a minimum confidence of 0.4 to prevent low-confidence synthetic edges from polluting story results.
 
 Both paths return identical bundle JSON structure. The calling LLM does not need to distinguish them.
+
+---
+
+## Cosine Story Seeding: Shipped
+
+Cosine-similarity story seeding is fully implemented in `internal/retrieval/service.go`
+(`cosineSeedThreshold = 0.6`). The retrieval service uses a cosine-first strategy:
+
+1. Embed the story query text via the embedder sidecar (BAAI/bge-m3, 1024 dimensions).
+2. Call `vectorStore.SearchNearest`, filter results with cosine similarity >= 0.6.
+3. If at least one entity meets the threshold, return those as story seeds.
+4. If the embedder is unavailable, returns zero cosine results, or the query is empty, fall back
+   to ILIKE substring match on `entities.label` and `description`.
+
+The ILIKE fallback is always graceful -- a downed embedder never causes a 500 to API callers.
+
+**Prerequisite:** entities must have populated `embedding` columns for the cosine path to
+activate. Run `worker embed` after extraction to backfill NULL embeddings. See
+[Embedding Population](../guides/embedding-population.md) for the full procedure.
