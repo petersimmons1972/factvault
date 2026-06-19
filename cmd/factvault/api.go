@@ -48,7 +48,7 @@ func newAPICmd() *cobra.Command {
 			defer pool.Close()
 			httpServer := http.Server{
 				Addr:              addr,
-				Handler:           api.New(pool, pub).Router(),
+				Handler:           api.New(pool, pub, os.Getenv("FACTVAULT_EMBEDDER_URL")).Router(),
 				ReadTimeout:       5 * time.Second,
 				ReadHeaderTimeout: 5 * time.Second,
 				WriteTimeout:      30 * time.Second,

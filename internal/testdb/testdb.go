@@ -212,7 +212,11 @@ func fileDescriptor(f *os.File) (int, error) {
 func postgresImage() (repository, tag string) {
 	image := os.Getenv("FACTVAULT_TEST_POSTGRES_IMAGE")
 	if image == "" {
-		image = "ankane/pgvector:latest"
+		// Pinned to a specific Postgres major so version-sensitive behavior
+		// (e.g. recursive-CTE parse rules — see internal/assembler/graph.go)
+		// is reproducibly validated and a regression cannot silently slip on
+		// a moving :latest tag. Override via FACTVAULT_TEST_POSTGRES_IMAGE.
+		image = "pgvector/pgvector:pg16"
 	}
 	slash := strings.LastIndexByte(image, '/')
 	colon := strings.LastIndexByte(image, ':')

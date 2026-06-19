@@ -16,7 +16,7 @@ import (
 
 func TestEntityLookupRequiresAuthorization(t *testing.T) {
 	pool := testdb.Setup(context.Background(), t)
-	server := New(pool, mustPublicKey(t), "")
+	server := New(pool, mustPublicKey(t), "", "")
 
 	_, _, err := server.entityLookup(context.Background(), nil, EntityLookupArgs{EntityID: uuid.NewString()})
 	if err == nil {
@@ -33,7 +33,7 @@ func TestEntityLookupUsesAuthorizedTenant(t *testing.T) {
 	entityB := uuid.NewString()
 
 	_, publicKey, tokenA := mustSignedToken(t, tenantA)
-	server := New(pool, publicKey, "")
+	server := New(pool, publicKey, "", "")
 
 	_, err := pool.Exec(context.Background(),
 		"INSERT INTO entities (id, tenant_id, label) VALUES ($1, $2, 'Tenant A'), ($3, $4, 'Tenant B')",

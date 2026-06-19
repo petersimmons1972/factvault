@@ -11,7 +11,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/petersimmons1972/factvault/internal/auth"
+	"github.com/petersimmons1972/factvault/internal/embed"
 	"github.com/petersimmons1972/factvault/internal/retrieval"
+	"github.com/petersimmons1972/factvault/internal/store"
+	pgstore "github.com/petersimmons1972/factvault/internal/store/postgres"
 	"github.com/petersimmons1972/factvault/internal/version"
 )
 
@@ -43,9 +46,19 @@ type FactQueryArgs struct {
 }
 
 // New builds a new MCP server wrapper around retrieval and auth dependencies.
-func New(pool *pgxpool.Pool, publicKey *rsa.PublicKey, defaultToken string) *Server {
+// embedderURL is the base URL for the embedder service (e.g. FACTVAULT_EMBEDDER_URL).
+// If empty, the cosine seed-search path is disabled and all queries fall back to ILIKE.
+func New(pool *pgxpool.Pool, publicKey *rsa.PublicKey, defaultToken string, embedderURL string) *Server {
+	var embedder retrieval.Embedder
+	if embedderURL != "" {
+		embedder = embed.NewClient(embedderURL, nil)
+	}
+	var vs store.VectorStore
+	if pool != nil {
+		vs = pgstore.New(pool)
+	}
 	return &Server{
-		Service:      retrieval.Service{Pool: pool},
+		Service:      retrieval.NewService(pool, embedder, vs),
 		Verifier:     auth.Verifier{PublicKey: publicKey},
 		DefaultToken: defaultToken,
 	}

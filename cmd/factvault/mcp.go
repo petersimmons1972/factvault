@@ -48,7 +48,7 @@ func newMCPCmd() *cobra.Command {
 				return err
 			}
 			defer pool.Close()
-			return mcpserver.New(pool, publicKey, authToken).RunStdio(cmd.Context())
+			return mcpserver.New(pool, publicKey, authToken, os.Getenv("FACTVAULT_EMBEDDER_URL")).RunStdio(cmd.Context())
 		},
 	}
 	cmd.Flags().StringVar(&dsn, "dsn", "", "Postgres DSN (or FACTVAULT_DATABASE_URL)")

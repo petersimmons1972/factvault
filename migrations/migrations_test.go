@@ -192,7 +192,9 @@ func TestMigration00005_RollsBack(t *testing.T) {
 func postgresImage() (repository, tag string) {
 	image := os.Getenv("FACTVAULT_TEST_POSTGRES_IMAGE")
 	if image == "" {
-		image = "ankane/pgvector:latest"
+		// Pinned major (see internal/testdb/testdb.go) for reproducible
+		// version-sensitive behavior; override via FACTVAULT_TEST_POSTGRES_IMAGE.
+		image = "pgvector/pgvector:pg16"
 	}
 	slash := strings.LastIndexByte(image, '/')
 	colon := strings.LastIndexByte(image, ':')
