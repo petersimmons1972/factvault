@@ -49,7 +49,7 @@ func newWorkerCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&llmBaseURL, "llm-base-url", "", "LLM base URL")
 	cmd.PersistentFlags().StringVar(&llmAPIKey, "llm-api-key", "", "LLM API key")
 	cmd.PersistentFlags().BoolVar(&confirmCost, "confirm-cost", false, "Confirm frontier-model extraction batches above the guardrail threshold")
-	cmd.PersistentFlags().IntVar(&costThreshold, "llm-cost-guardrail-threshold", 1000, "Frontier-model extraction batch guardrail threshold")
+	cmd.PersistentFlags().IntVar(&costThreshold, "llm-cost-guardrail-threshold", 1000, "Frontier-model extraction batch guardrail threshold in paid extractions per run")
 	cmd.PersistentFlags().StringVar(&feedsPath, "feeds", "config/feeds.yaml", "RSS feed config file")
 	cmd.PersistentFlags().BoolVar(&once, "once", false, "Run one RSS polling cycle and exit")
 	cmd.PersistentFlags().DurationVar(&interval, "interval", 15*time.Minute, "Default RSS polling interval")
