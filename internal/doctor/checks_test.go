@@ -5,7 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // mockEmbedderServer returns an httptest.Server that satisfies the strengthened
@@ -88,6 +93,92 @@ func TestHTTPChecks(t *testing.T) {
 		if !res.OK {
 			t.Fatalf("%s failed: %+v", check.name, res)
 		}
+	}
+}
+
+func TestDoctorEmbedderHealthz(t *testing.T) {
+	healthCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			if _, err := fmt.Fprint(w, `{"status":"ok"}`); err != nil {
+				panic(err)
+			}
+		case "/health":
+			healthCalled = true
+			http.NotFound(w, r)
+		case "/info":
+			w.WriteHeader(http.StatusOK)
+			if _, err := fmt.Fprint(w, `{"model":"BAAI/bge-m3","dim":1024}`); err != nil {
+				panic(err)
+			}
+		case "/embed":
+			w.WriteHeader(http.StatusOK)
+			if _, err := fmt.Fprint(w, `{"vectors":[[1.0`); err != nil {
+				panic(err)
+			}
+			for i := 1; i < 1024; i++ {
+				if _, err := fmt.Fprint(w, `,0.0`); err != nil {
+					panic(err)
+				}
+			}
+			if _, err := fmt.Fprint(w, `]]}`); err != nil {
+				panic(err)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	res := CheckEmbedder(context.Background(), Config{
+		EmbedderURL: server.URL,
+		HTTPClient:  server.Client(),
+	})
+	if !res.OK {
+		t.Fatalf("expected CheckEmbedder to pass when /healthz returns 200; got %+v", res)
+	}
+	if healthCalled {
+		t.Fatal("expected /healthz success to avoid falling back to /health")
+	}
+}
+
+func TestDockerComposeEmbedderHealthcheckUsesHealthz(t *testing.T) {
+	t.Parallel()
+
+	type dockerCompose struct {
+		Services struct {
+			Embedder struct {
+				Healthcheck struct {
+					Test []string `yaml:"test"`
+				} `yaml:"healthcheck"`
+			} `yaml:"embedder"`
+		} `yaml:"services"`
+	}
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+
+	var compose dockerCompose
+	if err := yaml.Unmarshal(raw, &compose); err != nil {
+		t.Fatalf("unmarshal docker-compose.yml: %v", err)
+	}
+
+	testCmd := compose.Services.Embedder.Healthcheck.Test
+	if len(testCmd) < 2 {
+		t.Fatalf("embedder healthcheck test is malformed: %#v", testCmd)
+	}
+
+	urlMatch := regexp.MustCompile(`http://localhost:8080(?P<path>/[^"' ]*)`).FindStringSubmatch(testCmd[1])
+	if len(urlMatch) != 2 {
+		t.Fatalf("embedder healthcheck URL not found in %q", testCmd[1])
+	}
+	if got, want := urlMatch[1], "/healthz"; got != want {
+		t.Fatalf("embedder healthcheck path = %q, want %q", got, want)
 	}
 }
 
