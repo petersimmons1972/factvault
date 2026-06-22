@@ -2,6 +2,7 @@ package deploy_test
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -73,6 +74,18 @@ func TestOperatorGuideLinksPostgresAppUserInitExample(t *testing.T) {
 
 	if strings.Contains(string(data), "deploy/k8s/postgres-app-user-init.yaml") {
 		t.Fatalf("operator guide should not copy one-shot bootstrap jobs under deploy/k8s/")
+	}
+}
+
+func TestOperatorGuideContainsNoMergeConflictMarkers(t *testing.T) {
+	data, err := os.ReadFile("../docs/operator-guide.md")
+	if err != nil {
+		t.Fatalf("read operator guide: %v", err)
+	}
+
+	re := regexp.MustCompile(`(?m)^[<=>]{7}`)
+	if match := re.Find(data); match != nil {
+		t.Fatalf("operator guide still contains merge conflict markers: %q", match)
 	}
 }
 
