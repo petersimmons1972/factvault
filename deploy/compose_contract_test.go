@@ -1,9 +1,13 @@
 package deploy_test
 
 import (
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/petersimmons1972/factvault/internal/doctor"
 )
 
 func TestDockerComposeTier1Contract(t *testing.T) {
@@ -54,5 +58,26 @@ func TestDockerComposeTier1Contract(t *testing.T) {
 	}
 	if strings.Contains(compose, "pgvector/pgvector") {
 		t.Fatal("Tier 1 compose must use an existing latest-tag pgvector image")
+	}
+}
+
+func TestDockerComposeEmbedderPortMatchesDoctorDefault(t *testing.T) {
+	data, err := os.ReadFile("../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+
+	matches := regexp.MustCompile(`FACTVAULT_EMBEDDER_PORT:-([0-9]+)}:8080`).FindStringSubmatch(string(data))
+	if len(matches) != 2 {
+		t.Fatal("docker-compose.yml missing FACTVAULT_EMBEDDER_PORT host mapping")
+	}
+
+	embedderURL, err := url.Parse(doctor.DefaultEmbedderURL)
+	if err != nil {
+		t.Fatalf("parse doctor embedder default %q: %v", doctor.DefaultEmbedderURL, err)
+	}
+
+	if got := embedderURL.Port(); got != matches[1] {
+		t.Fatalf("doctor default port = %q, want compose host port %q", got, matches[1])
 	}
 }

@@ -48,6 +48,10 @@ var (
 	optionalChecks = []checkFunc{CheckLLM, CheckEmbedder, CheckWayback}
 )
 
+// DefaultEmbedderURL is the host-local embedder endpoint used when no explicit
+// URL is configured.
+const DefaultEmbedderURL = "http://localhost:8081"
+
 // RunAll executes required checks first, then optional checks, and marks each
 // result as required or optional.
 func RunAll(ctx context.Context, cfg Config) []CheckResult {
@@ -175,7 +179,7 @@ func CheckLLM(ctx context.Context, cfg Config) CheckResult {
 // vectors of the expected dimension.
 func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 	return timed("embedder", func() (string, string, error) {
-		base := strings.TrimRight(defaultString(cfg.EmbedderURL, "http://localhost:8080"), "/")
+		base := strings.TrimRight(defaultString(cfg.EmbedderURL, DefaultEmbedderURL), "/")
 		client := httpClient(cfg)
 
 		// 1. Health check — try /healthz then /health.
