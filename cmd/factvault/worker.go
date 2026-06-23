@@ -158,45 +158,16 @@ func newWorkerCmd() *cobra.Command {
 				return fmt.Errorf("feeds config has no feeds")
 			}
 
-			p := &workers.SourcePipeline{DB: pool}
-			schedules := buildRSSSchedules(cfg.Feeds, interval)
-			runForFeeds := func(ctx context.Context, feedIdx []int) error {
-				for _, i := range feedIdx {
-					feed := cfg.Feeds[i]
-					collector := collectors.RSSCollector{Spec: feed}
-					if err := p.CollectOnce(ctx, feed.TenantID, collector); err != nil {
-						return err
-					}
-				}
-				return nil
+			worker := workers.RSSWorker{
+				Pipeline:        &workers.SourcePipeline{DB: pool},
+				TenantID:        tenantID,
+				DefaultInterval: interval,
 			}
-
 			if once {
-				return runForFeeds(cmd.Context(), allScheduleIndexes(schedules))
+				return worker.RunOnce(cmd.Context(), cfg.Feeds)
 			}
 
-			lastPolled := map[int]time.Time{}
-			for {
-				now := time.Now().UTC()
-				due := dueRSSFeedIndexes(schedules, lastPolled, now)
-				if len(due) > 0 {
-					if err := runForFeeds(cmd.Context(), due); err != nil {
-						return err
-					}
-					for _, i := range due {
-						lastPolled[i] = now
-					}
-				}
-				wait := nextRSSPollWait(schedules, lastPolled, now)
-				if wait <= 0 {
-					wait = time.Second
-				}
-				select {
-				case <-cmd.Context().Done():
-					return cmd.Context().Err()
-				case <-time.After(wait):
-				}
-			}
+			return worker.Run(cmd.Context(), cfg.Feeds)
 		},
 	})
 
@@ -242,57 +213,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-type rssSchedule struct {
-	feedIndex int
-	interval  time.Duration
-}
-
-func buildRSSSchedules(feeds []collectors.FeedSpec, defaultInterval time.Duration) []rssSchedule {
-	out := make([]rssSchedule, 0, len(feeds))
-	for i, feed := range feeds {
-		if strings.TrimSpace(feed.TenantID) == "" {
-			continue
-		}
-		out = append(out, rssSchedule{feedIndex: i, interval: feed.PollInterval(defaultInterval)})
-	}
-	return out
-}
-
-func allScheduleIndexes(schedules []rssSchedule) []int {
-	idx := make([]int, 0, len(schedules))
-	for _, s := range schedules {
-		idx = append(idx, s.feedIndex)
-	}
-	return idx
-}
-
-func dueRSSFeedIndexes(schedules []rssSchedule, lastPolled map[int]time.Time, now time.Time) []int {
-	due := make([]int, 0, len(schedules))
-	for _, s := range schedules {
-		last, ok := lastPolled[s.feedIndex]
-		if !ok || now.Sub(last) >= s.interval {
-			due = append(due, s.feedIndex)
-		}
-	}
-	return due
-}
-
-func nextRSSPollWait(schedules []rssSchedule, lastPolled map[int]time.Time, now time.Time) time.Duration {
-	if len(schedules) == 0 {
-		return time.Second
-	}
-	var minWait time.Duration = -1
-	for _, s := range schedules {
-		last, ok := lastPolled[s.feedIndex]
-		if !ok {
-			return 0
-		}
-		wait := max(s.interval-now.Sub(last), 0)
-		if minWait < 0 || wait < minWait {
-			minWait = wait
-		}
-	}
-	return minWait
 }

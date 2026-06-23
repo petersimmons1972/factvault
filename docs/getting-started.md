@@ -156,6 +156,18 @@ After the initial dossier works, run the source pipeline against a tenant:
 
 The dossier will remain empty until the full pipeline stages complete.
 
+For RSS-driven ingestion, run:
+
+```bash
+./bin/factvault worker rss --dsn "$FACTVAULT_DATABASE_URL" --feeds config/feeds.yaml --tenant "$FACTVAULT_DEV_TENANT_ID" --once
+```
+
+If you omit `--tenant`, each feed in `config/feeds.yaml` must define its own
+`tenant:` value. RSS validation is all-or-nothing: if any feed still lacks
+tenant scope, the worker aborts the run with an error such as `rss worker:
+feeds missing tenant: example-feed; set --tenant or configure each feed
+tenant`.
+
 ## Troubleshooting
 
 | Symptom | Check | Fix |

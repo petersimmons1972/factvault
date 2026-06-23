@@ -67,13 +67,7 @@ headers installed.
 | Goose migrations | Schema version is current enough | Run `factvault migrate`. |
 | RLS enforced | Tenant isolation policies hide cross-tenant rows | Verify migrations and app role setup. |
 | LLM endpoint | OpenAI-compatible `/models` endpoint responds | Start local Ollama/olla or configure frontier endpoint. |
-<<<<<<< Updated upstream
 | Embedder health | BGE-M3 service responds on `/healthz` (200 when model loaded; 503 while loading) AND returns a real non-zero 1024-dim vector for a probe text (stub detection) | Start embedder; wait for model initialization (cold model download can take several minutes). |
-||||||| Stash base
-| Embedder health | BGE-M3 service responds on `/health` or `/healthz` | Start embedder; wait for model initialization. |
-=======
-| Embedder health | BGE-M3 service responds on `/healthz` AND returns a real non-zero 1024-dim vector for a probe text (stub detection) | Start embedder; wait for model initialization (cold model download can take several minutes). |
->>>>>>> Stashed changes
 | Wayback reachable | Archive endpoint can be contacted | Check outbound network or set alternate `FACTVAULT_WAYBACK_URL`. |
 | Canary fact | Assembler can produce a bundle from a tenant-scoped entity | Check migrations and RLS context. |
 
@@ -95,6 +89,13 @@ Run workers in this order for a tenant:
 ```
 
 Use `--limit` to bound batch size and `--dsn` to override `FACTVAULT_DATABASE_URL`. `verify` also accepts `--age-days`.
+`worker rss` is the one exception to the always-pass-`--tenant` examples above:
+`--tenant` overrides every feed in `feeds.yaml`, while omitting it makes the
+worker use each feed's `tenant:` value. RSS validation is all-or-nothing: if
+any configured feed still lacks tenant scope after that resolution step,
+`worker rss` aborts the entire run instead of silently skipping feeds. Expect
+an error like `rss worker: feeds missing tenant: example-feed; set --tenant or
+configure each feed tenant`.
 
 Operational invariant: all domain data is tenant-scoped. The tenant in the worker command, the token used against the API, and the records in Postgres must match.
 

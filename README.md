@@ -179,9 +179,18 @@ Example brief generation payload:
 
 RSS ingestion worker:
 ```bash
-./bin/factvault worker rss --feeds config/feeds.yaml --once
+./bin/factvault worker rss --feeds config/feeds.yaml --tenant "$FACTVAULT_DEV_TENANT_ID" --once
 # loop mode (default): polls at configured interval/minimum interval
 ./bin/factvault worker rss --feeds config/feeds.yaml --interval 15m
+```
+
+`worker rss` uses `--tenant` as an override for every configured feed. If you omit
+`--tenant`, each feed must set its own `tenant:` value in `config/feeds.yaml`.
+The worker now exits with an error when any feed is missing tenant scope. The
+error is explicit, for example:
+
+```text
+rss worker: feeds missing tenant: example-feed; set --tenant or configure each feed tenant
 ```
 
 **MCP server** — works with Claude Desktop, Cursor, or any agent stack supporting MCP:
