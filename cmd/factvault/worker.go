@@ -31,6 +31,7 @@ func newWorkerCmd() *cobra.Command {
 		feedsPath      string
 		once           bool
 		interval       time.Duration
+		searxngURL     string
 	)
 
 	cmd := &cobra.Command{
@@ -51,6 +52,7 @@ func newWorkerCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&feedsPath, "feeds", "config/feeds.yaml", "RSS feed config file")
 	cmd.PersistentFlags().BoolVar(&once, "once", false, "Run one RSS polling cycle and exit")
 	cmd.PersistentFlags().DurationVar(&interval, "interval", 15*time.Minute, "Default RSS polling interval")
+	cmd.PersistentFlags().StringVar(&searxngURL, "searxng-url", "", "SearXNG base URL (or FACTVAULT_SEARXNG_URL)")
 
 	addRun := func(name string, fn func(context.Context, *workers.SourcePipeline) error) {
 		cmd.AddCommand(&cobra.Command{

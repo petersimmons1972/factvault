@@ -72,6 +72,17 @@ func TestFirstNonEmpty(t *testing.T) {
 	}
 }
 
+func TestWorkerCollectRegistersSearXNGURLFlag(t *testing.T) {
+	collectCmd := mustSubcommand(t, newWorkerCmd(), "collect")
+	flag := collectCmd.Flags().Lookup("searxng-url")
+	if flag == nil {
+		t.Fatal("expected --searxng-url flag to be registered")
+	}
+	if flag.DefValue != "" {
+		t.Fatalf("default flag value = %q, want empty string", flag.DefValue)
+	}
+}
+
 func TestRSSScheduleHelpers(t *testing.T) {
 	feeds := []collectors.FeedSpec{
 		{TenantID: "t1", Interval: "10m"},
