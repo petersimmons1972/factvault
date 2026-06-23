@@ -21,6 +21,7 @@ func newAPICmd() *cobra.Command {
 		Short: "Run the factvault HTTP API",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			addr = resolveAPIAddr(addr, cmd.Flags().Changed("addr"))
 			if dsn == "" {
 				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
 			}
@@ -58,7 +59,14 @@ func newAPICmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&dsn, "dsn", "", "Postgres DSN (or FACTVAULT_DATABASE_URL)")
-	cmd.Flags().StringVar(&addr, "addr", ":8080", "HTTP listen address")
+	cmd.Flags().StringVar(&addr, "addr", ":8080", "HTTP listen address (or FACTVAULT_API_ADDR)")
 	cmd.Flags().StringVar(&publicKeyPath, "jwt-public-key", "", "JWT public key PEM path")
 	return cmd
+}
+
+func resolveAPIAddr(flagValue string, flagChanged bool) string {
+	if flagChanged {
+		return flagValue
+	}
+	return firstNonEmpty(os.Getenv("FACTVAULT_API_ADDR"), flagValue, ":8080")
 }
