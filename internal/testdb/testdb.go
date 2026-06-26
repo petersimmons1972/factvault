@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,11 @@ var (
 	startErr error
 	contName string
 	dsn      string
+)
+
+const (
+	restrictedRoleUser     = "factvault_app"
+	restrictedRolePassword = "factvault_app"
 )
 
 // StartContainer launches a shared PostgreSQL container for tests in this process.
@@ -98,6 +104,21 @@ func StartContainer() {
 			startErr = err
 			return
 		}
+		if _, err := sqlDB.ExecContext(context.Background(), `
+DO $$
+BEGIN
+	IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '`+restrictedRoleUser+`') THEN
+		CREATE ROLE `+restrictedRoleUser+` LOGIN PASSWORD '`+restrictedRolePassword+`' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+	END IF;
+END;
+$$;
+GRANT app_user TO `+restrictedRoleUser+`;
+GRANT CONNECT ON DATABASE factvault_test TO `+restrictedRoleUser+`;
+GRANT USAGE ON SCHEMA public TO `+restrictedRoleUser+`;
+`); err != nil {
+			startErr = err
+			return
+		}
 	})
 }
 
@@ -143,6 +164,26 @@ func NewWithContext(ctx context.Context, t *testing.T) *pgxpool.Pool {
 	pool, err := db.NewPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("db.NewPool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// RestrictedPool returns a pool connected as a non-superuser role so FORCE RLS
+// behavior is exercised in tests instead of being bypassed by the container superuser.
+func RestrictedPool(ctx context.Context, t *testing.T, applicationName string) *pgxpool.Pool {
+	t.Helper()
+	StartContainer()
+	if startErr != nil {
+		t.Fatalf("testdb startup failed: %v", startErr)
+	}
+	restrictedDSN, err := restrictedRoleDSN(applicationName)
+	if err != nil {
+		t.Fatalf("restrictedRoleDSN: %v", err)
+	}
+	pool, err := db.NewPool(ctx, restrictedDSN)
+	if err != nil {
+		t.Fatalf("db.NewPool restricted: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	return pool
@@ -224,6 +265,20 @@ func postgresImage() (repository, tag string) {
 		return image[:colon], image[colon+1:]
 	}
 	return image, "latest"
+}
+
+func restrictedRoleDSN(applicationName string) (string, error) {
+	parsed, err := neturl.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("parse dsn: %w", err)
+	}
+	parsed.User = neturl.UserPassword(restrictedRoleUser, restrictedRolePassword)
+	query := parsed.Query()
+	if applicationName != "" {
+		query.Set("application_name", applicationName)
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
 }
 
 func runDockerCommand(args ...string) error {
