@@ -69,10 +69,13 @@ func newWorkerCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				// C4: --tenant > FACTVAULT_DEV_TENANT_ID > ERROR.
+				// C4: --tenant > FACTVAULT_DEV_TENANT_ID > ERROR; warn when env provides the value.
 				tenantID, err = config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
 				if err != nil {
 					return err
+				}
+				if tf := subcmd.Flags().Lookup("tenant"); tf == nil || !tf.Changed {
+					fmt.Fprintln(os.Stderr, "warning: using dev tenant from env (FACTVAULT_DEV_TENANT_ID); pass --tenant for production use")
 				}
 				// C5: FACTVAULT_WORKER_LIMIT wired.
 				limit, err = config.ResolveInt(subcmd.Flags().Lookup("limit"), "FACTVAULT_WORKER_LIMIT", 100, false)
@@ -145,6 +148,9 @@ func newWorkerCmd() *cobra.Command {
 			resolvedTenant, err := config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
 			if err != nil {
 				return err
+			}
+			if tf := subcmd.Flags().Lookup("tenant"); tf == nil || !tf.Changed {
+				fmt.Fprintln(os.Stderr, "warning: using dev tenant from env (FACTVAULT_DEV_TENANT_ID); pass --tenant for production use")
 			}
 			pool, err := db.NewPool(subcmd.Context(), resolvedDSN)
 			if err != nil {
@@ -238,6 +244,9 @@ func newWorkerCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if tf := subcmd.Flags().Lookup("tenant"); tf == nil || !tf.Changed {
+				fmt.Fprintln(os.Stderr, "warning: using dev tenant from env (FACTVAULT_DEV_TENANT_ID); pass --tenant for production use")
+			}
 			resolvedLimit, err := config.ResolveInt(subcmd.Flags().Lookup("limit"), "FACTVAULT_WORKER_LIMIT", 100, false)
 			if err != nil {
 				return err
@@ -265,6 +274,9 @@ func newWorkerCmd() *cobra.Command {
 			resolvedTenant, err := config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
 			if err != nil {
 				return err
+			}
+			if tf := subcmd.Flags().Lookup("tenant"); tf == nil || !tf.Changed {
+				fmt.Fprintln(os.Stderr, "warning: using dev tenant from env (FACTVAULT_DEV_TENANT_ID); pass --tenant for production use")
 			}
 
 			perspectives, err := subcmd.Flags().GetInt("perspectives")
@@ -375,6 +387,9 @@ func newWorkerCmd() *cobra.Command {
 			resolvedTenant, err := config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
 			if err != nil {
 				return err
+			}
+			if tf := subcmd.Flags().Lookup("tenant"); tf == nil || !tf.Changed {
+				fmt.Fprintln(os.Stderr, "warning: using dev tenant from env (FACTVAULT_DEV_TENANT_ID); pass --tenant for production use")
 			}
 			resolvedLimit, err := config.ResolveInt(subcmd.Flags().Lookup("limit"), "FACTVAULT_WORKER_LIMIT", 100, false)
 			if err != nil {
