@@ -141,6 +141,39 @@ func TestWorkerCmdHasEmbedSubcommand(t *testing.T) {
 	}
 }
 
+// TestEffectiveRSSTenantPriorityChain verifies that effectiveRSSTenant implements the
+// C4 resolution order: --tenant flag > feed.TenantID > FACTVAULT_DEV_TENANT_ID (issue #217).
+func TestEffectiveRSSTenantPriorityChain(t *testing.T) {
+	const flagVal = "flag-tenant-uuid"
+	const feedVal = "feed-tenant-uuid"
+	const devVal = "dev-tenant-uuid"
+
+	// --tenant flag beats feed TenantID and dev-tenant.
+	if got, warn := effectiveRSSTenant(true, flagVal, feedVal, devVal); got != flagVal || warn {
+		t.Errorf("flag override: got=%q warn=%v, want=%q warn=false", got, warn, flagVal)
+	}
+
+	// --tenant flag beats an empty feed TenantID and dev-tenant.
+	if got, warn := effectiveRSSTenant(true, flagVal, "", devVal); got != flagVal || warn {
+		t.Errorf("flag override (empty feed): got=%q warn=%v, want=%q warn=false", got, warn, flagVal)
+	}
+
+	// feed.TenantID beats dev-tenant when --tenant is not set.
+	if got, warn := effectiveRSSTenant(false, "", feedVal, devVal); got != feedVal || warn {
+		t.Errorf("feed tenant: got=%q warn=%v, want=%q warn=false", got, warn, feedVal)
+	}
+
+	// dev-tenant fallback when neither flag nor feed TenantID is set; warn=true signals caller.
+	if got, warn := effectiveRSSTenant(false, "", "", devVal); got != devVal || !warn {
+		t.Errorf("dev fallback: got=%q warn=%v, want=%q warn=true", got, warn, devVal)
+	}
+
+	// No tenant available → empty string, warn=false (caller converts to error).
+	if got, warn := effectiveRSSTenant(false, "", "", ""); got != "" || warn {
+		t.Errorf("no tenant: got=%q warn=%v, want empty warn=false", got, warn)
+	}
+}
+
 // TestEmbedSubcommandHasEmbedderURLFlag verifies the --embedder-url flag is present.
 func TestEmbedSubcommandHasEmbedderURLFlag(t *testing.T) {
 	cmd := newWorkerCmd()

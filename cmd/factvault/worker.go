@@ -189,13 +189,31 @@ func newWorkerCmd() *cobra.Command {
 				return fmt.Errorf("feeds config has no feeds")
 			}
 
+			// C4: resolve --tenant flag for optional global override.
+			// Priority per feed: --tenant (if set) > feed.TenantID > FACTVAULT_DEV_TENANT_ID.
+			tenantFlag := subcmd.Flags().Lookup("tenant")
+			flagTenantChanged := tenantFlag != nil && tenantFlag.Changed
+			var flagTenantValue string
+			if flagTenantChanged {
+				flagTenantValue = tenantFlag.Value.String()
+			}
+			// Pre-resolve dev-tenant fallback for feeds that lack their own TenantID.
+			devTenantValue := os.Getenv("FACTVAULT_DEV_TENANT_ID")
+
 			p := &workers.SourcePipeline{DB: pool}
 			schedules := buildRSSSchedules(cfg.Feeds, interval)
 			runForFeeds := func(ctx context.Context, feedIdx []int) error {
 				for _, i := range feedIdx {
 					feed := cfg.Feeds[i]
+					tenant, usedDev := effectiveRSSTenant(flagTenantChanged, flagTenantValue, feed.TenantID, devTenantValue)
+					if tenant == "" {
+						return fmt.Errorf("feed %q: no tenant configured; pass --tenant or set FACTVAULT_DEV_TENANT_ID", feed.Name)
+					}
+					if usedDev {
+						fmt.Fprintf(os.Stderr, "warning: feed %q using dev tenant from env (FACTVAULT_DEV_TENANT_ID); pass --tenant for production use\n", feed.Name)
+					}
 					collector := collectors.RSSCollector{Spec: feed}
-					if err := p.CollectOnce(ctx, feed.TenantID, collector); err != nil {
+					if err := p.CollectOnce(ctx, tenant, collector); err != nil {
 						return err
 					}
 				}
@@ -523,4 +541,22 @@ func nextRSSPollWait(schedules []rssSchedule, lastPolled map[int]time.Time, now 
 		}
 	}
 	return minWait
+}
+
+// effectiveRSSTenant returns the tenant to use for a single RSS feed following C4:
+//
+//	--tenant flag (flagChanged/flagValue) > feed.TenantID > devTenant (from env).
+//
+// devTenant is the pre-resolved FACTVAULT_DEV_TENANT_ID value (empty string if unset).
+// The second return value is true when the dev-tenant fallback was used, signalling
+// that the caller should emit a warn-on-dev message (C4 semantics).
+func effectiveRSSTenant(flagChanged bool, flagValue, feedTenantID, devTenant string) (string, bool) {
+	if flagChanged {
+		return flagValue, false
+	}
+	if feedTenantID != "" {
+		return feedTenantID, false
+	}
+	// Neither flag nor per-feed tenant is set; fall back to FACTVAULT_DEV_TENANT_ID.
+	return devTenant, devTenant != ""
 }
