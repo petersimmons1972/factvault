@@ -86,12 +86,22 @@ func newInitCmd() *cobra.Command {
 				return err
 			}
 			// C2: FACTVAULT_LLM_BASE_URL canonical; FACTVAULT_LLM_URL deprecated alias.
-			llmURL, isAlias, _ := config.ResolveStringWithAlias(nil, "FACTVAULT_LLM_BASE_URL", "FACTVAULT_LLM_URL", "", false)
+			var isAlias bool
+			llmURL, isAlias, err := config.ResolveStringWithAlias(nil, "FACTVAULT_LLM_BASE_URL", "FACTVAULT_LLM_URL", "", false)
+			if err != nil {
+				return err
+			}
 			if isAlias {
 				fmt.Fprintln(os.Stderr, "warning: FACTVAULT_LLM_URL is deprecated; use FACTVAULT_LLM_BASE_URL")
 			}
-			embedderURL, _ := config.ResolveString(nil, "FACTVAULT_EMBEDDER_URL", "http://localhost:8081", false)
-			waybackURL, _ := config.ResolveString(nil, "FACTVAULT_WAYBACK_URL", "https://web.archive.org", false)
+			embedderURL, err := config.ResolveString(nil, "FACTVAULT_EMBEDDER_URL", "http://localhost:8081", false)
+			if err != nil {
+				return err
+			}
+			waybackURL, err := config.ResolveString(nil, "FACTVAULT_WAYBACK_URL", "https://web.archive.org", false)
+			if err != nil {
+				return err
+			}
 			drCfg := doctor.Config{
 				DatabaseURL: dsn,
 				LLMURL:      llmURL,

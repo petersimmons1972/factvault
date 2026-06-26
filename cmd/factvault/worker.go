@@ -419,7 +419,11 @@ func newWorkerCmd() *cobra.Command {
 func resolveLLMRuntimeConfig(provider, model, baseURL, apiKey string) (workers.LLMRuntimeConfig, error) {
 	// Model: flag arg > FACTVAULT_LLM_MODEL > default.
 	if model == "" {
-		model, _, _ = config.ResolveStringWithAlias(nil, "FACTVAULT_LLM_MODEL", "", "llama3.1:8b", false)
+		var err error
+		model, _, err = config.ResolveStringWithAlias(nil, "FACTVAULT_LLM_MODEL", "", "llama3.1:8b", false)
+		if err != nil {
+			return workers.LLMRuntimeConfig{}, err
+		}
 	}
 
 	// BaseURL: flag arg > FACTVAULT_LLM_BASE_URL > FACTVAULT_LLM_URL (alias, C2) > default.
