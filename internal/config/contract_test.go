@@ -81,14 +81,8 @@ func Test1_RegistryEnvVarsAreReadByCode(t *testing.T) {
 
 	// knownUnwired maps env var names to the reason wiring is deferred.
 	// Do NOT add new entries without a GitHub Issue tracking the wiring work.
-	knownUnwired := map[string]string{
-		"FACTVAULT_WORKER_LIMIT":         "compose-only; wiring deferred to C5 wiring PR",
-		"FACTVAULT_FEEDS_PATH":           "compose-only; wiring deferred to C5 wiring PR",
-		"FACTVAULT_VERIFY_AGE_DAYS":      "compose-only; wiring deferred to C5 wiring PR",
-		"FACTVAULT_AUTH_DIR":             "compose-only; wiring deferred to C5 wiring PR",
-		"FACTVAULT_MIGRATE_DATABASE_URL": "compose-only superuser DSN; Go wiring deferred to migrate-dsn PR",
-		"FACTVAULT_JWT_PRIVATE_KEY":      "file-path key; env var fallback wiring deferred to secrets PR",
-	}
+	// All previously deferred vars are now wired (C1/C5 conformance pass).
+	knownUnwired := map[string]string{}
 
 	contents := make(map[string]string, len(files))
 	for _, f := range files {

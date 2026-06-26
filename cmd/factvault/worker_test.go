@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,10 @@ func TestResolveLLMRuntimeConfig_PrefersFlagsOverEnv(t *testing.T) {
 	t.Setenv("FACTVAULT_LLM_URL", "https://legacy.example/v1")
 	t.Setenv("FACTVAULT_LLM_API_KEY", "env-key")
 
-	cfg := resolveLLMRuntimeConfig("openai", "flag-model", "https://flag.example/v1", "flag-key")
+	cfg, err := resolveLLMRuntimeConfig("openai", "flag-model", "https://flag.example/v1", "flag-key")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if cfg.Model != "flag-model" {
 		t.Fatalf("Model = %q, want flag-model", cfg.Model)
 	}
@@ -32,7 +36,10 @@ func TestResolveLLMRuntimeConfig_FallsBackToEnv(t *testing.T) {
 	t.Setenv("FACTVAULT_LLM_BASE_URL", "https://env.example/v1")
 	t.Setenv("FACTVAULT_LLM_API_KEY", "env-key")
 
-	cfg := resolveLLMRuntimeConfig("openai", "", "", "")
+	cfg, err := resolveLLMRuntimeConfig("openai", "", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if cfg.Model != "env-model" {
 		t.Fatalf("Model = %q, want env-model", cfg.Model)
 	}
@@ -44,31 +51,35 @@ func TestResolveLLMRuntimeConfig_FallsBackToEnv(t *testing.T) {
 	}
 }
 
+// TestResolveLLMRuntimeConfig_UsesLegacyLLMURLEnv verifies the C2 alias path.
+// The primary FACTVAULT_LLM_BASE_URL must be absent (not set, not empty-string)
+// so the resolver falls through to the deprecated FACTVAULT_LLM_URL alias.
 func TestResolveLLMRuntimeConfig_UsesLegacyLLMURLEnv(t *testing.T) {
-	t.Setenv("FACTVAULT_LLM_BASE_URL", "")
+	// C1: os.LookupEnv("FACTVAULT_LLM_BASE_URL") == ("", false) lets the alias win.
+	// t.Setenv("", "") would make it ("", true), suppressing the alias — wrong.
+	os.Unsetenv("FACTVAULT_LLM_BASE_URL") //nolint:errcheck
 	t.Setenv("FACTVAULT_LLM_URL", "http://localhost:11434/v1")
 
-	cfg := resolveLLMRuntimeConfig("local", "llama3.1", "", "")
+	cfg, err := resolveLLMRuntimeConfig("local", "llama3.1", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if cfg.BaseURL != "http://localhost:11434/v1" {
 		t.Fatalf("BaseURL = %q, want legacy FACTVAULT_LLM_URL", cfg.BaseURL)
 	}
 }
 
 func TestBuildLLMExtractor_UnsupportedProviderFromCLIConfig(t *testing.T) {
-	cfg := resolveLLMRuntimeConfig("anthropic", "claude-3-5-sonnet", "", "")
-	_, _, err := workers.BuildLLMExtractor(cfg)
+	cfg, err := resolveLLMRuntimeConfig("anthropic", "claude-3-5-sonnet", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error from resolve: %v", err)
+	}
+	_, _, err = workers.BuildLLMExtractor(cfg)
 	if err == nil {
 		t.Fatal("expected unsupported provider error")
 	}
 	if !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("error = %q, want unsupported message", err.Error())
-	}
-}
-
-func TestFirstNonEmpty(t *testing.T) {
-	got := firstNonEmpty("", "  ", "value")
-	if got != "value" {
-		t.Fatalf("firstNonEmpty() = %q, want value", got)
 	}
 }
 

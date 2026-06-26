@@ -1,21 +1,29 @@
 package main
 
-import "testing"
+import (
+	"testing"
+)
 
-func TestAPIAddrEnvFallback(t *testing.T) {
-	t.Setenv("FACTVAULT_API_ADDR", "127.0.0.1:9090")
-
-	got := resolveAPIAddr(":8080", false)
-	if got != "127.0.0.1:9090" {
-		t.Fatalf("resolveAPIAddr() = %q, want env fallback", got)
+// TestAPICmdAddrFlag verifies the --addr flag is registered and defaults to :8080.
+// The env-fallback and flag-override logic is handled by config.ResolveString
+// (tested in internal/config/contract_test.go and resolver_test.go).
+func TestAPICmdAddrFlag(t *testing.T) {
+	cmd := newAPICmd()
+	f := cmd.Flags().Lookup("addr")
+	if f == nil {
+		t.Fatal("newAPICmd() missing --addr flag")
+	}
+	if f.DefValue != ":8080" {
+		t.Fatalf("--addr default = %q, want :8080", f.DefValue)
 	}
 }
 
-func TestAPIAddrFlagOverridesEnv(t *testing.T) {
-	t.Setenv("FACTVAULT_API_ADDR", "127.0.0.1:9090")
-
-	got := resolveAPIAddr("127.0.0.1:8081", true)
-	if got != "127.0.0.1:8081" {
-		t.Fatalf("resolveAPIAddr() = %q, want explicit flag value", got)
+// TestAPICmdEmbedderURLDefault verifies the --embedder-url flag is not present
+// on the API command (embedder URL is resolved inside RunE, not exposed as a flag).
+func TestAPICmdJWTPublicKeyFlag(t *testing.T) {
+	cmd := newAPICmd()
+	f := cmd.Flags().Lookup("jwt-public-key")
+	if f == nil {
+		t.Fatal("newAPICmd() missing --jwt-public-key flag")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/petersimmons1972/factvault/internal/collectors"
+	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/db"
 	"github.com/petersimmons1972/factvault/internal/embed"
 	"github.com/petersimmons1972/factvault/internal/research"
@@ -40,42 +41,56 @@ func newWorkerCmd() *cobra.Command {
 		Short: "Run source-pipeline workers",
 	}
 	cmd.PersistentFlags().StringVar(&dsn, "dsn", "", "Postgres DSN (or FACTVAULT_DATABASE_URL)")
-	cmd.PersistentFlags().StringVar(&tenantID, "tenant", "", "Tenant UUID")
-	cmd.PersistentFlags().IntVar(&limit, "limit", 100, "Maximum rows per run")
-	cmd.PersistentFlags().IntVar(&ageDays, "age-days", 7, "Verify threshold in days")
+	cmd.PersistentFlags().StringVar(&tenantID, "tenant", "", "Tenant UUID (or FACTVAULT_DEV_TENANT_ID)")
+	cmd.PersistentFlags().IntVar(&limit, "limit", 100, "Maximum rows per run (or FACTVAULT_WORKER_LIMIT)")
+	cmd.PersistentFlags().IntVar(&ageDays, "age-days", 7, "Verify threshold in days (or FACTVAULT_VERIFY_AGE_DAYS)")
 	cmd.PersistentFlags().StringVar(&vocabularyMode, "vocabulary-mode", string(vocabulary.ModeStrict), "Property vocabulary mode: strict or permissive")
 	cmd.PersistentFlags().StringVar(&llmProvider, "llm-provider", "", "LLM provider for extraction: local or openai")
-	cmd.PersistentFlags().StringVar(&llmModel, "llm-model", "", "LLM model for extraction")
-	cmd.PersistentFlags().StringVar(&llmBaseURL, "llm-base-url", "", "LLM base URL")
-	cmd.PersistentFlags().StringVar(&llmAPIKey, "llm-api-key", "", "LLM API key")
+	cmd.PersistentFlags().StringVar(&llmModel, "llm-model", "", "LLM model for extraction (or FACTVAULT_LLM_MODEL)")
+	cmd.PersistentFlags().StringVar(&llmBaseURL, "llm-base-url", "", "LLM base URL (or FACTVAULT_LLM_BASE_URL)")
+	cmd.PersistentFlags().StringVar(&llmAPIKey, "llm-api-key", "", "LLM API key (or FACTVAULT_LLM_API_KEY)")
 	cmd.PersistentFlags().BoolVar(&confirmCost, "confirm-cost", false, "Confirm frontier-model extraction batches above the guardrail threshold")
 	cmd.PersistentFlags().IntVar(&costThreshold, "llm-cost-guardrail-threshold", 1000, "Frontier-model extraction batch guardrail threshold in paid extractions per run")
-	cmd.PersistentFlags().StringVar(&feedsPath, "feeds", "config/feeds.yaml", "RSS feed config file")
+	cmd.PersistentFlags().StringVar(&feedsPath, "feeds", "config/feeds.yaml", "RSS feed config file (or FACTVAULT_FEEDS_PATH)")
 	cmd.PersistentFlags().BoolVar(&once, "once", false, "Run one RSS polling cycle and exit")
 	cmd.PersistentFlags().DurationVar(&interval, "interval", 15*time.Minute, "Default RSS polling interval")
 
+	// addRun registers a simple "run once" subcommand that opens a DB pool and
+	// runs fn. C1/C4/C5: resolvers replace manual if-empty chains.
 	addRun := func(name string, fn func(context.Context, *workers.SourcePipeline) error) {
 		cmd.AddCommand(&cobra.Command{
 			Use:   name,
 			Short: "Run " + name + " worker once",
 			Args:  cobra.NoArgs,
-			RunE: func(cmd *cobra.Command, _ []string) error {
-				if dsn == "" {
-					dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+			RunE: func(subcmd *cobra.Command, _ []string) error {
+				var err error
+				// C1/C5: flag.Changed > env > required error.
+				dsn, err = config.ResolveSecret(subcmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
+				if err != nil {
+					return err
 				}
-				if dsn == "" {
-					return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
+				// C4: --tenant > FACTVAULT_DEV_TENANT_ID > ERROR.
+				tenantID, err = config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
+				if err != nil {
+					return err
 				}
-				if tenantID == "" {
-					return fmt.Errorf("tenant required: set --tenant")
+				// C5: FACTVAULT_WORKER_LIMIT wired.
+				limit, err = config.ResolveInt(subcmd.Flags().Lookup("limit"), "FACTVAULT_WORKER_LIMIT", 100, false)
+				if err != nil {
+					return err
 				}
-				pool, err := db.NewPool(cmd.Context(), dsn)
+				// C5: FACTVAULT_VERIFY_AGE_DAYS wired.
+				ageDays, err = config.ResolveInt(subcmd.Flags().Lookup("age-days"), "FACTVAULT_VERIFY_AGE_DAYS", 7, false)
+				if err != nil {
+					return err
+				}
+				pool, err := db.NewPool(subcmd.Context(), dsn)
 				if err != nil {
 					return err
 				}
 				defer pool.Close()
 				p := &workers.SourcePipeline{DB: pool}
-				return fn(cmd.Context(), p)
+				return fn(subcmd.Context(), p)
 			},
 		})
 	}
@@ -94,7 +109,11 @@ func newWorkerCmd() *cobra.Command {
 		return p.ArchiveOnce(ctx, tenantID, limit)
 	})
 	addRun("extract", func(ctx context.Context, p *workers.SourcePipeline) error {
-		extractor, provider, err := workers.BuildLLMExtractor(resolveLLMRuntimeConfig(llmProvider, llmModel, llmBaseURL, llmAPIKey))
+		rtCfg, err := resolveLLMRuntimeConfig(llmProvider, llmModel, llmBaseURL, llmAPIKey)
+		if err != nil {
+			return err
+		}
+		extractor, provider, err := workers.BuildLLMExtractor(rtCfg)
 		if err != nil {
 			return err
 		}
@@ -113,46 +132,50 @@ func newWorkerCmd() *cobra.Command {
 		defer cancel()
 		return p.VerifyOnce(ctx, tenantID, ageDays, limit)
 	})
+
 	cmd.AddCommand(&cobra.Command{
 		Use:   "corroborate",
 		Short: "Run corroborate worker once",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if dsn == "" {
-				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+		RunE: func(subcmd *cobra.Command, _ []string) error {
+			resolvedDSN, err := config.ResolveSecret(subcmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
+			if err != nil {
+				return err
 			}
-			if dsn == "" {
-				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
+			resolvedTenant, err := config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
+			if err != nil {
+				return err
 			}
-			if tenantID == "" {
-				return fmt.Errorf("tenant required: set --tenant")
-			}
-			pool, err := db.NewPool(cmd.Context(), dsn)
+			pool, err := db.NewPool(subcmd.Context(), resolvedDSN)
 			if err != nil {
 				return err
 			}
 			defer pool.Close()
-			return (&workers.Corroborator{DB: pool}).CorroborateOnce(cmd.Context(), tenantID)
+			return (&workers.Corroborator{DB: pool}).CorroborateOnce(subcmd.Context(), resolvedTenant)
 		},
 	})
+
 	cmd.AddCommand(&cobra.Command{
 		Use:   "rss",
 		Short: "Poll RSS/Atom feeds and ingest source items",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if dsn == "" {
-				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+		RunE: func(subcmd *cobra.Command, _ []string) error {
+			resolvedDSN, err := config.ResolveSecret(subcmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
+			if err != nil {
+				return err
 			}
-			if dsn == "" {
-				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
+			// C5: FACTVAULT_FEEDS_PATH wired.
+			resolvedFeeds, err := config.ResolveString(subcmd.Flags().Lookup("feeds"), "FACTVAULT_FEEDS_PATH", "config/feeds.yaml", false)
+			if err != nil {
+				return err
 			}
-			pool, err := db.NewPool(cmd.Context(), dsn)
+			pool, err := db.NewPool(subcmd.Context(), resolvedDSN)
 			if err != nil {
 				return err
 			}
 			defer pool.Close()
 
-			cfg, err := collectors.LoadFeedConfig(feedsPath)
+			cfg, err := collectors.LoadFeedConfig(resolvedFeeds)
 			if err != nil {
 				return err
 			}
@@ -174,7 +197,7 @@ func newWorkerCmd() *cobra.Command {
 			}
 
 			if once {
-				return runForFeeds(cmd.Context(), allScheduleIndexes(schedules))
+				return runForFeeds(subcmd.Context(), allScheduleIndexes(schedules))
 			}
 
 			lastPolled := map[int]time.Time{}
@@ -182,7 +205,7 @@ func newWorkerCmd() *cobra.Command {
 				now := time.Now().UTC()
 				due := dueRSSFeedIndexes(schedules, lastPolled, now)
 				if len(due) > 0 {
-					if err := runForFeeds(cmd.Context(), due); err != nil {
+					if err := runForFeeds(subcmd.Context(), due); err != nil {
 						return err
 					}
 					for _, i := range due {
@@ -194,8 +217,8 @@ func newWorkerCmd() *cobra.Command {
 					wait = time.Second
 				}
 				select {
-				case <-cmd.Context().Done():
-					return cmd.Context().Err()
+				case <-subcmd.Context().Done():
+					return subcmd.Context().Err()
 				case <-time.After(wait):
 				}
 			}
@@ -206,73 +229,79 @@ func newWorkerCmd() *cobra.Command {
 		Use:   "dossier",
 		Short: "Precompute dossier bundles",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if dsn == "" {
-				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+		RunE: func(subcmd *cobra.Command, _ []string) error {
+			resolvedDSN, err := config.ResolveSecret(subcmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
+			if err != nil {
+				return err
 			}
-			if dsn == "" {
-				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
+			resolvedTenant, err := config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
+			if err != nil {
+				return err
 			}
-			if tenantID == "" {
-				return fmt.Errorf("tenant required: set --tenant")
+			resolvedLimit, err := config.ResolveInt(subcmd.Flags().Lookup("limit"), "FACTVAULT_WORKER_LIMIT", 100, false)
+			if err != nil {
+				return err
 			}
-			pool, err := db.NewPool(cmd.Context(), dsn)
+			pool, err := db.NewPool(subcmd.Context(), resolvedDSN)
 			if err != nil {
 				return err
 			}
 			defer pool.Close()
-			_, err = (workers.DossierWorker{DB: pool}).RunOnce(cmd.Context(), workers.DossierOptions{TenantID: tenantID, Limit: limit})
+			_, err = (workers.DossierWorker{DB: pool}).RunOnce(subcmd.Context(), workers.DossierOptions{TenantID: resolvedTenant, Limit: resolvedLimit})
 			return err
 		},
 	})
 
-	// research subcommand: generate queries → fetch candidate URLs → CollectOnce.
+	// research subcommand: generate queries -> fetch candidate URLs -> CollectOnce.
 	researchCmd := &cobra.Command{
 		Use:   "research <entity>",
-		Short: "Actively research an entity: generate queries → web search → collect URLs",
-		Long: `Generate perspective-angled web search queries for a seed entity using 2 LLM
-calls, then fetch candidate URLs and feed them into the existing collect pipeline.
-
-Bounds (moderate defaults; adjust with flags):
-  --perspectives       5   LLM-generated research angles
-  --questions-per      4   search queries per perspective
-  --results-per-query  5   search results fetched per query
-  --max-fetches        40  hard ceiling on page fetches per run (cost guarantee)
-
-A run consumes: 2 LLM calls + ≤(perspectives×questions) searches + ≤max-fetches page fetches.
-Sources are tagged with meta.trust_tier="web" and land in status=collected for normal
-archive→extract→verify processing.`,
+		Short: "Actively research an entity: generate queries -> web search -> collect URLs",
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if dsn == "" {
-				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+		RunE: func(subcmd *cobra.Command, args []string) error {
+			resolvedDSN, err := config.ResolveSecret(subcmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
+			if err != nil {
+				return err
 			}
-			if dsn == "" {
-				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
-			}
-			if tenantID == "" {
-				return fmt.Errorf("tenant required: set --tenant")
+			resolvedTenant, err := config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
+			if err != nil {
+				return err
 			}
 
-			perspectives, err := cmd.Flags().GetInt("perspectives")
+			perspectives, err := subcmd.Flags().GetInt("perspectives")
 			if err != nil {
 				return err
 			}
-			questionsPerPerspective, err := cmd.Flags().GetInt("questions-per")
+			questionsPerPerspective, err := subcmd.Flags().GetInt("questions-per")
 			if err != nil {
 				return err
 			}
-			resultsPerQuery, err := cmd.Flags().GetInt("results-per-query")
+			resultsPerQuery, err := subcmd.Flags().GetInt("results-per-query")
 			if err != nil {
 				return err
 			}
-			maxFetches, err := cmd.Flags().GetInt("max-fetches")
+			maxFetches, err := subcmd.Flags().GetInt("max-fetches")
 			if err != nil {
 				return err
 			}
-			entityType, err := cmd.Flags().GetString("entity-type")
+			entityType, err := subcmd.Flags().GetString("entity-type")
 			if err != nil {
 				return err
+			}
+
+			// C5: FACTVAULT_SEARXNG_URL wired.
+			searxngURL, err := config.ResolveString(subcmd.Flags().Lookup("searxng-url"), "FACTVAULT_SEARXNG_URL", "https://searxng.example.com", false)
+			if err != nil {
+				return err
+			}
+
+			rtCfg, err := resolveLLMRuntimeConfig("", llmModel, llmBaseURL, llmAPIKey)
+			if err != nil {
+				return err
+			}
+			llmCfg := research.LLMConfig{
+				BaseURL: rtCfg.BaseURL,
+				APIKey:  rtCfg.APIKey,
+				Model:   rtCfg.Model,
 			}
 
 			cfg := research.Config{
@@ -285,51 +314,42 @@ archive→extract→verify processing.`,
 				Label: args[0],
 				Type:  entityType,
 			}
-			llmCfg := research.LLMConfig{
-				BaseURL: firstNonEmpty(llmBaseURL, os.Getenv("FACTVAULT_LLM_BASE_URL"), os.Getenv("FACTVAULT_LLM_URL")),
-				APIKey:  firstNonEmpty(llmAPIKey, os.Getenv("FACTVAULT_LLM_API_KEY")),
-				Model:   firstNonEmpty(llmModel, os.Getenv("FACTVAULT_LLM_MODEL")),
-			}
-			if llmCfg.BaseURL == "" {
-				return fmt.Errorf("LLM base URL required: set --llm-base-url or FACTVAULT_LLM_BASE_URL")
-			}
-			if llmCfg.Model == "" {
-				return fmt.Errorf("LLM model required: set --llm-model or FACTVAULT_LLM_MODEL")
-			}
 
 			maxPossible := cfg.Perspectives * cfg.QuestionsPerPerspective * cfg.ResultsPerQuery
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(),
-				"research: entity=%q type=%q perspectives=%d questions-per=%d results-per-query=%d max-fetches=%d (projected ceiling: %d searches, %d fetches)\n",
-				entity.Label, entity.Type, cfg.Perspectives, cfg.QuestionsPerPerspective, cfg.ResultsPerQuery, cfg.MaxTotalFetches, cfg.Perspectives*cfg.QuestionsPerPerspective, min(maxPossible, cfg.MaxTotalFetches)); err != nil {
-				return fmt.Errorf("write output: %w", err)
+			if _, wErr := fmt.Fprintf(subcmd.OutOrStdout(),
+				"research: entity=%q type=%q perspectives=%d questions-per=%d results-per-query=%d max-fetches=%d (ceiling: %d searches, %d fetches)\n",
+				entity.Label, entity.Type, cfg.Perspectives, cfg.QuestionsPerPerspective, cfg.ResultsPerQuery, cfg.MaxTotalFetches,
+				cfg.Perspectives*cfg.QuestionsPerPerspective, min(maxPossible, cfg.MaxTotalFetches)); wErr != nil {
+				return fmt.Errorf("write output: %w", wErr)
 			}
 
-			pool, err := db.NewPool(cmd.Context(), dsn)
+			pool, err := db.NewPool(subcmd.Context(), resolvedDSN)
 			if err != nil {
 				return err
 			}
 			defer pool.Close()
 
-			queries, err := research.GenerateQueries(cmd.Context(), entity, cfg, nil, llmCfg)
+			queries, err := research.GenerateQueries(subcmd.Context(), entity, cfg, nil, llmCfg)
 			if err != nil {
 				return fmt.Errorf("generate queries: %w", err)
 			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "research: generated %d unique queries\n", len(queries)); err != nil {
-				return fmt.Errorf("write output: %w", err)
+			if _, wErr := fmt.Fprintf(subcmd.OutOrStdout(), "research: generated %d unique queries\n", len(queries)); wErr != nil {
+				return fmt.Errorf("write output: %w", wErr)
 			}
 
 			collector := &research.SearchCollector{
+				SearchURL:       searxngURL,
 				Queries:         queries,
 				ResultsPerQuery: cfg.ResultsPerQuery,
 				MaxTotalFetches: cfg.MaxTotalFetches,
 			}
 
 			p := &workers.SourcePipeline{DB: pool}
-			if err := p.CollectOnce(cmd.Context(), tenantID, collector); err != nil {
+			if err := p.CollectOnce(subcmd.Context(), resolvedTenant, collector); err != nil {
 				return fmt.Errorf("collect: %w", err)
 			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "research: collection complete (trust_tier=web, status=collected)\n"); err != nil {
-				return fmt.Errorf("write output: %w", err)
+			if _, wErr := fmt.Fprintf(subcmd.OutOrStdout(), "research: collection complete (trust_tier=web, status=collected)\n"); wErr != nil {
+				return fmt.Errorf("write output: %w", wErr)
 			}
 			return nil
 		},
@@ -339,39 +359,34 @@ archive→extract→verify processing.`,
 	researchCmd.Flags().Int("results-per-query", 5, "Search results per query")
 	researchCmd.Flags().Int("max-fetches", 40, "Hard ceiling on page fetches")
 	researchCmd.Flags().String("entity-type", "", "Entity type (e.g. Person, City, Company)")
+	// C5: FACTVAULT_SEARXNG_URL wired via this flag.
+	researchCmd.Flags().String("searxng-url", "", "SearXNG base URL (or FACTVAULT_SEARXNG_URL)")
 	cmd.AddCommand(researchCmd)
 
 	embedCmd := &cobra.Command{
 		Use:   "embed",
 		Short: "Populate NULL embedding columns for entities, statements, and sources",
-		Long: `Backfill the vector(1024) embedding columns that are left NULL by the
-extract and collect workers. Rows that already have embeddings are skipped
-(idempotent). Run repeatedly to make incremental progress.
-
-The embedder service URL is taken from --embedder-url or FACTVAULT_EMBEDDER_URL.`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if dsn == "" {
-				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
-			}
-			if dsn == "" {
-				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
-			}
-			if tenantID == "" {
-				return fmt.Errorf("tenant required: set --tenant")
-			}
-			embedderURL, err := cmd.Flags().GetString("embedder-url")
+		Args:  cobra.NoArgs,
+		RunE: func(subcmd *cobra.Command, _ []string) error {
+			resolvedDSN, err := config.ResolveSecret(subcmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
 			if err != nil {
-				return fmt.Errorf("--embedder-url: %w", err)
+				return err
 			}
-			if embedderURL == "" {
-				embedderURL = os.Getenv("FACTVAULT_EMBEDDER_URL")
+			resolvedTenant, err := config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
+			if err != nil {
+				return err
 			}
-			if embedderURL == "" {
-				embedderURL = "http://localhost:8080"
+			resolvedLimit, err := config.ResolveInt(subcmd.Flags().Lookup("limit"), "FACTVAULT_WORKER_LIMIT", 100, false)
+			if err != nil {
+				return err
+			}
+			// C7: default embedder URL is :8081 (host-accessible port).
+			embedderURL, err := config.ResolveString(subcmd.Flags().Lookup("embedder-url"), "FACTVAULT_EMBEDDER_URL", "http://localhost:8081", false)
+			if err != nil {
+				return err
 			}
 
-			pool, err := db.NewPool(cmd.Context(), dsn)
+			pool, err := db.NewPool(subcmd.Context(), resolvedDSN)
 			if err != nil {
 				return err
 			}
@@ -381,12 +396,12 @@ The embedder service URL is taken from --embedder-url or FACTVAULT_EMBEDDER_URL.
 				DB:     pool,
 				Client: embed.NewClient(embedderURL, nil),
 			}
-			result, err := w.RunOnce(cmd.Context(), tenantID, workers.EmbedOptions{Limit: limit})
+			result, err := w.RunOnce(subcmd.Context(), resolvedTenant, workers.EmbedOptions{Limit: resolvedLimit})
 			if err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "embed: populated=%d skipped=%d\n", result.Populated, result.Skipped); err != nil {
-				return fmt.Errorf("write output: %w", err)
+			if _, wErr := fmt.Fprintf(subcmd.OutOrStdout(), "embed: populated=%d skipped=%d\n", result.Populated, result.Skipped); wErr != nil {
+				return fmt.Errorf("write output: %w", wErr)
 			}
 			return nil
 		},
@@ -397,22 +412,49 @@ The embedder service URL is taken from --embedder-url or FACTVAULT_EMBEDDER_URL.
 	return cmd
 }
 
-func resolveLLMRuntimeConfig(provider, model, baseURL, apiKey string) workers.LLMRuntimeConfig {
-	return workers.LLMRuntimeConfig{
-		Provider: provider,
-		Model:    firstNonEmpty(model, os.Getenv("FACTVAULT_LLM_MODEL")),
-		BaseURL:  firstNonEmpty(baseURL, os.Getenv("FACTVAULT_LLM_BASE_URL"), os.Getenv("FACTVAULT_LLM_URL")),
-		APIKey:   firstNonEmpty(apiKey, os.Getenv("FACTVAULT_LLM_API_KEY")),
-	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
+// resolveLLMRuntimeConfig resolves LLM config following C1/C2.
+// Non-empty arg means the caller's flag was set explicitly; empty arg falls
+// through to env vars with C1 resolver semantics.
+// C2: FACTVAULT_LLM_BASE_URL is canonical; FACTVAULT_LLM_URL is a deprecated alias.
+func resolveLLMRuntimeConfig(provider, model, baseURL, apiKey string) (workers.LLMRuntimeConfig, error) {
+	// Model: flag arg > FACTVAULT_LLM_MODEL > default.
+	if model == "" {
+		var err error
+		model, _, err = config.ResolveStringWithAlias(nil, "FACTVAULT_LLM_MODEL", "", "llama3.1:8b", false)
+		if err != nil {
+			return workers.LLMRuntimeConfig{}, err
 		}
 	}
-	return ""
+
+	// BaseURL: flag arg > FACTVAULT_LLM_BASE_URL > FACTVAULT_LLM_URL (alias, C2) > default.
+	if baseURL == "" {
+		var isAlias bool
+		var err error
+		baseURL, isAlias, err = config.ResolveStringWithAlias(nil, "FACTVAULT_LLM_BASE_URL", "FACTVAULT_LLM_URL", "http://localhost:11434/v1", false)
+		if err != nil {
+			return workers.LLMRuntimeConfig{}, err
+		}
+		if isAlias {
+			// C2: deprecated alias in use -- warn on stderr.
+			fmt.Fprintln(os.Stderr, "warning: FACTVAULT_LLM_URL is deprecated; use FACTVAULT_LLM_BASE_URL")
+		}
+	}
+
+	// APIKey: flag arg > FACTVAULT_LLM_API_KEY (+ _FILE companion per C9) > empty.
+	if apiKey == "" {
+		var err error
+		apiKey, err = config.ResolveSecret(nil, "FACTVAULT_LLM_API_KEY", "", false)
+		if err != nil {
+			return workers.LLMRuntimeConfig{}, err
+		}
+	}
+
+	return workers.LLMRuntimeConfig{
+		Provider: provider,
+		Model:    model,
+		BaseURL:  baseURL,
+		APIKey:   apiKey,
+	}, nil
 }
 
 type rssSchedule struct {

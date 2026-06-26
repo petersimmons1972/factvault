@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -149,6 +150,33 @@ func ResolveStringWithAlias(flag *pflag.Flag, envVar, aliasEnvVar, defaultVal st
 		return "", false, requiredErr(flag, envVar)
 	}
 	return defaultVal, false, nil
+}
+
+// ResolveSecret resolves a secret string config value. It checks the *_FILE
+// companion variant first (reads and trims the file contents), then falls back
+// to the direct env var, then the flag, then the default (C9).
+// Resolution order: flag.Changed > *_FILE env > direct env > required error > default
+func ResolveSecret(flag *pflag.Flag, envVar, defaultVal string, required bool) (string, error) {
+	if flag != nil && flag.Changed {
+		return flag.Value.String(), nil
+	}
+	// Check _FILE companion variant first (C9).
+	fileEnvVar := envVar + "_FILE"
+	if filePath, ok := os.LookupEnv(fileEnvVar); ok && filePath != "" {
+		data, err := os.ReadFile(strings.TrimSpace(filePath))
+		if err != nil {
+			return "", fmt.Errorf("reading secret file %s=%q: %w", fileEnvVar, filePath, err)
+		}
+		return strings.TrimSpace(string(data)), nil
+	}
+	// Then direct env var.
+	if val, ok := os.LookupEnv(envVar); ok {
+		return val, nil
+	}
+	if required {
+		return "", requiredErr(flag, envVar)
+	}
+	return defaultVal, nil
 }
 
 // requiredErr returns a standardised error message for a missing required config.

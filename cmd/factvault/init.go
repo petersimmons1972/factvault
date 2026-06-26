@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/petersimmons1972/factvault/internal/auth"
+	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/db"
 	"github.com/petersimmons1972/factvault/internal/doctor"
 	fvexamples "github.com/petersimmons1972/factvault/internal/examples"
@@ -21,29 +22,42 @@ func newInitCmd() *cobra.Command {
 		keyDir      string
 		exampleName string
 		skipExample bool
+		skipMigrate bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "One-shot first-boot initialiser: keygen, health checks, and optional example load",
+		Short: "One-shot first-boot initialiser: migrate, keygen, health checks, and optional example load",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// Resolve DSN.
-			if dsn == "" {
-				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+			var err error
+			// C1/C5: resolvers replace manual if-empty chains.
+			dsn, err = config.ResolveSecret(cmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
+			if err != nil {
+				return err
 			}
-			if dsn == "" {
-				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
+			// C4: OOBE command — fall through to default UUID rather than error.
+			tenantID, err = config.ResolveString(cmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "11111111-1111-1111-1111-111111111111", false)
+			if err != nil {
+				return err
 			}
-			// Resolve tenant.
-			if tenantID == "" {
-				tenantID = os.Getenv("FACTVAULT_DEV_TENANT_ID")
-			}
-			if tenantID == "" {
-				tenantID = "11111111-1111-1111-1111-111111111111"
+			// C5: FACTVAULT_AUTH_DIR wired.
+			keyDir, err = config.ResolveString(cmd.Flags().Lookup("key-dir"), "FACTVAULT_AUTH_DIR", ".local", false)
+			if err != nil {
+				return err
 			}
 
 			out := cmd.OutOrStdout()
+
+			// C8: run migrations first (idempotent); --skip-migrate bypasses this.
+			if !skipMigrate {
+				if _, pErr := fmt.Fprintf(out, "==> Running database migrations\n"); pErr != nil {
+					return pErr
+				}
+				if err := runMigrations(cmd.Context(), dsn); err != nil {
+					return fmt.Errorf("migrate: %w", err)
+				}
+			}
 
 			// --- Key generation ---
 			privPath := filepath.Join(keyDir, "private.pem")
@@ -71,13 +85,30 @@ func newInitCmd() *cobra.Command {
 			if _, err := fmt.Fprintf(out, "==> Running health checks\n"); err != nil {
 				return err
 			}
-			cfg := doctor.Config{
-				DatabaseURL: dsn,
-				LLMURL:      firstNonEmpty(os.Getenv("FACTVAULT_LLM_BASE_URL"), os.Getenv("FACTVAULT_LLM_URL")),
-				EmbedderURL: os.Getenv("FACTVAULT_EMBEDDER_URL"),
-				WaybackURL:  os.Getenv("FACTVAULT_WAYBACK_URL"),
+			// C2: FACTVAULT_LLM_BASE_URL canonical; FACTVAULT_LLM_URL deprecated alias.
+			var isAlias bool
+			llmURL, isAlias, err := config.ResolveStringWithAlias(nil, "FACTVAULT_LLM_BASE_URL", "FACTVAULT_LLM_URL", "", false)
+			if err != nil {
+				return err
 			}
-			results := doctor.RunAll(cmd.Context(), cfg)
+			if isAlias {
+				fmt.Fprintln(os.Stderr, "warning: FACTVAULT_LLM_URL is deprecated; use FACTVAULT_LLM_BASE_URL")
+			}
+			embedderURL, err := config.ResolveString(nil, "FACTVAULT_EMBEDDER_URL", "http://localhost:8081", false)
+			if err != nil {
+				return err
+			}
+			waybackURL, err := config.ResolveString(nil, "FACTVAULT_WAYBACK_URL", "https://web.archive.org", false)
+			if err != nil {
+				return err
+			}
+			drCfg := doctor.Config{
+				DatabaseURL: dsn,
+				LLMURL:      llmURL,
+				EmbedderURL: embedderURL,
+				WaybackURL:  waybackURL,
+			}
+			results := doctor.RunAll(cmd.Context(), drCfg)
 			for _, r := range results {
 				status := "FAIL"
 				if r.OK {
@@ -143,9 +174,12 @@ func newInitCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&dsn, "dsn", "", "Postgres DSN (or FACTVAULT_DATABASE_URL)")
 	cmd.Flags().StringVar(&tenantID, "tenant", "", "Tenant UUID (or FACTVAULT_DEV_TENANT_ID; default 11111111-1111-1111-1111-111111111111)")
-	cmd.Flags().StringVar(&keyDir, "key-dir", ".local", "Directory for JWT key files")
+	// C5: FACTVAULT_AUTH_DIR wired; .local is the fallback default.
+	cmd.Flags().StringVar(&keyDir, "key-dir", "", "Directory for JWT key files (or FACTVAULT_AUTH_DIR; default .local)")
 	cmd.Flags().StringVar(&exampleName, "example", "ai-startup-tracking", "Example name to load (empty to skip)")
 	cmd.Flags().BoolVar(&skipExample, "skip-example", false, "Skip example data loading")
+	// C8: --skip-migrate lets operators who have already migrated bypass the step.
+	cmd.Flags().BoolVar(&skipMigrate, "skip-migrate", false, "Skip running database migrations before keygen")
 	return cmd
 }
 

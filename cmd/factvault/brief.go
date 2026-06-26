@@ -11,6 +11,7 @@ import (
 
 	"github.com/petersimmons1972/factvault/internal/assembler"
 	"github.com/petersimmons1972/factvault/internal/briefs"
+	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/db"
 )
 
@@ -108,15 +109,17 @@ func newBriefGetCmd(dsn, tenantID *string) *cobra.Command {
 	return cmd
 }
 
-func openBriefPool(cmd *cobra.Command, dsn, tenantID string) (*pgxpool.Pool, string, error) {
-	if dsn == "" {
-		dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+func openBriefPool(cmd *cobra.Command, _, _ string) (*pgxpool.Pool, string, error) {
+	// C1/C4: resolvers replace manual if-empty chains.
+	// Note: dsn and tenantID args are ignored; values come from flags/env via resolvers.
+	dsn, err := config.ResolveSecret(cmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
+	if err != nil {
+		return nil, "", err
 	}
-	if dsn == "" {
-		return nil, "", fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
-	}
-	if tenantID == "" {
-		return nil, "", fmt.Errorf("tenant required: set --tenant")
+	// C4: --tenant > FACTVAULT_DEV_TENANT_ID > ERROR.
+	tenantID, err := config.ResolveString(cmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
+	if err != nil {
+		return nil, "", err
 	}
 	pool, err := db.NewPool(cmd.Context(), dsn)
 	if err != nil {

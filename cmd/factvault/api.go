@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/petersimmons1972/factvault/internal/api"
 	"github.com/petersimmons1972/factvault/internal/auth"
+	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/db"
 )
 
@@ -21,18 +21,24 @@ func newAPICmd() *cobra.Command {
 		Short: "Run the factvault HTTP API",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			addr = resolveAPIAddr(addr, cmd.Flags().Changed("addr"))
-			if dsn == "" {
-				dsn = os.Getenv("FACTVAULT_DATABASE_URL")
+			var err error
+			// C1: typed resolver replaces manual if-empty chains.
+			dsn, err = config.ResolveSecret(cmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
+			if err != nil {
+				return err
 			}
-			if dsn == "" {
-				return fmt.Errorf("database DSN required: set --dsn or FACTVAULT_DATABASE_URL")
+			addr, err = config.ResolveString(cmd.Flags().Lookup("addr"), "FACTVAULT_API_ADDR", ":8080", false)
+			if err != nil {
+				return err
 			}
-			if publicKeyPath == "" {
-				publicKeyPath = os.Getenv("FACTVAULT_JWT_PUBLIC_KEY")
+			publicKeyPath, err = config.ResolveSecret(cmd.Flags().Lookup("jwt-public-key"), "FACTVAULT_JWT_PUBLIC_KEY", "", true)
+			if err != nil {
+				return err
 			}
-			if publicKeyPath == "" {
-				return fmt.Errorf("JWT public key required: set --jwt-public-key or FACTVAULT_JWT_PUBLIC_KEY")
+			// C7: embedder URL — default :8081 for host access, in-network uses :8080.
+			embedderURL, err := config.ResolveString(nil, "FACTVAULT_EMBEDDER_URL", "http://localhost:8081", false)
+			if err != nil {
+				return err
 			}
 			data, err := os.ReadFile(filepath.Clean(publicKeyPath))
 			if err != nil {
@@ -49,7 +55,7 @@ func newAPICmd() *cobra.Command {
 			defer pool.Close()
 			httpServer := http.Server{
 				Addr:              addr,
-				Handler:           api.New(pool, pub, os.Getenv("FACTVAULT_EMBEDDER_URL")).Router(),
+				Handler:           api.New(pool, pub, embedderURL).Router(),
 				ReadTimeout:       5 * time.Second,
 				ReadHeaderTimeout: 5 * time.Second,
 				WriteTimeout:      30 * time.Second,
@@ -60,13 +66,6 @@ func newAPICmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&dsn, "dsn", "", "Postgres DSN (or FACTVAULT_DATABASE_URL)")
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "HTTP listen address (or FACTVAULT_API_ADDR)")
-	cmd.Flags().StringVar(&publicKeyPath, "jwt-public-key", "", "JWT public key PEM path")
+	cmd.Flags().StringVar(&publicKeyPath, "jwt-public-key", "", "JWT public key PEM path (or FACTVAULT_JWT_PUBLIC_KEY)")
 	return cmd
-}
-
-func resolveAPIAddr(flagValue string, flagChanged bool) string {
-	if flagChanged {
-		return flagValue
-	}
-	return firstNonEmpty(os.Getenv("FACTVAULT_API_ADDR"), flagValue, ":8080")
 }

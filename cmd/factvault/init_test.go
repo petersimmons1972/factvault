@@ -91,6 +91,10 @@ func TestInitCmd_KeygenOutputMessages(t *testing.T) {
 		if err := cmd.Flags().Set("skip-example", "true"); err != nil {
 			t.Fatal(err)
 		}
+		// C8: skip-migrate so the test reaches keygen without a live DB.
+		if err := cmd.Flags().Set("skip-migrate", "true"); err != nil {
+			t.Fatal(err)
+		}
 		// RunE will error; we only care about what was printed before the error.
 		if err := cmd.Execute(); err == nil {
 			t.Log("cmd.Execute unexpectedly succeeded")
@@ -115,6 +119,10 @@ func TestInitCmd_KeygenOutputMessages(t *testing.T) {
 		if err := cmd1.Flags().Set("skip-example", "true"); err != nil {
 			t.Fatal(err)
 		}
+		// C8: skip-migrate so the test reaches keygen without a live DB.
+		if err := cmd1.Flags().Set("skip-migrate", "true"); err != nil {
+			t.Fatal(err)
+		}
 		if err := cmd1.Execute(); err == nil {
 			t.Log("cmd1.Execute unexpectedly succeeded")
 		}
@@ -136,6 +144,10 @@ func TestInitCmd_KeygenOutputMessages(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := cmd2.Flags().Set("skip-example", "true"); err != nil {
+			t.Fatal(err)
+		}
+		// C8: skip-migrate so the test reaches keygen without a live DB.
+		if err := cmd2.Flags().Set("skip-migrate", "true"); err != nil {
 			t.Fatal(err)
 		}
 		if err := cmd2.Execute(); err == nil {
