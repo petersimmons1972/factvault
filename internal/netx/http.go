@@ -29,16 +29,54 @@ func NewHTTPClient(timeout time.Duration, policy ClientPolicy) *http.Client {
 		timeout = defaultHTTPTimeout
 	}
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
+
+	// E-02: Only consult environment proxy variables when private hosts are
+	// allowed. When AllowPrivateHosts is false (the safe-client path), a
+	// user-controlled HTTP_PROXY/HTTPS_PROXY env var could route requests
+	// through an attacker-supplied proxy before the IP check fires.
+	var proxyFunc func(*http.Request) (*url.URL, error)
+	if policy.AllowPrivateHosts {
+		proxyFunc = http.ProxyFromEnvironment
+	}
+
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		Proxy: proxyFunc,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
+			host, port, err := net.SplitHostPort(addr)
 			if err != nil {
 				return nil, err
 			}
-			if ip, err := netip.ParseAddr(host); err == nil && !policy.AllowPrivateHosts && isBlockedAddr(ip) {
-				return nil, fmt.Errorf("blocked address: %s", ip.String())
+
+			if ip, parseErr := netip.ParseAddr(host); parseErr == nil {
+				// Literal IP address — check directly.
+				if !policy.AllowPrivateHosts && isBlockedAddr(ip) {
+					return nil, fmt.Errorf("blocked address: %s", ip.String())
+				}
+				return dialer.DialContext(ctx, network, addr)
 			}
+
+			// Hostname path (E-01): resolve at dial time and check every resolved
+			// IP against the blocklist before connecting. We then dial the first
+			// resolved IP as a literal string to avoid a second OS-level resolution
+			// between the check and the connect (DNS-rebind window).
+			if !policy.AllowPrivateHosts {
+				ips, lookupErr := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+				if lookupErr != nil {
+					return nil, fmt.Errorf("resolve host %q: %w", host, lookupErr)
+				}
+				for _, resolved := range ips {
+					if isBlockedAddr(resolved) {
+						return nil, fmt.Errorf("blocked address: %s (resolved from %q)", resolved.String(), host)
+					}
+				}
+				if len(ips) > 0 {
+					// Dial the first resolved IP as a literal to close the
+					// TOCTOU window between resolution check and connect.
+					literalAddr := net.JoinHostPort(ips[0].String(), port)
+					return dialer.DialContext(ctx, network, literalAddr)
+				}
+			}
+
 			return dialer.DialContext(ctx, network, addr)
 		},
 	}
