@@ -158,7 +158,9 @@ func TestPostBriefGenerate_ForeignEntityIDRejected(t *testing.T) {
 		($1, $2, 'Entity A', 'https://schema.org/Thing'),
 		($3, $4, 'Entity B', 'https://schema.org/Thing')
 	`, entityA, tenantA, entityB, tenantB); err != nil {
-		_ = tx.Rollback(ctx)
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			t.Logf("rollback: %v", rbErr)
+		}
 		t.Fatalf("insert entities: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

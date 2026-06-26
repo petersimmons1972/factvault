@@ -145,9 +145,9 @@ func TestAssembleInvalidDepth(t *testing.T) {
 				t.Errorf("depth %d should be valid, got ErrInvalidDepth", tt.depth)
 			}
 		} else {
-				if !errors.Is(err, ErrInvalidDepth) {
-					t.Errorf("depth %d should be invalid, expected ErrInvalidDepth, got %v", tt.depth, err)
-				}
+			if !errors.Is(err, ErrInvalidDepth) {
+				t.Errorf("depth %d should be invalid, expected ErrInvalidDepth, got %v", tt.depth, err)
+			}
 		}
 	}
 }
