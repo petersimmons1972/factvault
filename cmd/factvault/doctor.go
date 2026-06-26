@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/doctor"
 )
 
@@ -17,18 +18,31 @@ func newDoctorCmd() *cobra.Command {
 		Short: "Run first-boot health checks",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if cfg.DatabaseURL == "" {
-				cfg.DatabaseURL = os.Getenv("FACTVAULT_DATABASE_URL")
+			var err error
+			// C1: flag.Changed > env > default (empty = optional).
+			cfg.DatabaseURL, err = config.ResolveSecret(cmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", false)
+			if err != nil {
+				return err
 			}
-			if cfg.LLMURL == "" {
-				cfg.LLMURL = os.Getenv("FACTVAULT_LLM_URL")
+			// C2: FACTVAULT_LLM_BASE_URL canonical; FACTVAULT_LLM_URL deprecated alias.
+			llmURL, isAlias, err := config.ResolveStringWithAlias(cmd.Flags().Lookup("llm-url"), "FACTVAULT_LLM_BASE_URL", "FACTVAULT_LLM_URL", "", false)
+			if err != nil {
+				return err
 			}
-			if cfg.EmbedderURL == "" {
-				cfg.EmbedderURL = os.Getenv("FACTVAULT_EMBEDDER_URL")
+			if isAlias {
+				fmt.Fprintln(os.Stderr, "warning: FACTVAULT_LLM_URL is deprecated; use FACTVAULT_LLM_BASE_URL")
 			}
-			if cfg.WaybackURL == "" {
-				cfg.WaybackURL = os.Getenv("FACTVAULT_WAYBACK_URL")
+			cfg.LLMURL = llmURL
+			// C7: default embedder URL is :8081 (host-accessible port).
+			cfg.EmbedderURL, err = config.ResolveString(cmd.Flags().Lookup("embedder-url"), "FACTVAULT_EMBEDDER_URL", "http://localhost:8081", false)
+			if err != nil {
+				return err
 			}
+			cfg.WaybackURL, err = config.ResolveString(cmd.Flags().Lookup("wayback-url"), "FACTVAULT_WAYBACK_URL", "https://web.archive.org", false)
+			if err != nil {
+				return err
+			}
+
 			results := doctor.RunAll(cmd.Context(), cfg)
 			for _, result := range results {
 				var status string
@@ -64,9 +78,9 @@ func newDoctorCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&cfg.DatabaseURL, "dsn", "", "Postgres DSN (or FACTVAULT_DATABASE_URL)")
-	cmd.Flags().StringVar(&cfg.LLMURL, "llm-url", "", "LLM base URL")
-	cmd.Flags().StringVar(&cfg.EmbedderURL, "embedder-url", "", "embedder base URL")
-	cmd.Flags().StringVar(&cfg.WaybackURL, "wayback-url", "", "Wayback base URL")
+	cmd.Flags().StringVar(&cfg.LLMURL, "llm-url", "", "LLM base URL (or FACTVAULT_LLM_BASE_URL)")
+	cmd.Flags().StringVar(&cfg.EmbedderURL, "embedder-url", "", "embedder base URL (or FACTVAULT_EMBEDDER_URL)")
+	cmd.Flags().StringVar(&cfg.WaybackURL, "wayback-url", "", "Wayback base URL (or FACTVAULT_WAYBACK_URL)")
 	cmd.Flags().BoolVar(&requiredOnly, "required-only", false, "Exit 0 if only optional checks (LLM, embedder, Wayback) fail; show WARN instead of FAIL for them")
 	return cmd
 }

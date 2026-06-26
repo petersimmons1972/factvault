@@ -175,29 +175,23 @@ func CheckLLM(ctx context.Context, cfg Config) CheckResult {
 // vectors of the expected dimension.
 func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 	return timed("embedder", func() (string, string, error) {
-		base := strings.TrimRight(defaultString(cfg.EmbedderURL, "http://localhost:8080"), "/")
+		base := strings.TrimRight(defaultString(cfg.EmbedderURL, "http://localhost:8081"), "/") // C7: default changed to :8081
 		client := httpClient(cfg)
 
-		// 1. Health check — try /healthz then /health.
-		var healthOK bool
-		for _, path := range []string{"/healthz", "/health"} {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
-			if err != nil {
-				continue
-			}
-			resp, err := client.Do(req)
-			if err == nil {
-				if closeErr := resp.Body.Close(); closeErr != nil {
-					fmt.Fprintf(os.Stderr, "close: %v\n", closeErr)
-				}
-				if resp.StatusCode == http.StatusOK {
-					healthOK = true
-					break
-				}
-			}
+		// 1. Health check — C6: probe only /healthz; /health endpoint removed from embedder.
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/healthz", nil)
+		if err != nil {
+			return "", "check embedder URL", err
 		}
-		if !healthOK {
-			return "", "start embedder service", fmt.Errorf("embedder health check failed")
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", "start embedder service", err
+		}
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "close: %v\n", closeErr)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return "", "start embedder service", fmt.Errorf("embedder /healthz returned %d", resp.StatusCode)
 		}
 
 		// 2. Optional /info — collect model name for the detail string.

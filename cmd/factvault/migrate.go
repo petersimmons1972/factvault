@@ -27,11 +27,16 @@ func newMigrateCmd() *cobra.Command {
 }
 
 func runMigrations(ctx context.Context, dsn string) error {
+	// C5: FACTVAULT_MIGRATE_DATABASE_URL is the primary DSN for migrations
+	// (superuser required for CREATE EXTENSION / DDL); falls back to FACTVAULT_DATABASE_URL.
+	if dsn == "" {
+		dsn = os.Getenv("FACTVAULT_MIGRATE_DATABASE_URL")
+	}
 	if dsn == "" {
 		dsn = os.Getenv("FACTVAULT_DATABASE_URL")
 	}
 	if dsn == "" {
-		return fmt.Errorf("database DSN required: set --dsn flag or FACTVAULT_DATABASE_URL")
+		return fmt.Errorf("database DSN required: set --dsn flag, FACTVAULT_MIGRATE_DATABASE_URL, or FACTVAULT_DATABASE_URL")
 	}
 
 	db, err := sql.Open("pgx", dsn)

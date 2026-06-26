@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(lifespan=lifespan)
 
 
-@app.get("/health")
+# C6: /health endpoint removed; doctor checks probe only /healthz.
 @app.get("/healthz")
 def health() -> JSONResponse:
     """Model-aware health.
