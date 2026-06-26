@@ -35,7 +35,7 @@ const restrictedAppName = "factvault-test"
 func TestRLSRestrictedCollectOnceSucceedsWithTenantContext(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.RestrictedPool(ctx, t, restrictedAppName)
-	assertRestrictedRoleNoBypassRLS(t, ctx, pool)
+	assertRestrictedRoleNoBypassRLS(ctx, t, pool)
 
 	tenantID := uuid.NewString()
 	pipeline := &workers.SourcePipeline{DB: pool}
@@ -50,7 +50,7 @@ func TestRLSRestrictedCollectOnceSucceedsWithTenantContext(t *testing.T) {
 		t.Fatalf("CollectOnce: %v", err)
 	}
 
-	withTenantTx(t, ctx, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
+	withTenantTx(ctx, t, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
 		var count int
 		if err := tx.QueryRow(txCtx, `
 			SELECT count(*)
@@ -68,7 +68,7 @@ func TestRLSRestrictedCollectOnceSucceedsWithTenantContext(t *testing.T) {
 func TestRLSRestrictedCollectOnceFailsWithoutTenantContext(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.RestrictedPool(ctx, t, restrictedAppName)
-	assertRestrictedRoleNoBypassRLS(t, ctx, pool)
+	assertRestrictedRoleNoBypassRLS(ctx, t, pool)
 
 	tenantID := uuid.NewString()
 	legacy := legacySourcePipeline{DB: pool}
@@ -82,7 +82,7 @@ func TestRLSRestrictedCollectOnceFailsWithoutTenantContext(t *testing.T) {
 	err := legacy.CollectOnce(ctx, tenantID, collector)
 	visibleRows := -1
 
-	withTenantTx(t, ctx, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
+	withTenantTx(ctx, t, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
 		var count int
 		if queryErr := tx.QueryRow(txCtx, `
 			SELECT count(*)
@@ -108,14 +108,14 @@ func TestRLSRestrictedCollectOnceFailsWithoutTenantContext(t *testing.T) {
 func TestRLSRestrictedArchiveOnceSucceedsWithTenantContext(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.RestrictedPool(ctx, t, restrictedAppName)
-	assertRestrictedRoleNoBypassRLS(t, ctx, pool)
+	assertRestrictedRoleNoBypassRLS(ctx, t, pool)
 
 	tenantID := uuid.NewString()
 	sourceID := uuid.NewString()
 	rawHTML := []byte("<html><body>archive me</body></html>")
 	compressed := mustCompress(t, rawHTML)
 
-	withTenantTx(t, ctx, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
+	withTenantTx(ctx, t, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
 		if _, err := tx.Exec(txCtx, `
 			INSERT INTO sources (id, tenant_id, url, content_hash, raw_html, status, title)
 			VALUES ($1, $2::uuid, $3, $4, $5, 'collected', 'archive me')
@@ -129,7 +129,7 @@ func TestRLSRestrictedArchiveOnceSucceedsWithTenantContext(t *testing.T) {
 		t.Fatalf("ArchiveOnce: %v", err)
 	}
 
-	withTenantTx(t, ctx, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
+	withTenantTx(ctx, t, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
 		var status string
 		var rawText string
 		if err := tx.QueryRow(txCtx, `
@@ -151,14 +151,14 @@ func TestRLSRestrictedArchiveOnceSucceedsWithTenantContext(t *testing.T) {
 func TestRLSRestrictedVerifyOnceSucceedsWithTenantContext(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.RestrictedPool(ctx, t, restrictedAppName)
-	assertRestrictedRoleNoBypassRLS(t, ctx, pool)
+	assertRestrictedRoleNoBypassRLS(ctx, t, pool)
 
 	tenantID := uuid.NewString()
 	sourceID := uuid.NewString()
 	body := []byte("<html><body>verify me</body></html>")
 	sourceURL := "https://example.com/restricted/verify"
 
-	withTenantTx(t, ctx, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
+	withTenantTx(ctx, t, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
 		if _, err := tx.Exec(txCtx, `
 			INSERT INTO sources (id, tenant_id, url, content_hash, status, title)
 			VALUES ($1, $2::uuid, $3, $4, 'archived', 'verify me')
@@ -183,7 +183,7 @@ func TestRLSRestrictedVerifyOnceSucceedsWithTenantContext(t *testing.T) {
 		t.Fatalf("VerifyOnce: %v", err)
 	}
 
-	withTenantTx(t, ctx, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
+	withTenantTx(ctx, t, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
 		var status string
 		var verifiedAt time.Time
 		if err := tx.QueryRow(txCtx, `
@@ -219,7 +219,7 @@ func TestRLSRestrictedVerifyOnceSucceedsWithTenantContext(t *testing.T) {
 func TestRLSRestrictedBriefsTenantIsolation(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.RestrictedPool(ctx, t, restrictedAppName)
-	assertRestrictedRoleNoBypassRLS(t, ctx, pool)
+	assertRestrictedRoleNoBypassRLS(ctx, t, pool)
 
 	tenantA := uuid.NewString()
 	tenantB := uuid.NewString()
@@ -252,14 +252,14 @@ func TestRLSRestrictedBriefsTenantIsolation(t *testing.T) {
 func TestRLSRestrictedExtractOnceDoesNotHoldIdleTransactionDuringLLMCall(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.RestrictedPool(ctx, t, restrictedAppName)
-	assertRestrictedRoleNoBypassRLS(t, ctx, pool)
+	assertRestrictedRoleNoBypassRLS(ctx, t, pool)
 
 	monitorPool := testdb.New(t)
 	tenantID := uuid.NewString()
 	sourceID := uuid.NewString()
 	rawText := "Acme Corp launched a product."
 
-	withTenantTx(t, ctx, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
+	withTenantTx(ctx, t, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
 		if _, err := tx.Exec(txCtx, `
 			INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status, title)
 			VALUES ($1, $2::uuid, $3, $4, $5, 'archived', 'Acme launch')
@@ -379,7 +379,7 @@ func (s *slowLLMStub) Extract(context.Context, *db.Source, string) ([]extractors
 	return nil, nil
 }
 
-func assertRestrictedRoleNoBypassRLS(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func assertRestrictedRoleNoBypassRLS(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 
 	var bypass bool
@@ -395,7 +395,7 @@ func assertRestrictedRoleNoBypassRLS(t *testing.T, ctx context.Context, pool *pg
 	}
 }
 
-func withTenantTx(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenantID string, fn func(context.Context, pgx.Tx)) {
+func withTenantTx(ctx context.Context, t *testing.T, pool *pgxpool.Pool, tenantID string, fn func(context.Context, pgx.Tx)) {
 	t.Helper()
 
 	var tenant pgtype.UUID

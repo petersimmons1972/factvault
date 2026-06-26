@@ -32,7 +32,7 @@ var (
 
 const (
 	restrictedRoleUser     = "factvault_app"
-	restrictedRolePassword = "factvault_app"
+	restrictedRolePassword = "factvault_app" //nolint:gosec // test-only fixed password for a throwaway restricted role
 )
 
 // StartContainer launches a shared PostgreSQL container for tests in this process.
