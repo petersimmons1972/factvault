@@ -9,8 +9,11 @@ import (
 
 	"github.com/mmcdole/gofeed"
 
+	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
+
+const defaultMaxFeedBytes = 10 * 1024 * 1024
 
 // RSSCollector fetches and parses an RSS or Atom feed into Items.
 type RSSCollector struct {
@@ -43,9 +46,13 @@ func (c RSSCollector) Collect(ctx context.Context) ([]Item, error) {
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, fmt.Errorf("rss collector: status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	maxFeedBytes := maxFeedBytes()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxFeedBytes)+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxFeedBytes {
+		return nil, fmt.Errorf("rss collector: response body exceeds %d bytes", maxFeedBytes)
 	}
 	feed, err := gofeed.NewParser().ParseString(string(body))
 	if err != nil {
@@ -84,4 +91,12 @@ func (c RSSCollector) client() *http.Client {
 		return c.HTTPClient
 	}
 	return netx.NewSafeHTTPClient(20 * time.Second)
+}
+
+func maxFeedBytes() int {
+	size, err := config.ResolveInt(nil, "FACTVAULT_MAX_RSS_BYTES", defaultMaxFeedBytes, false)
+	if err != nil || size <= 0 {
+		return defaultMaxFeedBytes
+	}
+	return size
 }

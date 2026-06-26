@@ -55,11 +55,12 @@ func (c *Corroborator) CorroborateOnce(ctx context.Context, tenantID string) err
 	}()
 
 	rows, err := tx.Query(txCtx, `
-		SELECT ss.statement_id::text, ss.source_id::text, s.url, COALESCE(s.publisher, ''), COALESCE(s.raw_text, ''), COALESCE(ss.confidence::float8, 0.5)
+		SELECT ss.statement_id::text, ss.source_id::text, s.url, COALESCE(s.publisher, ''), LEFT(COALESCE(s.raw_text, ''), 32768), COALESCE(ss.confidence::float8, 0.5)
 		FROM statement_sources ss
 		JOIN sources s ON s.id = ss.source_id
 		WHERE ss.tenant_id = $1::uuid
 		ORDER BY ss.statement_id, ss.source_id
+		LIMIT 1000
 	`, tenantID)
 	if err != nil {
 		return err

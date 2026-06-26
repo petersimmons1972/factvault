@@ -24,6 +24,8 @@ log = logging.getLogger(__name__)
 MODEL_NAME = os.environ.get("EMBEDDER_MODEL", "BAAI/bge-m3")
 CACHE_DIR = os.environ.get("HF_HOME", "/home/nonroot/.cache")
 EXPECTED_DIM = 1024
+DEFAULT_MAX_EMBED_TEXTS = 512
+DEFAULT_MAX_EMBED_BYTES = 2 * 1024 * 1024
 
 # Module-level reference; populated during lifespan startup.
 _model = None  # type: ignore[assignment]
@@ -40,6 +42,29 @@ class EmbedResponse(BaseModel):
 class InfoResponse(BaseModel):
     model: str
     dim: int
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Invalid %s=%r; falling back to %d", name, raw, default)
+        return default
+    if value <= 0:
+        log.warning("Non-positive %s=%r; falling back to %d", name, raw, default)
+        return default
+    return value
+
+
+def max_embed_texts() -> int:
+    return _int_env("MAX_EMBED_TEXTS", DEFAULT_MAX_EMBED_TEXTS)
+
+
+def max_embed_bytes() -> int:
+    return _int_env("MAX_EMBED_BYTES", DEFAULT_MAX_EMBED_BYTES)
 
 
 @asynccontextmanager
@@ -90,6 +115,11 @@ def info() -> InfoResponse:
 
 @app.post("/embed", response_model=EmbedResponse)
 def embed(req: EmbedRequest) -> EmbedResponse:
+    if len(req.texts) > max_embed_texts():
+        raise HTTPException(status_code=422, detail=f"too many texts: max {max_embed_texts()}")
+    total_bytes = sum(len(text.encode()) for text in req.texts)
+    if total_bytes > max_embed_bytes():
+        raise HTTPException(status_code=422, detail=f"total text bytes exceed max {max_embed_bytes()}")
     if not req.texts:
         return EmbedResponse(vectors=[])
     if _model is None:

@@ -93,6 +93,16 @@ def test_embed_empty_list(client) -> None:
     assert resp.json()["vectors"] == []
 
 
+def test_embed_too_many_texts(client) -> None:
+    resp = client.post("/embed", json={"texts": ["x"] * 513})
+    assert resp.status_code == 422
+
+
+def test_embed_total_bytes_exceeded(client) -> None:
+    resp = client.post("/embed", json={"texts": ["a" * (2_097_152 + 1)]})
+    assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # Pre-load state: model not yet loaded.  Health and embed must report 503
 # so dependent services don't race ahead and hit the embedder before it is

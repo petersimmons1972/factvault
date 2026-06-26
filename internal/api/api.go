@@ -16,6 +16,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/assembler"
 	"github.com/petersimmons1972/factvault/internal/auth"
 	"github.com/petersimmons1972/factvault/internal/briefs"
+	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/embed"
 	"github.com/petersimmons1972/factvault/internal/retrieval"
 	"github.com/petersimmons1972/factvault/internal/store"
@@ -46,6 +47,8 @@ type Problem struct {
 	Status int    `json:"status"`
 	Detail string `json:"detail,omitempty"`
 }
+
+const defaultMaxBriefLimit = 1000
 
 // New constructs a Server with retrieval service and verifier dependencies.
 // embedderURL is the base URL for the embedder service (e.g. FACTVAULT_EMBEDDER_URL).
@@ -166,7 +169,7 @@ func (s *Server) getBriefs(w http.ResponseWriter, r *http.Request) {
 	opts := briefs.ListOptions{Limit: 100}
 	if q := r.URL.Query().Get("limit"); q != "" {
 		if parsed, err := strconv.Atoi(q); err == nil {
-			opts.Limit = parsed
+			opts.Limit = min(parsed, maxBriefLimit())
 		}
 	}
 	if sourceKind := r.URL.Query().Get("source_kind"); sourceKind != "" {
@@ -193,6 +196,14 @@ func (s *Server) getBriefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, records)
+}
+
+func maxBriefLimit() int {
+	limit, err := config.ResolveInt(nil, "FACTVAULT_MAX_BRIEFS_LIMIT", defaultMaxBriefLimit, false)
+	if err != nil || limit <= 0 {
+		return defaultMaxBriefLimit
+	}
+	return limit
 }
 
 func (s *Server) getBrief(w http.ResponseWriter, r *http.Request) {

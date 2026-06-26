@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/collectors"
+	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/db"
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
@@ -29,7 +30,10 @@ type SourcePipeline struct {
 	HTTPClient *http.Client
 }
 
-const maxVerifyBodyBytes = 10 * 1024 * 1024
+const (
+	maxVerifyBodyBytes        = 10 * 1024 * 1024
+	defaultMaxDecompressBytes = 100 * 1024 * 1024
+)
 
 // CollectOnce fetches source candidates and persists them as collected sources.
 func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c collectors.Collector) error {
@@ -310,7 +314,15 @@ func decompress(b []byte) ([]byte, error) {
 			fmt.Fprintf(os.Stderr, "close zlib reader: %v\n", err)
 		}
 	}()
-	return io.ReadAll(zr)
+	maxBytes := maxDecompressBytes()
+	out, err := io.ReadAll(io.LimitReader(zr, int64(maxBytes)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > maxBytes {
+		return nil, fmt.Errorf("decompress zlib: output exceeds %d bytes", maxBytes)
+	}
+	return out, nil
 }
 
 func stripHTML(html string) string {
@@ -368,4 +380,12 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
+}
+
+func maxDecompressBytes() int {
+	size, err := config.ResolveInt(nil, "FACTVAULT_MAX_DECOMPRESS_BYTES", defaultMaxDecompressBytes, false)
+	if err != nil || size <= 0 {
+		return defaultMaxDecompressBytes
+	}
+	return size
 }
