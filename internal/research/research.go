@@ -19,6 +19,7 @@ import (
 	"unicode"
 
 	"github.com/petersimmons1972/factvault/internal/collectors"
+	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
 // Query is a plain search query string produced by the research package.
@@ -416,11 +417,14 @@ func extractTitle(html string) string {
 	return strings.TrimSpace(html[start : start+end])
 }
 
+// httpClient returns the HTTP client for search and page-fetch requests.
+// Callers who inject a custom HTTPClient via SearchCollector.HTTPClient are
+// responsible for ensuring it provides adequate SSRF protection.
 func (s *SearchCollector) httpClient() *http.Client {
 	if s.HTTPClient != nil {
 		return s.HTTPClient
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return netx.NewSafeHTTPClient(30 * time.Second)
 }
 
 func (s *SearchCollector) searchBase() string {
