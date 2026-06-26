@@ -146,7 +146,7 @@ func TestWorkerCmdHasEmbedSubcommand(t *testing.T) {
 func TestEffectiveRSSTenantPriorityChain(t *testing.T) {
 	const flagVal = "flag-tenant-uuid"
 	const feedVal = "feed-tenant-uuid"
-	const devVal  = "dev-tenant-uuid"
+	const devVal = "dev-tenant-uuid"
 
 	// --tenant flag beats feed TenantID and dev-tenant.
 	if got, warn := effectiveRSSTenant(true, flagVal, feedVal, devVal); got != flagVal || warn {
