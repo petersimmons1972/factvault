@@ -15,9 +15,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/collectors"
+	"github.com/petersimmons1972/factvault/internal/db"
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
@@ -31,6 +33,21 @@ const maxVerifyBodyBytes = 10 * 1024 * 1024
 
 // CollectOnce fetches source candidates and persists them as collected sources.
 func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c collectors.Collector) error {
+	var tenant pgtype.UUID
+	if err := tenant.Scan(tenantID); err != nil {
+		return fmt.Errorf("invalid tenant id: %w", err)
+	}
+	txCtx := db.WithPool(ctx, p.DB)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil && !isRollbackAfterCommit(err) {
+			fmt.Fprintf(os.Stderr, "source pipeline: rollback collect: %v\n", err)
+		}
+	}()
+
 	items, err := c.Collect(ctx)
 	if err != nil {
 		return fmt.Errorf("collect: %w", err)
@@ -54,16 +71,16 @@ func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c col
 				metaJSON = b
 			}
 		}
-		_, err = p.DB.Exec(ctx, `
+		_, err = tx.Exec(txCtx, `
 INSERT INTO sources (id, tenant_id, url, content_hash, raw_html, status, title, publisher, published_at, meta)
 VALUES ($1, $2, $3, $4, $5, 'collected', NULLIF($6, ''), NULLIF($7, ''), $8, $9)
 ON CONFLICT (tenant_id, url) DO NOTHING
-`, uuid.NewString(), tenantID, item.URL, hash, compressed, item.Title, publisher, item.PublishedAt, metaJSON)
+`, uuid.NewString(), tenant, item.URL, hash, compressed, item.Title, publisher, item.PublishedAt, metaJSON)
 		if err != nil {
 			return fmt.Errorf("insert source: %w", err)
 		}
 	}
-	return nil
+	return tx.Commit(txCtx)
 }
 
 // ArchiveOnce fetches collected sources and stores archived text artifacts.
@@ -71,39 +88,67 @@ func (p *SourcePipeline) ArchiveOnce(ctx context.Context, tenantID string, limit
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := p.DB.Query(ctx, `
+	var tenant pgtype.UUID
+	if err := tenant.Scan(tenantID); err != nil {
+		return fmt.Errorf("invalid tenant id: %w", err)
+	}
+	txCtx := db.WithPool(ctx, p.DB)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil && !isRollbackAfterCommit(err) {
+			fmt.Fprintf(os.Stderr, "source pipeline: rollback archive: %v\n", err)
+		}
+	}()
+
+	rows, err := tx.Query(txCtx, `
 SELECT id, url, raw_html FROM sources
 WHERE tenant_id = $1 AND status = 'collected'
 ORDER BY fetched_at ASC
 LIMIT $2
-`, tenantID, limit)
+`, tenant, limit)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
+	type pendingArchive struct {
+		id      string
+		url     string
+		rawHTML []byte
+	}
+	var pending []pendingArchive
 	for rows.Next() {
-		var id, url string
-		var rawHTML []byte
-		if err := rows.Scan(&id, &url, &rawHTML); err != nil {
+		var item pendingArchive
+		if err := rows.Scan(&item.id, &item.url, &item.rawHTML); err != nil {
 			return err
 		}
-		html, err := decompress(rawHTML)
+		pending = append(pending, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+
+	for _, item := range pending {
+		html, err := decompress(item.rawHTML)
 		if err != nil {
 			return err
 		}
 		text := stripHTML(string(html))
-		archiveURL := submitWayback(ctx, p.client(), url)
-		_, err = p.DB.Exec(ctx, `
+		archiveURL := submitWayback(ctx, p.client(), item.url)
+		_, err = tx.Exec(txCtx, `
 UPDATE sources
 SET raw_text = $1, archive_url = $2, status = 'archived'
 WHERE id = $3
-`, text, archiveURL, id)
+`, text, archiveURL, item.id)
 		if err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return tx.Commit(txCtx)
 }
 
 // VerifyOnce validates source links and records verification outcomes.
@@ -114,42 +159,72 @@ func (p *SourcePipeline) VerifyOnce(ctx context.Context, tenantID string, ageDay
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := p.DB.Query(ctx, `
+	var tenant pgtype.UUID
+	if err := tenant.Scan(tenantID); err != nil {
+		return fmt.Errorf("invalid tenant id: %w", err)
+	}
+	txCtx := db.WithPool(ctx, p.DB)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil && !isRollbackAfterCommit(err) {
+			fmt.Fprintf(os.Stderr, "source pipeline: rollback verify: %v\n", err)
+		}
+	}()
+
+	rows, err := tx.Query(txCtx, `
 SELECT id, url, content_hash, status FROM sources
 WHERE tenant_id = $1
   AND status IN ('archived', 'extracted', 'verified', 'content-changed')
   AND (last_verified_at IS NULL OR last_verified_at < $2)
 ORDER BY fetched_at ASC
 LIMIT $3
-`, tenantID, time.Now().UTC().AddDate(0, 0, -ageDays), limit)
+`, tenant, time.Now().UTC().AddDate(0, 0, -ageDays), limit)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
+	type pendingVerification struct {
+		id        string
+		url       string
+		oldHash   string
+		oldStatus string
+	}
+	var pending []pendingVerification
 	for rows.Next() {
-		var id, url, oldHash, oldStatus string
-		if err := rows.Scan(&id, &url, &oldHash, &oldStatus); err != nil {
+		var item pendingVerification
+		if err := rows.Scan(&item.id, &item.url, &item.oldHash, &item.oldStatus); err != nil {
 			return err
 		}
-		status, newHash, notes := p.verifySource(ctx, url, oldHash)
-		_, err := p.DB.Exec(ctx, `
+		pending = append(pending, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+
+	for _, item := range pending {
+		status, newHash, notes := p.verifySource(ctx, item.url, item.oldHash)
+		_, err := tx.Exec(txCtx, `
 INSERT INTO source_verifications (id, source_id, tenant_id, status, new_content_hash, notes)
 VALUES ($1, $2, $3, $4, $5, $6)
-`, uuid.NewString(), id, tenantID, status, nullable(newHash), nullable(notes))
+`, uuid.NewString(), item.id, tenant, status, nullable(newHash), nullable(notes))
 		if err != nil {
 			return err
 		}
-		_, err = p.DB.Exec(ctx, `
+		_, err = tx.Exec(txCtx, `
 UPDATE sources
 SET status = $1, last_verified_at = now()
 WHERE id = $2
-`, mapSourceStatus(status, oldStatus), id)
+`, mapSourceStatus(status, item.oldStatus), item.id)
 		if err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return tx.Commit(txCtx)
 }
 
 func (p *SourcePipeline) verifySource(ctx context.Context, url, oldHash string) (status, newHash, notes string) {

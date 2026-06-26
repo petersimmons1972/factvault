@@ -79,45 +79,11 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 	if err := tenant.Scan(tenantID); err != nil {
 		return fmt.Errorf("invalid tenant id: %w", err)
 	}
-	txCtx := db.WithPool(ctx, p.DB)
-	txCtx, tx, err := db.TenantContext(txCtx, tenant)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := tx.Rollback(txCtx); err != nil {
-			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
-		}
-	}()
-
 	logger := p.logger()
-	rows, err := tx.Query(txCtx, `
-		SELECT id, tenant_id, url, fetched_at, content_hash, raw_html, raw_text, archive_url, publisher, title, published_at, last_verified_at, status, created_at
-		FROM sources
-		WHERE tenant_id = $1::uuid AND raw_text IS NOT NULL AND status = 'archived'
-		ORDER BY fetched_at ASC
-		LIMIT $2
-	`, tenantID, limit)
+	sources, err := p.loadArchivedSources(ctx, tenant, tenantID, limit)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-
-	var sources []db.Source
-	for rows.Next() {
-		var source db.Source
-		if err := rows.Scan(
-			&source.ID, &source.TenantID, &source.Url, &source.FetchedAt, &source.ContentHash, &source.RawHtml, &source.RawText,
-			&source.ArchiveUrl, &source.Publisher, &source.Title, &source.PublishedAt, &source.LastVerifiedAt, &source.Status, &source.CreatedAt,
-		); err != nil {
-			return err
-		}
-		sources = append(sources, source)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	rows.Close()
 
 	for _, source := range sources {
 		rawText, ok := extractors.SourceRawText(&source)
@@ -128,24 +94,100 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 		if err != nil {
 			return err
 		}
-		acceptedFacts := 0
-		for _, fact := range facts {
-			if !VerifyExcerptOffset(rawText, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd) {
-				logger.WarnContext(txCtx, "rejecting fact with invalid excerpt offset", "source_id", source.ID.String(), "property", fact.PropertySlug)
-				continue
-			}
-			inserted, err := p.insertFact(txCtx, tx, tenantID, source.ID.String(), fact)
-			if err != nil {
-				return err
-			}
-			if inserted {
-				acceptedFacts++
-			}
+		if err := p.writeExtractedFacts(ctx, tenant, tenantID, &source, rawText, facts, logger); err != nil {
+			return err
 		}
-		if acceptedFacts > 0 {
-			if _, err := tx.Exec(txCtx, "UPDATE sources SET status = 'extracted' WHERE id = $1", source.ID); err != nil {
-				return err
-			}
+	}
+	return nil
+}
+
+func (p *FactPipeline) loadArchivedSources(ctx context.Context, tenant pgtype.UUID, tenantID string, limit int) ([]db.Source, error) {
+	txCtx := db.WithPool(ctx, p.DB)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil && !isRollbackAfterCommit(err) {
+			fmt.Fprintf(os.Stderr, "extract worker: rollback read tx: %v\n", err)
+		}
+	}()
+
+	rows, err := tx.Query(txCtx, `
+		SELECT id, tenant_id, url, fetched_at, content_hash, raw_html, raw_text, archive_url, publisher, title, published_at, last_verified_at, status, created_at
+		FROM sources
+		WHERE tenant_id = $1::uuid AND raw_text IS NOT NULL AND status = 'archived'
+		ORDER BY fetched_at ASC
+		LIMIT $2
+	`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sources []db.Source
+	for rows.Next() {
+		var source db.Source
+		if err := rows.Scan(
+			&source.ID, &source.TenantID, &source.Url, &source.FetchedAt, &source.ContentHash, &source.RawHtml, &source.RawText,
+			&source.ArchiveUrl, &source.Publisher, &source.Title, &source.PublishedAt, &source.LastVerifiedAt, &source.Status, &source.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	if err := tx.Commit(txCtx); err != nil {
+		return nil, err
+	}
+	return sources, nil
+}
+
+func (p *FactPipeline) writeExtractedFacts(
+	ctx context.Context,
+	tenant pgtype.UUID,
+	tenantID string,
+	source *db.Source,
+	rawText string,
+	facts []extractors.ExtractedFact,
+	logger *slog.Logger,
+) error {
+	if len(facts) == 0 {
+		return nil
+	}
+
+	txCtx := db.WithPool(ctx, p.DB)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil && !isRollbackAfterCommit(err) {
+			fmt.Fprintf(os.Stderr, "extract worker: rollback write tx: %v\n", err)
+		}
+	}()
+
+	acceptedFacts := 0
+	for _, fact := range facts {
+		if !VerifyExcerptOffset(rawText, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd) {
+			logger.WarnContext(ctx, "rejecting fact with invalid excerpt offset", "source_id", source.ID.String(), "property", fact.PropertySlug)
+			continue
+		}
+		inserted, err := p.insertFact(txCtx, tx, tenantID, source.ID.String(), fact)
+		if err != nil {
+			return err
+		}
+		if inserted {
+			acceptedFacts++
+		}
+	}
+	if acceptedFacts > 0 {
+		if _, err := tx.Exec(txCtx, "UPDATE sources SET status = 'extracted' WHERE id = $1", source.ID); err != nil {
+			return err
 		}
 	}
 	return tx.Commit(txCtx)

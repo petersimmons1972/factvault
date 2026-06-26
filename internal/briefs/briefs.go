@@ -288,6 +288,12 @@ func (s Service) tenantTx(ctx context.Context, tenantID string) (pgx.Tx, error) 
 		}
 		return nil, fmt.Errorf("briefs: set tenant_id: %w", err)
 	}
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE app_user"); err != nil {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			return nil, errors.Join(fmt.Errorf("briefs: set role: %w", err), fmt.Errorf("briefs: rollback: %w", rollbackErr))
+		}
+		return nil, fmt.Errorf("briefs: set role: %w", err)
+	}
 	return tx, nil
 }
 
