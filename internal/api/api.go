@@ -138,6 +138,22 @@ func (s *Server) postBriefGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := ClaimsFromContext(r.Context())
+	// A-10: validate that entity_id, if provided, belongs to the calling tenant.
+	if req.EntityID != nil {
+		var exists bool
+		err := s.Service.Pool.QueryRow(r.Context(),
+			"SELECT EXISTS(SELECT 1 FROM entities WHERE id=$1::uuid AND tenant_id=$2::uuid)",
+			*req.EntityID, claims.TenantID,
+		).Scan(&exists)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if !exists {
+			writeProblem(w, http.StatusForbidden, "entity_id does not belong to tenant", "")
+			return
+		}
+	}
 	rec, err := (briefs.Service{Pool: s.Service.Pool}).GenerateAndStore(r.Context(), claims.TenantID, req)
 	if err != nil {
 		writeError(w, err)

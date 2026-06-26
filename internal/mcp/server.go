@@ -81,9 +81,6 @@ func (s *Server) RunStdio(ctx context.Context) error {
 func (s *Server) tenantFromAuthorization(authorization string) (string, error) {
 	token := strings.TrimSpace(authorization)
 	if token == "" {
-		token = strings.TrimSpace(s.DefaultToken)
-	}
-	if token == "" {
 		return "", fmt.Errorf("missing authorization token")
 	}
 	if bearer, ok := auth.BearerToken(token); ok {

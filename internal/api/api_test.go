@@ -134,3 +134,71 @@ func TestBriefRoutesTenantScoped(t *testing.T) {
 		t.Fatalf("list code=%d body=%s", listResp.Code, listResp.Body.String())
 	}
 }
+
+// TestPostBriefGenerate_ForeignEntityIDRejected verifies A-10: posting to
+// /briefs/generate with a valid tenant-A JWT but a tenant-B entity_id must
+// return HTTP 403 Forbidden, not 200 OK.
+func TestPostBriefGenerate_ForeignEntityIDRejected(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	defer pool.Close()
+
+	tenantA := uuid.NewString()
+	tenantB := uuid.NewString()
+	entityA := uuid.NewString()
+	entityB := uuid.NewString()
+
+	// Insert both entities in a committed transaction.
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO entities (id, tenant_id, label, type_uri) VALUES
+		($1, $2, 'Entity A', 'https://schema.org/Thing'),
+		($3, $4, 'Entity B', 'https://schema.org/Thing')
+	`, entityA, tenantA, entityB, tenantB); err != nil {
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			t.Logf("rollback: %v", rbErr)
+		}
+		t.Fatalf("insert entities: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// Sign a JWT for tenant-A.
+	privPEM, pubPEM, err := auth.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("keys: %v", err)
+	}
+	priv, err := auth.ParsePrivateKeyPEM(privPEM)
+	if err != nil {
+		t.Fatalf("parse private key: %v", err)
+	}
+	pub, err := auth.ParsePublicKeyPEM(pubPEM)
+	if err != nil {
+		t.Fatalf("parse public key: %v", err)
+	}
+	tokenA, err := auth.SignRS256(priv, auth.Claims{
+		TenantID:  tenantA,
+		Subject:   "tester-a",
+		IssuedAt:  time.Now().Unix(),
+		ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+
+	h := New(pool, pub, "").Router()
+
+	// POST with tenant-A's token but tenant-B's entity_id — must be 403.
+	body := []byte(`{"source_kind":"dossier","entity_id":"` + entityB + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/briefs/generate", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tokenA)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for cross-tenant entity_id, got %d body=%s", resp.Code, resp.Body.String())
+	}
+}
