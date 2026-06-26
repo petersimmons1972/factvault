@@ -145,9 +145,9 @@ func TestAssembleInvalidDepth(t *testing.T) {
 				t.Errorf("depth %d should be valid, got ErrInvalidDepth", tt.depth)
 			}
 		} else {
-			if !errors.Is(err, ErrInvalidDepth) {
-				t.Errorf("depth %d should be invalid, expected ErrInvalidDepth, got %v", tt.depth, err)
-			}
+				if !errors.Is(err, ErrInvalidDepth) {
+					t.Errorf("depth %d should be invalid, expected ErrInvalidDepth, got %v", tt.depth, err)
+				}
 		}
 	}
 }
@@ -178,5 +178,84 @@ func TestAssembleEmptyEntityList(t *testing.T) {
 
 	if !errors.Is(err, ErrInvalidEntityCount) {
 		t.Errorf("expected ErrInvalidEntityCount, got %v", err)
+	}
+}
+
+// TestLoadBundleQualifiers_CrossTenantQualifierExcluded verifies A-04: the
+// qualifier query must JOIN through statements on tenant_id so that qualifiers
+// belonging to tenant-A cannot be retrieved in a tenant-B context.
+func TestLoadBundleQualifiers_CrossTenantQualifierExcluded(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	defer pool.Close()
+
+	tenantA := uuid.NewString()
+	tenantB := uuid.NewString()
+	entityA := uuid.NewString()
+	stmtID := uuid.NewString()
+	propID := uuid.NewString()
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			t.Logf("rollback: %v", err)
+		}
+	}()
+
+	// Insert a global property (NULL tenant_id is valid per schema).
+	_, err = tx.Exec(ctx, `
+		INSERT INTO properties (id, slug, label, value_type)
+		VALUES ($1, 'test-prop', 'Test Property', 'string')
+	`, propID)
+	if err != nil {
+		t.Fatalf("insert property: %v", err)
+	}
+
+	// Insert tenant-A entity.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO entities (id, tenant_id, label, type_uri)
+		VALUES ($1, $2, 'Entity A', 'https://schema.org/Thing')
+	`, entityA, tenantA)
+	if err != nil {
+		t.Fatalf("insert entity-A: %v", err)
+	}
+
+	// Insert a statement owned by tenant-A.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO statements (id, tenant_id, subject_id, property_id, val_text, confidence)
+		VALUES ($1, $2, $3, $4, 'hello', 0.9)
+	`, stmtID, tenantA, entityA, propID)
+	if err != nil {
+		t.Fatalf("insert statement: %v", err)
+	}
+
+	// Insert a qualifier for that statement.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO qualifiers (statement_id, property_id, val_text)
+		VALUES ($1, $2, 'qualifier-value')
+	`, stmtID, propID)
+	if err != nil {
+		t.Fatalf("insert qualifier: %v", err)
+	}
+
+	// Query qualifiers using tenant-B's ID: none should leak.
+	qualifiers, _, err := loadBundleQualifiers(ctx, tx, []string{stmtID}, tenantB)
+	if err != nil {
+		t.Fatalf("loadBundleQualifiers: %v", err)
+	}
+	if len(qualifiers) != 0 {
+		t.Fatalf("cross-tenant qualifier leak: got %d qualifiers for tenant-B, expected 0", len(qualifiers))
+	}
+
+	// Sanity check: querying with tenant-A's ID returns the qualifier.
+	qualifiersA, _, err := loadBundleQualifiers(ctx, tx, []string{stmtID}, tenantA)
+	if err != nil {
+		t.Fatalf("loadBundleQualifiers tenantA: %v", err)
+	}
+	if len(qualifiersA) != 1 {
+		t.Fatalf("expected 1 qualifier for tenant-A, got %d", len(qualifiersA))
 	}
 }

@@ -133,7 +133,7 @@ func Assemble(
 		statements[i].SourceIDs = sourceIDsByStatement[statements[i].ID]
 	}
 
-	qualifiers, qualifierIDsByStatement, err := loadBundleQualifiers(ctx, tx, statementIDs)
+	qualifiers, qualifierIDsByStatement, err := loadBundleQualifiers(ctx, tx, statementIDs, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +298,7 @@ func loadBundleSources(ctx context.Context, tx pgx.Tx, statementIDs []string, te
 	return sources, byStatement, rows.Err()
 }
 
-func loadBundleQualifiers(ctx context.Context, tx pgx.Tx, statementIDs []string) ([]BundleQualifier, map[string][]string, error) {
+func loadBundleQualifiers(ctx context.Context, tx pgx.Tx, statementIDs []string, tenantID string) ([]BundleQualifier, map[string][]string, error) {
 	byStatement := make(map[string][]string)
 	if len(statementIDs) == 0 {
 		return nil, byStatement, nil
@@ -316,9 +316,10 @@ func loadBundleQualifiers(ctx context.Context, tx pgx.Tx, statementIDs []string)
 			q.val_date
 		FROM qualifiers q
 		JOIN properties p ON p.id = q.property_id
+		JOIN statements s ON s.id = q.statement_id AND s.tenant_id = $2::uuid
 		WHERE q.statement_id = ANY($1::uuid[])
 		ORDER BY q.statement_id, p.slug, q.id
-	`, statementIDs)
+	`, statementIDs, tenantID)
 	if err != nil {
 		return nil, nil, err
 	}
