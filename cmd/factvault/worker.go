@@ -265,7 +265,7 @@ func newWorkerCmd() *cobra.Command {
 	researchCmd := &cobra.Command{
 		Use:   "research <entity>",
 		Short: "Actively research an entity: generate queries -> web search -> collect URLs",
-		Args: cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(1),
 		RunE: func(subcmd *cobra.Command, args []string) error {
 			resolvedDSN, err := config.ResolveSecret(subcmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
 			if err != nil {
