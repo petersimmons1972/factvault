@@ -221,4 +221,13 @@ var Registry = []Entry{
 		Required: false,
 		Secret:   false,
 	},
+	{
+		Concept:  "verify token",
+		Flag:     "--token",
+		EnvVar:   "FACTVAULT_VERIFY_TOKEN",
+		Default:  "",
+		Alias:    "",
+		Required: false,
+		Secret:   false,
+	},
 }

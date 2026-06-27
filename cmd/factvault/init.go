@@ -36,6 +36,11 @@ func newInitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if f := cmd.Flags().Lookup("dsn"); f != nil && f.Changed {
+				if err := config.ValidateDSNNoPassword(dsn); err != nil {
+					return err
+				}
+			}
 			// C4: OOBE command — fall through to default UUID rather than error.
 			tenantID, err = config.ResolveString(cmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "11111111-1111-1111-1111-111111111111", false)
 			if err != nil {
