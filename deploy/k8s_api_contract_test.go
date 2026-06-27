@@ -116,3 +116,67 @@ func TestK8sConfigMapYAMLParsed(t *testing.T) {
 		}
 	}
 }
+
+func TestK8sAPIDeploymentHasReadinessProbe(t *testing.T) {
+	data, err := os.ReadFile("k8s/api-deployment.yaml")
+	if err != nil {
+		t.Fatalf("read api-deployment.yaml: %v", err)
+	}
+	manifest := string(data)
+	if !strings.Contains(manifest, "readinessProbe:") {
+		t.Fatal("api-deployment.yaml is missing readinessProbe")
+	}
+	if !strings.Contains(manifest, "path: /readyz") {
+		t.Fatal("api-deployment.yaml readinessProbe must target /readyz")
+	}
+}
+
+func TestK8sAPIDeploymentHasLivenessProbe(t *testing.T) {
+	data, err := os.ReadFile("k8s/api-deployment.yaml")
+	if err != nil {
+		t.Fatalf("read api-deployment.yaml: %v", err)
+	}
+	manifest := string(data)
+	if !strings.Contains(manifest, "livenessProbe:") {
+		t.Fatal("api-deployment.yaml is missing livenessProbe")
+	}
+	if !strings.Contains(manifest, "path: /healthz") {
+		t.Fatal("api-deployment.yaml livenessProbe must target /healthz")
+	}
+}
+
+func TestK8sAPIDeploymentHasResourceLimits(t *testing.T) {
+	data, err := os.ReadFile("k8s/api-deployment.yaml")
+	if err != nil {
+		t.Fatalf("read api-deployment.yaml: %v", err)
+	}
+	manifest := string(data)
+	if !strings.Contains(manifest, "resources:") {
+		t.Fatal("api-deployment.yaml containers must have resources defined")
+	}
+	if !strings.Contains(manifest, "limits:") {
+		t.Fatal("api-deployment.yaml containers must have resource limits")
+	}
+	if !strings.Contains(manifest, "requests:") {
+		t.Fatal("api-deployment.yaml containers must have resource requests")
+	}
+}
+
+func TestK8sAPIDeploymentHasSecurityContextHardening(t *testing.T) {
+	data, err := os.ReadFile("k8s/api-deployment.yaml")
+	if err != nil {
+		t.Fatalf("read api-deployment.yaml: %v", err)
+	}
+	manifest := string(data)
+	for _, field := range []string{
+		"runAsNonRoot: true",
+		"runAsUser: 65532",
+		"readOnlyRootFilesystem: true",
+		"seccompProfile:",
+		"type: RuntimeDefault",
+	} {
+		if !strings.Contains(manifest, field) {
+			t.Fatalf("api-deployment.yaml is missing securityContext field: %s", field)
+		}
+	}
+}

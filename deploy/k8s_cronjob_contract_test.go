@@ -75,3 +75,75 @@ func TestK8sConfigMapDefinesTenantID(t *testing.T) {
 		t.Fatal("configmap.yaml must define FACTVAULT_TENANT_ID for worker CronJobs")
 	}
 }
+
+func TestK8sWorkerCronJobsConcurrencyPolicy(t *testing.T) {
+	files := []string{
+		"k8s/collect-worker-cronjob.yaml",
+		"k8s/archive-worker-cronjob.yaml",
+		"k8s/extract-worker-cronjob.yaml",
+		"k8s/corroborate-worker-cronjob.yaml",
+		"k8s/verify-worker-cronjob.yaml",
+		"k8s/dossier-worker-cronjob.yaml",
+	}
+	for _, path := range files {
+		data, err := os.ReadFile(path) //nolint:gosec // G304: path is static test fixture names
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !strings.Contains(string(data), "concurrencyPolicy: Forbid") {
+			t.Fatalf("%s is missing concurrencyPolicy: Forbid", path)
+		}
+	}
+}
+
+func TestK8sWorkerCronJobsHaveResourceLimits(t *testing.T) {
+	files := []string{
+		"k8s/collect-worker-cronjob.yaml",
+		"k8s/archive-worker-cronjob.yaml",
+		"k8s/extract-worker-cronjob.yaml",
+		"k8s/corroborate-worker-cronjob.yaml",
+		"k8s/verify-worker-cronjob.yaml",
+		"k8s/dossier-worker-cronjob.yaml",
+	}
+	for _, path := range files {
+		data, err := os.ReadFile(path) //nolint:gosec // G304: path is static test fixture names
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		manifest := string(data)
+		for _, field := range []string{"resources:", "limits:", "requests:", "activeDeadlineSeconds:", "backoffLimit:"} {
+			if !strings.Contains(manifest, field) {
+				t.Fatalf("%s is missing field: %s", path, field)
+			}
+		}
+	}
+}
+
+func TestK8sWorkerCronJobsHaveSecurityContextHardening(t *testing.T) {
+	files := []string{
+		"k8s/collect-worker-cronjob.yaml",
+		"k8s/archive-worker-cronjob.yaml",
+		"k8s/extract-worker-cronjob.yaml",
+		"k8s/corroborate-worker-cronjob.yaml",
+		"k8s/verify-worker-cronjob.yaml",
+		"k8s/dossier-worker-cronjob.yaml",
+	}
+	for _, path := range files {
+		data, err := os.ReadFile(path) //nolint:gosec // G304: path is static test fixture names
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		manifest := string(data)
+		for _, field := range []string{
+			"runAsNonRoot: true",
+			"runAsUser: 65532",
+			"readOnlyRootFilesystem: true",
+			"seccompProfile:",
+			"type: RuntimeDefault",
+		} {
+			if !strings.Contains(manifest, field) {
+				t.Fatalf("%s is missing securityContext field: %s", path, field)
+			}
+		}
+	}
+}
