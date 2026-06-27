@@ -39,7 +39,7 @@ cd factvault
 cp .env.example .env
 
 # Host-run commands use localhost, not the in-compose service name.
-export FACTVAULT_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_DATABASE_URL='postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable'
 export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
 
 make setup

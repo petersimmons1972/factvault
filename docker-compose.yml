@@ -117,7 +117,7 @@ services:
         echo "starting" > "$$status_file"
         while true; do
           echo "running" > "$$status_file"
-          if factvault worker collect --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" && \
+          if factvault worker rss --once && \
              factvault worker archive --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" && \
              factvault worker verify --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" --age-days "$$FACTVAULT_VERIFY_AGE_DAYS" && \
              factvault worker extract --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" && \
