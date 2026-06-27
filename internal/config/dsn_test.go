@@ -30,14 +30,14 @@ func TestValidateDSNNoPassword(t *testing.T) {
 			dsn:     "postgres://user:@host/db",
 			wantErr: false,
 		},
-		{
+		{ //nolint:gosec // G101: intentional test value
 			name:    "URL with password is rejected",
-			dsn:     "postgres://user:secret@host/db", //nolint:gosec // G101: intentional test value
+			dsn:     "postgres://user:secret@host/db",
 			wantErr: true,
 		},
-		{
+		{ //nolint:gosec // G101: intentional test value
 			name:    "URL with password and path is rejected",
-			dsn:     "postgresql://app:p%40ss@db.prod:5432/factvault?sslmode=require", //nolint:gosec // G101: intentional test value
+			dsn:     "postgresql://app:p%40ss@db.prod:5432/factvault?sslmode=require",
 			wantErr: true,
 		},
 		{
