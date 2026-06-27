@@ -63,34 +63,9 @@ VALUES (
 
 The `UNIQUE (tenant_id, slug) NULLS NOT DISTINCT` constraint prevents duplicate slugs within a tenant. Attempting to insert a duplicate slug raises a unique violation at the database layer.
 
-### Via Python (SQLAlchemy)
+### Via Python (SQLAlchemy) — retired
 
-All application-layer writes require a `tenant_context` block (see [factvault/db/README.md](../factvault/db/README.md)):
-
-```python
-from uuid import UUID
-from sqlalchemy import create_engine
-from factvault.db.rls import tenant_context
-from factvault.db.models import Property
-
-engine = create_engine("postgresql+psycopg://factvault:factvault@localhost:5432/factvault")
-
-TENANT_ID = UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
-
-with engine.connect() as conn:
-    with conn.begin():
-        with tenant_context(conn, TENANT_ID):
-            prop = Property(
-                tenant_id=TENANT_ID,
-                slug="founded_by",
-                label="Founded by",
-                value_type="entity_ref",
-                description="The person or organization who founded this entity.",
-            )
-            conn.add(prop)
-```
-
-Both paths — SQL and Python — are equivalent. The SQL path is faster for bulk registration during initial setup. The Python path is appropriate for application-layer tooling that creates properties programmatically.
+> **Note:** Python/SQLAlchemy tooling was removed in the Go transition. Use the SQL path above or the `factvault init` command to register properties programmatically. The `factvault init` command seeds example properties for the configured tenant and is idempotent.
 
 ---
 

@@ -51,7 +51,7 @@ The `doctor` command runs health checks — database reachability, RLS policies,
 
 ```
 postgres                     OK pgvector loaded
-migrations                   OK schema version 4
+migrations                   OK schema version 6
 rls                          OK cross-tenant row hidden
 canary                       OK assembled 312 bytes
 llm                          WARN connection refused  (optional)
@@ -100,7 +100,7 @@ Both share one assembler and one bundle JSON shape. See [docs/superpowers/specs/
 | # | Stage | Key guarantee |
 |---|-------|---------------|
 | 1 | **Collect** | Idempotent on `(tenant_id, url)`. Raw HTML stored at INSERT; never re-fetched downstream. |
-| 2 | **Archive** | `raw_text` extracted via trafilatura. Wayback SPN2 snapshot submitted. `raw_html` zlib-compressed. |
+| 2 | **Archive** | `raw_text` extracted via Go `stripHTML` tag-stripper. Wayback SPN2 snapshot submitted. `raw_html` zlib-compressed. |
 | 3 | **Extract** | Deterministic extractors run first. LLM runs on uncovered text only. Excerpt-offset check rejects hallucinations before INSERT. |
 | 4 | **Corroborate** | Confidence recomputed from scratch on every run. Conflicts surfaced in `v_conflicts`, never silently resolved. |
 | 5 | **Verify** | Daily CronJob. Append-only `source_verifications` log. No source or statement ever deleted. |
@@ -112,7 +112,7 @@ Both share one assembler and one bundle JSON shape. See [docs/superpowers/specs/
 
 ![Confidence Formula and Conflict Surface](docs/assets/svg/confidence-formula.svg)
 
-Confidence is computed in `factvault/assembler/confidence.py`. The formula is deterministic and auditable: independence is tested by publisher domain and trigram similarity, not guessed. No statement ever reaches 1.0 through the automated pipeline.
+Confidence is computed in `internal/assembler/confidence.go`. The formula is deterministic and auditable: independence is tested by publisher domain and trigram similarity, not guessed. No statement ever reaches 1.0 through the automated pipeline.
 
 ---
 
