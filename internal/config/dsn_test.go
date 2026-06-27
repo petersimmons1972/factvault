@@ -21,7 +21,7 @@ func TestValidateDSNNoPassword(t *testing.T) {
 			dsn:     "db://user:TESTPLACEHOLDER@host/dbname",
 			wantErr: true,
 		},
-		{
+		{ //nolint:gosec // G101: test-only placeholder in URL, not a real credential
 			name:    "URL-form DSN with password and port is rejected",
 			dsn:     "db+app://app:TESTPLACEHOLDER@host:5432/dbname?sslmode=require",
 			wantErr: true,

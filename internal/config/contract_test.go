@@ -132,7 +132,7 @@ func Test2_NoUndocumentedFACTVAULTVarsInGoSource(t *testing.T) {
 		}
 	}
 
-	knownUndocumented := map[string]string{
+	knownUndocumented := map[string]string{ //nolint:gosec // G101: keys are env var names, not credential values
 		"FACTVAULT_TEST_POSTGRES_IMAGE":          "test helper in internal/testdb; not a production config",
 		"FACTVAULT_POSTGRES_IMAGE":               "compose contract test inspecting compose YAML; not read by binary",
 		"FACTVAULT_TENANT_ID":                    "k8s cronjob contract test inspecting manifest; not a production config",
