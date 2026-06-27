@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -132,8 +134,21 @@ func newAuthVerifyCmd() *cobra.Command {
 					return err
 				}
 			}
+			// Accept token from --token flag, FACTVAULT_VERIFY_TOKEN env, or stdin.
+			// This avoids exposing the JWT in process arguments (/proc/cmdline, shell history).
+			if !cmd.Flags().Lookup("token").Changed {
+				if envToken := os.Getenv("FACTVAULT_VERIFY_TOKEN"); envToken != "" {
+					token = envToken
+				} else {
+					data, err := io.ReadAll(os.Stdin)
+					if err != nil {
+						return fmt.Errorf("reading token from stdin: %w", err)
+					}
+					token = strings.TrimSpace(string(data))
+				}
+			}
 			if token == "" {
-				return fmt.Errorf("--token is required")
+				return fmt.Errorf("token required: set --token, FACTVAULT_VERIFY_TOKEN env, or pipe via stdin")
 			}
 			data, err := os.ReadFile(filepath.Clean(publicKeyPath))
 			if err != nil {
