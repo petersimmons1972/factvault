@@ -24,6 +24,11 @@ func newDoctorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if f := cmd.Flags().Lookup("dsn"); f != nil && f.Changed {
+				if err := config.ValidateDSNNoPassword(cfg.DatabaseURL); err != nil {
+					return err
+				}
+			}
 			// C2: FACTVAULT_LLM_BASE_URL canonical; FACTVAULT_LLM_URL deprecated alias.
 			llmURL, isAlias, err := config.ResolveStringWithAlias(cmd.Flags().Lookup("llm-url"), "FACTVAULT_LLM_BASE_URL", "FACTVAULT_LLM_URL", "", false)
 			if err != nil {

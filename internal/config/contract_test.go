@@ -138,6 +138,7 @@ func Test2_NoUndocumentedFACTVAULTVarsInGoSource(t *testing.T) {
 		"FACTVAULT_TENANT_ID":                    "k8s cronjob contract test inspecting manifest; not a production config",
 		"FACTVAULT_WORKER_FAILURE_RETRY_SECONDS": "compose contract test inspecting compose YAML; not read by binary",
 		"FACTVAULT_LLM_API_KEY_FILE":             "C9 auto-generated _FILE companion of FACTVAULT_LLM_API_KEY (Secret: true); resolved by config.ResolveSecret, not a separate registry entry",
+		"FACTVAULT_MCP_AUTH_TOKEN_FILE":          "C9 auto-generated _FILE companion of FACTVAULT_MCP_AUTH_TOKEN (Secret: true); resolved by config.ResolveSecret, not a separate registry entry",
 	}
 
 	// Require the match to end with an uppercase letter, not a trailing underscore.

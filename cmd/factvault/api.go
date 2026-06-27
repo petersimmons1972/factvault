@@ -27,6 +27,11 @@ func newAPICmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if f := cmd.Flags().Lookup("dsn"); f != nil && f.Changed {
+				if err := config.ValidateDSNNoPassword(dsn); err != nil {
+					return err
+				}
+			}
 			addr, err = config.ResolveString(cmd.Flags().Lookup("addr"), "FACTVAULT_API_ADDR", ":8080", false)
 			if err != nil {
 				return err
