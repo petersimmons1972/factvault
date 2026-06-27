@@ -521,7 +521,7 @@ func TestEmbedWorker_TxReleasedBeforeEmbedCall(t *testing.T) {
 	// smallPool.  If the fetch TX is still open, the pool has no free
 	// connections (MaxConns=1) and Acquire would time out → test fails.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		acquireCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		acquireCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		conn, acquireErr := smallPool.Acquire(acquireCtx)
 		if acquireErr != nil {

@@ -16,7 +16,6 @@ import (
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
-
 // StatementProposal is a candidate factual statement extracted from raw source text.
 type StatementProposal struct {
 	SubjectText        string `json:"subject_text"`
@@ -87,16 +86,22 @@ func (c *LLMClient) Extract(ctx context.Context, _ *db.Source, rawText string) (
 	endpoint := strings.TrimRight(c.BaseURL, "/") + "/chat/completions"
 
 	// E-09: retry on 429 (rate-limit) and 5xx (transient server errors).
-	// Delays: 1s, 2s, 4s between attempts. Context cancellation aborts early.
-	retryDelays := [2]time.Duration{1 * time.Second, 2 * time.Second}
+	// Delays: 0s on first attempt, 1s before second, 2s before third.
+	// Context cancellation aborts early.
 	maxBodyBytes := maxLLMBodyBytes()
 	var (
 		resp *http.Response
 		body []byte
 	)
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		if attempt > 0 {
-			delay := retryDelays[attempt-1]
+			var delay time.Duration
+			switch attempt {
+			case 1:
+				delay = 1 * time.Second
+			default:
+				delay = 2 * time.Second
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
