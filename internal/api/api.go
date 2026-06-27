@@ -80,10 +80,12 @@ func (s *Server) Router() http.Handler {
 	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		ready := s.Service.Pool != nil
 		resp := ReadyResponse{Ready: ready}
+		status := http.StatusOK
 		if !ready {
 			resp.Errors = []string{"database pool is not configured"}
+			status = http.StatusServiceUnavailable // X7: 503 when not ready
 		}
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, status, resp)
 	})
 	r.Group(func(r chi.Router) {
 		r.Use(s.jwtMiddleware)

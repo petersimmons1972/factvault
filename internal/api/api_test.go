@@ -256,3 +256,33 @@ func TestWriteError_NotFoundDoesNotLeakDetail(t *testing.T) {
 		})
 	}
 }
+
+// TestReadyzReturns503WhenNotReady verifies X7: GET /readyz must return 503
+// (not 200) when the database pool is nil, so load balancers and k8s readiness
+// probes correctly remove the pod from rotation before the DB is available.
+func TestReadyzReturns503WhenNotReady(t *testing.T) {
+	// Construct a server with no pool — simulates startup before DB is connected.
+	h := New(nil, nil, "").Router()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /readyz (no pool) = %d, want 503", w.Code)
+	}
+}
+
+// TestReadyzReturns200WhenReady verifies the happy path: with a live pool,
+// /readyz returns 200 OK with ready=true.
+func TestReadyzReturns200WhenReady(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	defer pool.Close()
+
+	h := New(pool, nil, "").Router()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /readyz (live pool) = %d, want 200", w.Code)
+	}
+}
