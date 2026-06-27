@@ -10,13 +10,16 @@ import (
 	"github.com/petersimmons1972/factvault/internal/workers"
 )
 
+// TestResolveLLMRuntimeConfig_PrefersFlagsOverEnv verifies that the model and
+// baseURL flag arguments take precedence over their env var equivalents.
+// The API key has no CLI flag (X4/C9); it is always resolved from env/file.
 func TestResolveLLMRuntimeConfig_PrefersFlagsOverEnv(t *testing.T) {
 	t.Setenv("FACTVAULT_LLM_MODEL", "env-model")
 	t.Setenv("FACTVAULT_LLM_BASE_URL", "https://env.example/v1")
 	t.Setenv("FACTVAULT_LLM_URL", "https://legacy.example/v1")
 	t.Setenv("FACTVAULT_LLM_API_KEY", "env-key")
 
-	cfg, err := resolveLLMRuntimeConfig("openai", "flag-model", "https://flag.example/v1", "flag-key")
+	cfg, err := resolveLLMRuntimeConfig("openai", "flag-model", "https://flag.example/v1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -26,8 +29,9 @@ func TestResolveLLMRuntimeConfig_PrefersFlagsOverEnv(t *testing.T) {
 	if cfg.BaseURL != "https://flag.example/v1" {
 		t.Fatalf("BaseURL = %q, want https://flag.example/v1", cfg.BaseURL)
 	}
-	if cfg.APIKey != "flag-key" {
-		t.Fatalf("APIKey = %q, want flag-key", cfg.APIKey)
+	// API key must come from env (no CLI flag path for secrets, X4).
+	if cfg.APIKey != "env-key" {
+		t.Fatalf("APIKey = %q, want env-key", cfg.APIKey)
 	}
 }
 
@@ -36,7 +40,7 @@ func TestResolveLLMRuntimeConfig_FallsBackToEnv(t *testing.T) {
 	t.Setenv("FACTVAULT_LLM_BASE_URL", "https://env.example/v1")
 	t.Setenv("FACTVAULT_LLM_API_KEY", "env-key")
 
-	cfg, err := resolveLLMRuntimeConfig("openai", "", "", "")
+	cfg, err := resolveLLMRuntimeConfig("openai", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,6 +55,25 @@ func TestResolveLLMRuntimeConfig_FallsBackToEnv(t *testing.T) {
 	}
 }
 
+// TestResolveLLMRuntimeConfig_APIKeyFromFile verifies C9: FACTVAULT_LLM_API_KEY_FILE
+// takes precedence over FACTVAULT_LLM_API_KEY and no --llm-api-key flag exists (X4).
+func TestResolveLLMRuntimeConfig_APIKeyFromFile(t *testing.T) {
+	f := t.TempDir() + "/api-key.txt"
+	if err := os.WriteFile(f, []byte("  file-key\n"), 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+	t.Setenv("FACTVAULT_LLM_API_KEY_FILE", f)
+	t.Setenv("FACTVAULT_LLM_API_KEY", "env-key-should-not-win")
+
+	cfg, err := resolveLLMRuntimeConfig("openai", "model", "https://api.example/v1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.APIKey != "file-key" {
+		t.Fatalf("APIKey = %q, want file-key (from _FILE, trimmed)", cfg.APIKey)
+	}
+}
+
 // TestResolveLLMRuntimeConfig_UsesLegacyLLMURLEnv verifies the C2 alias path.
 // The primary FACTVAULT_LLM_BASE_URL must be absent (not set, not empty-string)
 // so the resolver falls through to the deprecated FACTVAULT_LLM_URL alias.
@@ -60,7 +83,7 @@ func TestResolveLLMRuntimeConfig_UsesLegacyLLMURLEnv(t *testing.T) {
 	os.Unsetenv("FACTVAULT_LLM_BASE_URL") //nolint:errcheck
 	t.Setenv("FACTVAULT_LLM_URL", "http://localhost:11434/v1")
 
-	cfg, err := resolveLLMRuntimeConfig("local", "llama3.1", "", "")
+	cfg, err := resolveLLMRuntimeConfig("local", "llama3.1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,7 +93,7 @@ func TestResolveLLMRuntimeConfig_UsesLegacyLLMURLEnv(t *testing.T) {
 }
 
 func TestBuildLLMExtractor_UnsupportedProviderFromCLIConfig(t *testing.T) {
-	cfg, err := resolveLLMRuntimeConfig("anthropic", "claude-3-5-sonnet", "", "")
+	cfg, err := resolveLLMRuntimeConfig("anthropic", "claude-3-5-sonnet", "")
 	if err != nil {
 		t.Fatalf("unexpected error from resolve: %v", err)
 	}

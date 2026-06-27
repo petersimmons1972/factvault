@@ -28,7 +28,6 @@ func newWorkerCmd() *cobra.Command {
 		llmProvider    string
 		llmModel       string
 		llmBaseURL     string
-		llmAPIKey      string
 		confirmCost    bool
 		costThreshold  int
 		feedsPath      string
@@ -48,7 +47,6 @@ func newWorkerCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&llmProvider, "llm-provider", "", "LLM provider for extraction: local or openai")
 	cmd.PersistentFlags().StringVar(&llmModel, "llm-model", "", "LLM model for extraction (or FACTVAULT_LLM_MODEL)")
 	cmd.PersistentFlags().StringVar(&llmBaseURL, "llm-base-url", "", "LLM base URL (or FACTVAULT_LLM_BASE_URL)")
-	cmd.PersistentFlags().StringVar(&llmAPIKey, "llm-api-key", "", "LLM API key (or FACTVAULT_LLM_API_KEY)")
 	cmd.PersistentFlags().BoolVar(&confirmCost, "confirm-cost", false, "Confirm frontier-model extraction batches above the guardrail threshold")
 	cmd.PersistentFlags().IntVar(&costThreshold, "llm-cost-guardrail-threshold", 1000, "Frontier-model extraction batch guardrail threshold in paid extractions per run")
 	cmd.PersistentFlags().StringVar(&feedsPath, "feeds", "config/feeds.yaml", "RSS feed config file (or FACTVAULT_FEEDS_PATH)")
@@ -112,7 +110,7 @@ func newWorkerCmd() *cobra.Command {
 		return p.ArchiveOnce(ctx, tenantID, limit)
 	})
 	addRun("extract", func(ctx context.Context, p *workers.SourcePipeline) error {
-		rtCfg, err := resolveLLMRuntimeConfig(llmProvider, llmModel, llmBaseURL, llmAPIKey)
+		rtCfg, err := resolveLLMRuntimeConfig(llmProvider, llmModel, llmBaseURL)
 		if err != nil {
 			return err
 		}
@@ -324,7 +322,7 @@ func newWorkerCmd() *cobra.Command {
 				return err
 			}
 
-			rtCfg, err := resolveLLMRuntimeConfig("", llmModel, llmBaseURL, llmAPIKey)
+			rtCfg, err := resolveLLMRuntimeConfig("", llmModel, llmBaseURL)
 			if err != nil {
 				return err
 			}
@@ -445,11 +443,13 @@ func newWorkerCmd() *cobra.Command {
 	return cmd
 }
 
-// resolveLLMRuntimeConfig resolves LLM config following C1/C2.
-// Non-empty arg means the caller's flag was set explicitly; empty arg falls
+// resolveLLMRuntimeConfig resolves LLM config following C1/C2/C9.
+// Non-empty flag arg means the caller's flag was set explicitly; empty arg falls
 // through to env vars with C1 resolver semantics.
 // C2: FACTVAULT_LLM_BASE_URL is canonical; FACTVAULT_LLM_URL is a deprecated alias.
-func resolveLLMRuntimeConfig(provider, model, baseURL, apiKey string) (workers.LLMRuntimeConfig, error) {
+// C9: FACTVAULT_LLM_API_KEY_FILE takes precedence over FACTVAULT_LLM_API_KEY (via ResolveSecret).
+// The --llm-api-key CLI flag is intentionally removed; secrets must not appear in process args.
+func resolveLLMRuntimeConfig(provider, model, baseURL string) (workers.LLMRuntimeConfig, error) {
 	// Model: flag arg > FACTVAULT_LLM_MODEL > default.
 	if model == "" {
 		var err error
@@ -473,13 +473,10 @@ func resolveLLMRuntimeConfig(provider, model, baseURL, apiKey string) (workers.L
 		}
 	}
 
-	// APIKey: flag arg > FACTVAULT_LLM_API_KEY (+ _FILE companion per C9) > empty.
-	if apiKey == "" {
-		var err error
-		apiKey, err = config.ResolveSecret(nil, "FACTVAULT_LLM_API_KEY", "", false)
-		if err != nil {
-			return workers.LLMRuntimeConfig{}, err
-		}
+	// APIKey: FACTVAULT_LLM_API_KEY_FILE > FACTVAULT_LLM_API_KEY > empty (C9 via ResolveSecret).
+	apiKey, err := config.ResolveSecret(nil, "FACTVAULT_LLM_API_KEY", "", false)
+	if err != nil {
+		return workers.LLMRuntimeConfig{}, err
 	}
 
 	return workers.LLMRuntimeConfig{
