@@ -286,3 +286,44 @@ func TestReadyzReturns200WhenReady(t *testing.T) {
 		t.Fatalf("GET /readyz (live pool) = %d, want 200", w.Code)
 	}
 }
+
+// TestPostStory_MaxBytesReaderEnforced verifies M1: a request body exceeding 1 MiB
+// to an authenticated POST handler must be rejected with 400 Bad Request, not cause
+// OOM/hang. Uses a nil pool because the middleware fires before any DB access.
+func TestPostStory_MaxBytesReaderEnforced(t *testing.T) {
+	privPEM, pubPEM, err := auth.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("keys: %v", err)
+	}
+	priv, err := auth.ParsePrivateKeyPEM(privPEM)
+	if err != nil {
+		t.Fatalf("parse private: %v", err)
+	}
+	pub, err := auth.ParsePublicKeyPEM(pubPEM)
+	if err != nil {
+		t.Fatalf("parse public: %v", err)
+	}
+	token, err := auth.SignRS256(priv, auth.Claims{
+		TenantID:  "00000000-0000-0000-0000-000000000001",
+		Subject:   "tester",
+		IssuedAt:  time.Now().Unix(),
+		ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	// Body is 2 MiB — double the 1 MiB limit.
+	oversizedBody := bytes.Repeat([]byte("x"), 2<<20)
+
+	h := New(nil, pub, "").Router()
+	req := httptest.NewRequest(http.MethodPost, "/stories", bytes.NewReader(oversizedBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("oversized body: got %d, want 400 (MaxBytesReader enforcement)", w.Code)
+	}
+}

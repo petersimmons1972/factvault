@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -66,7 +68,20 @@ func newAPICmd() *cobra.Command {
 				WriteTimeout:      30 * time.Second,
 				IdleTimeout:       60 * time.Second,
 			}
-			return httpServer.ListenAndServe()
+			// Start server; drain in-flight requests on SIGTERM/interrupt.
+			serveErr := make(chan error, 1)
+			go func() { serveErr <- httpServer.ListenAndServe() }()
+			select {
+			case err := <-serveErr:
+				if errors.Is(err, http.ErrServerClosed) {
+					return nil
+				}
+				return err
+			case <-cmd.Context().Done():
+				shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				return httpServer.Shutdown(shutCtx)
+			}
 		},
 	}
 	cmd.Flags().StringVar(&dsn, "dsn", "", "Postgres DSN (or FACTVAULT_DATABASE_URL)")

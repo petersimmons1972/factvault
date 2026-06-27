@@ -53,6 +53,9 @@ type Problem struct {
 
 const defaultMaxBriefLimit = 1000
 
+// maxRequestBodyBytes caps request bodies at 1 MiB to prevent heap-exhaustion DoS.
+const maxRequestBodyBytes = 1 << 20
+
 // New constructs a Server with retrieval service and verifier dependencies.
 // embedderURL is the base URL for the embedder service (e.g. FACTVAULT_EMBEDDER_URL).
 // If empty, the cosine seed-search path is disabled and all queries fall back to ILIKE.
@@ -89,6 +92,12 @@ func (s *Server) Router() http.Handler {
 	})
 	r.Group(func(r chi.Router) {
 		r.Use(s.jwtMiddleware)
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
+				next.ServeHTTP(w, req)
+			})
+		})
 		r.Get("/entities/{id}/dossier", s.getDossier)
 		r.Post("/briefs/generate", s.postBriefGenerate)
 		r.Get("/briefs", s.getBriefs)
