@@ -77,7 +77,7 @@ func appendGazetteerFacts(
 			}
 			start := searchFrom + idx
 			end := start + len(phrase)
-			if hasWordBoundaries(rawText, start, end) && !gazetteerFactOverlaps(facts, start, end) {
+			if hasWordBoundaries(rawText, start, end) && !gazetteerFactOverlaps(rawText, facts, start, end) {
 				facts = append(facts, extractors.ExtractedFact{
 					SubjectText:        subject,
 					PropertySlug:       entry.PropertySlug,
@@ -95,11 +95,14 @@ func appendGazetteerFacts(
 	return facts
 }
 
-func gazetteerFactOverlaps(facts []extractors.ExtractedFact, start, end int) bool {
+// gazetteerFactOverlaps reports whether the byte range [start, end) in rawText
+// overlaps any already-extracted fact. Stored offsets are rune-based so byte
+// offsets must be converted before comparison (E-07: same bug class as E-06).
+func gazetteerFactOverlaps(rawText string, facts []extractors.ExtractedFact, start, end int) bool {
+	runeStart := byteOffsetToCharOffset(rawText, start)
+	runeEnd := byteOffsetToCharOffset(rawText, end)
 	for _, fact := range facts {
-		existingStart := fact.ExcerptOffsetStart
-		existingEnd := fact.ExcerptOffsetEnd
-		if start < existingEnd && end > existingStart {
+		if runeStart < fact.ExcerptOffsetEnd && runeEnd > fact.ExcerptOffsetStart {
 			return true
 		}
 	}

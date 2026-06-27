@@ -159,8 +159,14 @@ func TestMigrationsRunClean(t *testing.T) {
 }
 
 // TestMigration00005_RollsBack guards the down stanza of 00005_sources_meta.sql:
-// up→down(one step)→assert column gone→up→assert column back. Without this,
-// the rollback path is only ever exercised by hand.
+// up-to-latest → down-to-4 (reverts 00006 then 00005) → assert column gone →
+// up (re-applies both) → assert column back. Without this, the rollback path is
+// only ever exercised by hand.
+//
+// Note: "down" rolls back exactly ONE step (the current latest). We use "down-to 4"
+// so that all migrations above version 4 (currently 00005 and 00006) are rolled
+// back, ensuring 00005's down stanza is always exercised regardless of how many
+// later migrations exist.
 func TestMigration00005_RollsBack(t *testing.T) {
 	db := startMigrationsDB(t)
 
@@ -172,15 +178,16 @@ func TestMigration00005_RollsBack(t *testing.T) {
 		t.Fatal("sources.meta column missing after goose up")
 	}
 
-	// down ONE step: 00005 reverts, meta column must be gone.
-	if err := goose.RunContext(context.Background(), "down", db, "."); err != nil {
-		t.Fatalf("goose down (one step): %v", err)
+	// down to version 4: reverts all migrations above 00004, including 00005.
+	// Meta column must be gone.
+	if err := goose.RunContext(context.Background(), "down-to", db, ".", "4"); err != nil {
+		t.Fatalf("goose down-to 4: %v", err)
 	}
 	if sourcesMetaColumnExists(t, db) {
 		t.Fatal("sources.meta column still present after rolling back 00005")
 	}
 
-	// re-up: migration re-applies cleanly and the column returns.
+	// re-up: all migrations re-apply cleanly and the column returns.
 	if err := goose.RunContext(context.Background(), "up", db, "."); err != nil {
 		t.Fatalf("goose up (re-apply): %v", err)
 	}

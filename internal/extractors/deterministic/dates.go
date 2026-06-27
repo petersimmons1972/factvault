@@ -53,7 +53,7 @@ func appendDateFacts(
 		if !ok {
 			continue
 		}
-		if overlapsExistingDateFact(facts, start, end) {
+		if overlapsExistingDateFact(rawText, facts, start, end) {
 			continue
 		}
 		facts = append(facts, extractors.ExtractedFact{
@@ -70,11 +70,16 @@ func appendDateFacts(
 	return facts
 }
 
-func overlapsExistingDateFact(facts []extractors.ExtractedFact, start, end int) bool {
+// overlapsExistingDateFact reports whether the byte range [start, end) in
+// rawText overlaps any already-extracted fact. The stored ExcerptOffsetStart
+// and ExcerptOffsetEnd are rune (character) offsets, so the incoming byte
+// offsets must be converted first (E-06: mismatch caused false non-overlaps on
+// multi-byte UTF-8 text).
+func overlapsExistingDateFact(rawText string, facts []extractors.ExtractedFact, start, end int) bool {
+	runeStart := byteOffsetToCharOffset(rawText, start)
+	runeEnd := byteOffsetToCharOffset(rawText, end)
 	for _, fact := range facts {
-		existingStart := fact.ExcerptOffsetStart
-		existingEnd := fact.ExcerptOffsetEnd
-		if start < existingEnd && end > existingStart {
+		if runeStart < fact.ExcerptOffsetEnd && runeEnd > fact.ExcerptOffsetStart {
 			return true
 		}
 	}

@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -563,5 +564,142 @@ func TestFactPipelineExtractOnce_CostGuardrailBypassesWithConfirm(t *testing.T) 
 	}
 	if err := p.ExtractOnce(ctx, tenantID, 1001); err != nil {
 		t.Fatalf("ExtractOnce: %v", err)
+	}
+}
+
+// TestFactPipelineExtractOnce_ConcurrentEntityUpsertNoConflict (W-05) verifies
+// that concurrent calls to ExtractOnce that all try to create the same entity
+// do not produce duplicate rows or errors.  Before the ON CONFLICT upsert fix,
+// a SELECT-then-INSERT pattern could race under concurrency, leaking a unique
+// constraint violation up to the caller.
+func TestFactPipelineExtractOnce_ConcurrentEntityUpsertNoConflict(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	tenantID := uuid.NewString()
+
+	const goroutines = 5
+	// Insert N archived sources — each goroutine will process exactly one.
+	for i := range goroutines {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status, title)
+			VALUES ($1, $2, $3, $4, $5, 'archived', 'concurrent entity test')
+		`, uuid.NewString(), tenantID,
+			"https://example.com/concurrent/entity/"+strings.Repeat("x", i),
+			uuid.NewString(), "Acme Corp reported record profits."); err != nil {
+			t.Fatalf("insert source %d: %v", i, err)
+		}
+	}
+
+	// Every extractor returns the same entity name "Acme Corp".
+	makeExtractor := func() extractors.Extractor {
+		return fixedExtractor{facts: []extractors.ExtractedFact{
+			{
+				SubjectText:        "Acme Corp",
+				PropertySlug:       "description",
+				Value:              "record profits",
+				ValueType:          "string",
+				Excerpt:            "Acme Corp reported record profits.",
+				ExcerptOffsetStart: 0,
+				ExcerptOffsetEnd:   utf8.RuneCountInString("Acme Corp reported record profits."),
+				ExtractionMethod:   "deterministic:test",
+			},
+		}}
+	}
+
+	errs := make([]error, goroutines)
+	var wg sync.WaitGroup
+	for i := range goroutines {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			p := &FactPipeline{DB: pool, Deterministic: makeExtractor()}
+			errs[i] = p.ExtractOnce(ctx, tenantID, 1)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: ExtractOnce error: %v", i, err)
+		}
+	}
+
+	// Verify: exactly 1 entity row for "Acme Corp" (no duplicates from race).
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM entities WHERE tenant_id = $1 AND label = 'Acme Corp'
+	`, tenantID).Scan(&count); err != nil {
+		t.Fatalf("count entities: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("W-05: expected exactly 1 entity row for 'Acme Corp', got %d (concurrent INSERT race)", count)
+	}
+}
+
+// TestFactPipelineExtractOnce_ConcurrentStatementUpsertNoDuplicate (W-07) verifies
+// that concurrent calls inserting the same statement (same content_hash) produce
+// exactly one row rather than a constraint error or duplicate.
+func TestFactPipelineExtractOnce_ConcurrentStatementUpsertNoDuplicate(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Setup(ctx, t)
+	tenantID := uuid.NewString()
+
+	const goroutines = 5
+	for i := range goroutines {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status, title)
+			VALUES ($1, $2, $3, $4, $5, 'archived', 'concurrent statement test')
+		`, uuid.NewString(), tenantID,
+			"https://example.com/concurrent/stmt/"+strings.Repeat("y", i),
+			uuid.NewString(), "Globex Corp was acquired."); err != nil {
+			t.Fatalf("insert source %d: %v", i, err)
+		}
+	}
+
+	// Use a known vocabulary slug (org_name) so ModeStrict does not propose-and-skip
+	// the fact. The excerpt is "Globex Corp" (the org name) at rune offsets 0–11.
+	makeExtractor := func() extractors.Extractor {
+		return fixedExtractor{facts: []extractors.ExtractedFact{
+			{
+				SubjectText:        "Globex Corp",
+				PropertySlug:       "org_name",
+				Value:              "Globex Corp",
+				ValueType:          "string",
+				Excerpt:            "Globex Corp",
+				ExcerptOffsetStart: 0,
+				ExcerptOffsetEnd:   utf8.RuneCountInString("Globex Corp"),
+				ExtractionMethod:   "deterministic:test",
+			},
+		}}
+	}
+
+	errs := make([]error, goroutines)
+	var wg sync.WaitGroup
+	for i := range goroutines {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			p := &FactPipeline{DB: pool, Deterministic: makeExtractor()}
+			errs[i] = p.ExtractOnce(ctx, tenantID, 1)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: ExtractOnce error: %v", i, err)
+		}
+	}
+
+	// Verify: exactly 1 statement row for the shared fact.
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM statements
+		WHERE tenant_id = $1 AND val_text = 'Globex Corp'
+	`, tenantID).Scan(&count); err != nil {
+		t.Fatalf("count statements: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("W-07: expected exactly 1 statement row, got %d (concurrent INSERT race)", count)
 	}
 }

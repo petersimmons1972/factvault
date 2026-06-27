@@ -241,14 +241,22 @@ func (p *FactPipeline) insertFact(ctx context.Context, exec queryExecutor, tenan
 	if fact.SourceConfidence != nil {
 		confidence = *fact.SourceConfidence
 	}
+	// W-07: use RETURNING id so ON CONFLICT DO NOTHING lets us detect duplicates
+	// inserted by a concurrent worker.
 	query, args := insertStatementQuery(statementID, tenantID, subjectID, propertyID, valueType, fact.Value, confidence)
-	if _, err := exec.Exec(ctx, query, args...); err != nil {
+	var insertedID string
+	err = exec.QueryRow(ctx, query, args...).Scan(&insertedID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// ON CONFLICT DO NOTHING — another worker already inserted this statement.
+			return false, nil
+		}
 		return false, err
 	}
 	_, err = exec.Exec(ctx, `
 		INSERT INTO statement_sources (id, statement_id, source_id, excerpt, excerpt_offset_start, excerpt_offset_end, extraction_method, confidence, tenant_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, uuid.NewString(), statementID, sourceID, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd, fact.ExtractionMethod, confidence, tenantID)
+	`, uuid.NewString(), insertedID, sourceID, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd, fact.ExtractionMethod, confidence, tenantID)
 	if err != nil {
 		return false, err
 	}
@@ -260,25 +268,29 @@ func (p *FactPipeline) ensureEntity(ctx context.Context, exec queryExecutor, ten
 		label = "unknown subject"
 	}
 	extID := entityExtIDForLabel(label)
+	// W-05: use INSERT ... ON CONFLICT DO NOTHING RETURNING to handle concurrent
+	// workers that may race to create the same entity. The fallback SELECT
+	// by ext_id fetches the row that the competing worker already committed.
 	var id string
 	err := exec.QueryRow(ctx, `
-		SELECT id::text
-		FROM entities
-		WHERE tenant_id = $1 AND label = $2
-		ORDER BY created_at ASC
-		LIMIT 1
-	`, tenantID, label).Scan(&id)
+		INSERT INTO entities (id, tenant_id, ext_id, label, type_uri)
+		VALUES ($1, $2, $3, $4, NULL)
+		ON CONFLICT ON CONSTRAINT uq_entities_tenant_ext_id DO NOTHING
+		RETURNING id::text
+	`, uuid.NewString(), tenantID, extID, label).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", err
 	}
+	// Conflict: another concurrent worker inserted first — re-fetch by ext_id.
 	err = exec.QueryRow(ctx, `
-		INSERT INTO entities (id, tenant_id, ext_id, label, type_uri)
-		VALUES ($1, $2, $3, $4, NULL)
-		RETURNING id::text
-	`, uuid.NewString(), tenantID, extID, label).Scan(&id)
+		SELECT id::text
+		FROM entities
+		WHERE tenant_id = $1 AND ext_id = $2
+		LIMIT 1
+	`, tenantID, extID).Scan(&id)
 	return id, err
 }
 
@@ -327,16 +339,37 @@ func (p *FactPipeline) ensureProperty(ctx context.Context, exec queryExecutor, t
 	if !result.Known {
 		label = slug
 	}
+	// W-06: use ON CONFLICT DO NOTHING RETURNING to handle concurrent workers
+	// racing to create the same tenant-specific property.
 	err = exec.QueryRow(ctx, `
 		INSERT INTO properties (id, tenant_id, slug, label, value_type)
 		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT ON CONSTRAINT uq_properties_tenant_slug DO NOTHING
 		RETURNING id::text
 	`, uuid.NewString(), tenantID, slug, label, valueType).Scan(&id)
+	if err == nil {
+		return id, valueType, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, err
+	}
+	// Conflict: another concurrent worker inserted first — re-fetch.
+	err = exec.QueryRow(ctx, `
+		SELECT id::text
+		FROM properties
+		WHERE slug = $1 AND (tenant_id = $2 OR tenant_id IS NULL)
+		ORDER BY tenant_id NULLS LAST
+		LIMIT 1
+	`, slug, tenantID).Scan(&id)
 	return id, valueType, true, err
 }
 
+// insertStatementQuery builds the INSERT query for a statement.
+// It uses ON CONFLICT ON CONSTRAINT uq_statements_content_hash DO NOTHING so
+// concurrent workers cannot produce duplicate key errors (W-07).
+// RETURNING id::text lets the caller detect a conflict (ErrNoRows = duplicate).
 func insertStatementQuery(statementID, tenantID, subjectID, propertyID, valueType, value string, confidence float64) (string, []any) {
-	base := `INSERT INTO statements (id, tenant_id, subject_id, property_id, %s, rank, confidence) VALUES ($1, $2, $3, $4, %s, 'normal', $6)`
+	base := `INSERT INTO statements (id, tenant_id, subject_id, property_id, %s, rank, confidence) VALUES ($1, $2, $3, $4, %s, 'normal', $6) ON CONFLICT ON CONSTRAINT uq_statements_content_hash DO NOTHING RETURNING id::text`
 	args := []any{statementID, tenantID, subjectID, propertyID, value, confidence}
 	switch valueType {
 	case "number":
