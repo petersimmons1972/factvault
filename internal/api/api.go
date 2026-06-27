@@ -5,11 +5,14 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -216,16 +219,20 @@ func (s *Server) getBrief(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rec)
 }
 
+// writeError maps known errors to 4xx responses and unknown errors to a 500
+// with a correlation ID. Internal error detail is never sent to the client (X8):
+//   - 4xx: static detail string; no err.Error() in the response body
+//   - 5xx: generate a correlation ref, log the full error to stderr, send only the ref
 func writeError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, assembler.ErrEntityNotFound):
-		writeProblem(w, http.StatusNotFound, "not found", err.Error())
-	case errors.Is(err, pgx.ErrNoRows):
-		writeProblem(w, http.StatusNotFound, "not found", err.Error())
+	case errors.Is(err, assembler.ErrEntityNotFound), errors.Is(err, pgx.ErrNoRows):
+		writeProblem(w, http.StatusNotFound, "not found", "")
 	case errors.Is(err, assembler.ErrInvalidDepth), errors.Is(err, assembler.ErrInvalidEntityCount):
 		writeProblem(w, http.StatusBadRequest, "bad request", err.Error())
 	default:
-		writeProblem(w, http.StatusInternalServerError, "internal server error", err.Error())
+		corrID := uuid.NewString()
+		fmt.Fprintf(os.Stderr, "error [%s]: %v\n", corrID, err)
+		writeProblem(w, http.StatusInternalServerError, "internal server error", "ref: "+corrID)
 	}
 }
 
