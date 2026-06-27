@@ -127,4 +127,11 @@ def embed(req: EmbedRequest) -> EmbedResponse:
         # Clients with retry/backoff will recover; explicit 500 would mislead.
         raise HTTPException(status_code=503, detail="model not yet loaded")
     embeddings = _model.encode(req.texts, convert_to_numpy=True, normalize_embeddings=True)
+    # E-10: validate that the model returned the expected shape — guard against
+    # model version drift that silently changes the embedding dimension.
+    if embeddings.shape != (len(req.texts), EXPECTED_DIM):
+        raise HTTPException(
+            status_code=500,
+            detail=f"embedder shape error: got {embeddings.shape}, want ({len(req.texts)}, {EXPECTED_DIM})",
+        )
     return EmbedResponse(vectors=embeddings.tolist())

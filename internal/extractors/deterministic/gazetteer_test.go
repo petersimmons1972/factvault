@@ -11,6 +11,37 @@ import (
 	"github.com/petersimmons1972/factvault/internal/extractors/deterministic"
 )
 
+// TestGazetteerExtractor_MultibyteUTF8OffsetIsRuneNotByte (E-07) verifies that
+// ExcerptOffsetStart / ExcerptOffsetEnd are rune (character) indices rather than
+// byte indices.  Before the fix the gazetteer comparison used raw byte positions
+// against stored rune positions causing false non-overlaps on multi-byte text.
+func TestGazetteerExtractor_MultibyteUTF8OffsetIsRuneNotByte(t *testing.T) {
+	// "αβ " = α(2 bytes)+β(2 bytes)+space(1 byte) = 5 bytes, 3 rune chars.
+	// "Apple" starts at byte 5 / rune 3 and ends at byte 10 / rune 8.
+	rawText := "αβ Apple released a product."
+	var ex deterministic.GazetteerExtractor
+	facts, err := ex.Extract(context.Background(), &db.Source{}, rawText)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var found bool
+	for _, f := range facts {
+		if f.Excerpt == "Apple" {
+			found = true
+			// Rune offsets: α=1, β=1, ' '=1 → start=3; "Apple"=5 runes → end=8
+			if f.ExcerptOffsetStart != 3 {
+				t.Errorf("E-07: ExcerptOffsetStart = %d, want 3 (rune offset); byte offset would be 5", f.ExcerptOffsetStart)
+			}
+			if f.ExcerptOffsetEnd != 8 {
+				t.Errorf("E-07: ExcerptOffsetEnd = %d, want 8 (rune offset); byte offset would be 10", f.ExcerptOffsetEnd)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected gazetteer fact for 'Apple' not found")
+	}
+}
+
 func TestGazetteerExtractorExtract(t *testing.T) {
 	t.Parallel()
 

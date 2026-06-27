@@ -56,7 +56,10 @@ func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c col
 	if err != nil {
 		return fmt.Errorf("collect: %w", err)
 	}
-	for _, item := range items {
+	// W-19: use a SAVEPOINT per item so that a single bad row is logged and
+	// skipped rather than aborting the entire batch.  A fixed name is fine in
+	// Postgres — each SAVEPOINT sp_item replaces the previous one within the TX.
+	for i, item := range items {
 		if strings.TrimSpace(item.URL) == "" || len(item.HTML) == 0 {
 			continue
 		}
@@ -75,13 +78,23 @@ func (p *SourcePipeline) CollectOnce(ctx context.Context, tenantID string, c col
 				metaJSON = b
 			}
 		}
-		_, err = tx.Exec(txCtx, `
+		if _, spErr := tx.Exec(txCtx, "SAVEPOINT sp_item"); spErr != nil {
+			return fmt.Errorf("savepoint (item %d): %w", i, spErr)
+		}
+		_, execErr := tx.Exec(txCtx, `
 INSERT INTO sources (id, tenant_id, url, content_hash, raw_html, status, title, publisher, published_at, meta)
 VALUES ($1, $2, $3, $4, $5, 'collected', NULLIF($6, ''), NULLIF($7, ''), $8, $9)
 ON CONFLICT (tenant_id, url) DO NOTHING
 `, uuid.NewString(), tenant, item.URL, hash, compressed, item.Title, publisher, item.PublishedAt, metaJSON)
-		if err != nil {
-			return fmt.Errorf("insert source: %w", err)
+		if execErr != nil {
+			fmt.Fprintf(os.Stderr, "source pipeline: insert source (item %d, url=%s): %v — skipping\n", i, item.URL, execErr)
+			if _, rbErr := tx.Exec(txCtx, "ROLLBACK TO SAVEPOINT sp_item"); rbErr != nil {
+				return fmt.Errorf("rollback to savepoint (item %d): %w", i, rbErr)
+			}
+			continue
+		}
+		if _, relErr := tx.Exec(txCtx, "RELEASE SAVEPOINT sp_item"); relErr != nil {
+			return fmt.Errorf("release savepoint (item %d): %w", i, relErr)
 		}
 	}
 	return tx.Commit(txCtx)

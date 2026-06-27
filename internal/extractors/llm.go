@@ -16,6 +16,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
+
 // StatementProposal is a candidate factual statement extracted from raw source text.
 type StatementProposal struct {
 	SubjectText        string `json:"subject_text"`
@@ -84,29 +85,50 @@ func (c *LLMClient) Extract(ctx context.Context, _ *db.Source, rawText string) (
 	}
 
 	endpoint := strings.TrimRight(c.BaseURL, "/") + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "close: %v\n", err)
-		}
-	}()
-
+	// E-09: retry on 429 (rate-limit) and 5xx (transient server errors).
+	// Delays: 1s, 2s, 4s between attempts. Context cancellation aborts early.
+	retryDelays := [2]time.Duration{1 * time.Second, 2 * time.Second}
 	maxBodyBytes := maxLLMBodyBytes()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBodyBytes)+1))
-	if err != nil {
-		return nil, err
+	var (
+		resp *http.Response
+		body []byte
+	)
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			delay := retryDelays[attempt-1]
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		// Recreate the request each attempt: the body reader is consumed per attempt.
+		retryReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		retryReq.Header.Set("Content-Type", "application/json")
+		if c.APIKey != "" {
+			retryReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+		}
+
+		resp, err = client.Do(retryReq)
+		if err != nil {
+			return nil, err
+		}
+		body, err = io.ReadAll(io.LimitReader(resp.Body, int64(maxBodyBytes)+1))
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "close: %v\n", closeErr)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			fmt.Fprintf(os.Stderr, "llm request: status %d, retrying (attempt %d/3)\n", resp.StatusCode, attempt+1)
+			continue
+		}
+		break
 	}
 	if len(body) > maxBodyBytes {
 		return nil, fmt.Errorf("llm response body exceeds %d bytes", maxBodyBytes)
@@ -144,6 +166,8 @@ func parseStatementProposals(content []byte) ([]StatementProposal, error) {
 		return direct, nil
 	}
 
+	// E-05: if the wrapper unmarshals successfully, return the result even when
+	// both slices are empty — that means the LLM found no facts, which is valid.
 	var wrapper struct {
 		Proposals  []StatementProposal `json:"proposals"`
 		Statements []StatementProposal `json:"statements"`
@@ -152,9 +176,8 @@ func parseStatementProposals(content []byte) ([]StatementProposal, error) {
 		if len(wrapper.Proposals) > 0 {
 			return wrapper.Proposals, nil
 		}
-		if len(wrapper.Statements) > 0 {
-			return wrapper.Statements, nil
-		}
+		// wrapper.Statements may also be empty — still not a parse error.
+		return wrapper.Statements, nil
 	}
 
 	return nil, fmt.Errorf("unable to parse statement proposals")

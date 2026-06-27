@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 
 	"github.com/petersimmons1972/factvault/internal/db"
@@ -483,6 +485,127 @@ func TestEmbedOptions_LimitIsRespected(t *testing.T) {
 	// With limit=2, at most 2 entity rows processed (sources/statements may have 0 in this tenant)
 	if result.Populated > 2 {
 		t.Fatalf("expected at most 2 populated with Limit=2, got %d", result.Populated)
+	}
+}
+
+// TestEmbedWorker_TxReleasedBeforeEmbedCall (W-13 regression) verifies that the
+// fetch transaction is committed before the HTTP embed call is made.  We use a
+// pool with MaxConns=1: if the fetch TX were still open while the embed HTTP
+// handler runs, the handler's attempt to acquire a DB connection would block /
+// timeout and the test would fail.
+func TestEmbedWorker_TxReleasedBeforeEmbedCall(t *testing.T) {
+	// Build a 1-connection pool from the test DB config.
+	basePool := testdb.New(t)
+	cfg := basePool.Config()
+	cfg.MaxConns = 1
+	smallPool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("create small pool: %v", err)
+	}
+	t.Cleanup(smallPool.Close)
+
+	ctx := context.Background()
+	tenantID := "00000000-0000-0000-0000-000000000601"
+
+	// Insert one entity with NULL embedding using the base pool (which has
+	// more connections and can co-exist with smallPool).
+	id := uuid.NewString()
+	if _, err := basePool.Exec(ctx, `
+		INSERT INTO entities (id, tenant_id, ext_id, label)
+		VALUES ($1::uuid, $2::uuid, $3, 'W13 subject')
+	`, id, tenantID, "ext:w13:"+id); err != nil {
+		t.Fatalf("insert entity: %v", err)
+	}
+
+	// Embed server: inside the handler, try to acquire a connection from
+	// smallPool.  If the fetch TX is still open, the pool has no free
+	// connections (MaxConns=1) and Acquire would time out → test fails.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		acquireCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		conn, acquireErr := smallPool.Acquire(acquireCtx)
+		if acquireErr != nil {
+			http.Error(w, "W-13: fetch TX still open during embed HTTP call: "+acquireErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		conn.Release()
+
+		var req struct {
+			Texts []string `json:"texts"`
+		}
+		if decErr := json.NewDecoder(r.Body).Decode(&req); decErr != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		vecs := make([][]float64, len(req.Texts))
+		for i := range req.Texts {
+			v := make([]float64, 1024)
+			v[0] = 1.0
+			vecs[i] = v
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if encErr := json.NewEncoder(w).Encode(map[string]any{"vectors": vecs}); encErr != nil {
+			t.Errorf("encode: %v", encErr)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	worker := &workers.EmbedWorker{
+		DB:     smallPool,
+		Client: embed.NewClient(srv.URL, srv.Client()),
+	}
+	result, err := worker.RunOnce(ctx, tenantID, workers.EmbedOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("RunOnce: %v (W-13: fetch TX may still be open during embed call)", err)
+	}
+	if result.Populated != 1 {
+		t.Fatalf("Populated = %d, want 1", result.Populated)
+	}
+}
+
+// TestEmbedWorker_WrongDimVectorRejected (W-14 regression) verifies that an
+// embedder returning wrong-dimension vectors causes RunOnce to return an error
+// rather than silently writing garbage into the embedding column.
+func TestEmbedWorker_WrongDimVectorRejected(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	tenantID := "00000000-0000-0000-0000-000000000602"
+
+	id := uuid.NewString()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO entities (id, tenant_id, ext_id, label)
+		VALUES ($1::uuid, $2::uuid, $3, 'W14 subject')
+	`, id, tenantID, "ext:w14:"+id); err != nil {
+		t.Fatalf("insert entity: %v", err)
+	}
+
+	// Embed server returns 3-dim vectors (wrong dimension).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Texts []string `json:"texts"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad", http.StatusBadRequest)
+			return
+		}
+		vecs := make([][]float64, len(req.Texts))
+		for i := range req.Texts {
+			vecs[i] = []float64{0.1, 0.2, 0.3} // only 3 dims — wrong
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"vectors": vecs}); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	worker := &workers.EmbedWorker{
+		DB:     pool,
+		Client: embed.NewClient(srv.URL, srv.Client()),
+	}
+	_, err := worker.RunOnce(ctx, tenantID, workers.EmbedOptions{Limit: 10})
+	if err == nil {
+		t.Fatal("expected error when embedder returns wrong-dimension vectors (W-14), got nil")
 	}
 }
 
