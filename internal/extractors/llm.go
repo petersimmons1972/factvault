@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/db"
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
@@ -53,6 +54,8 @@ type chatCompletionResponse struct {
 		} `json:"message"`
 	} `json:"choices"`
 }
+
+const defaultMaxLLMBodyBytes = 4 * 1024 * 1024
 
 // Extract sends source text to the configured LLM and returns candidate proposals.
 func (c *LLMClient) Extract(ctx context.Context, _ *db.Source, rawText string) ([]StatementProposal, error) {
@@ -100,9 +103,13 @@ func (c *LLMClient) Extract(ctx context.Context, _ *db.Source, rawText string) (
 		}
 	}()
 
-	body, err := io.ReadAll(resp.Body)
+	maxBodyBytes := maxLLMBodyBytes()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBodyBytes)+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxBodyBytes {
+		return nil, fmt.Errorf("llm response body exceeds %d bytes", maxBodyBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, fmt.Errorf("llm request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -202,4 +209,12 @@ func runeOffsetToByteOffset(rawText string, runeOffset int) (int, bool) {
 		return len(rawText), true
 	}
 	return 0, false
+}
+
+func maxLLMBodyBytes() int {
+	size, err := config.ResolveInt(nil, "FACTVAULT_MAX_LLM_BODY_BYTES", defaultMaxLLMBodyBytes, false)
+	if err != nil || size <= 0 {
+		return defaultMaxLLMBodyBytes
+	}
+	return size
 }

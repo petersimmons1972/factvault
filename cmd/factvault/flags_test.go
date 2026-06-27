@@ -11,6 +11,7 @@ func TestLLMCostGuardrailThresholdHelpIncludesUnit(t *testing.T) {
 	flag := cmd.PersistentFlags().Lookup("llm-cost-guardrail-threshold")
 	if flag == nil {
 		t.Fatal("expected llm-cost-guardrail-threshold flag to be registered")
+		return // unreachable; helps static analysis
 	}
 
 	if got := strings.ToLower(flag.Usage); !strings.Contains(got, "extractions") {

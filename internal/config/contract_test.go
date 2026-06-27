@@ -63,7 +63,7 @@ func goFiles(t *testing.T, root string) []string {
 // readFile reads a file and returns its content as a string.
 func readFile(t *testing.T, path string) string {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // test helper reads paths from goFiles()
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
 	}
