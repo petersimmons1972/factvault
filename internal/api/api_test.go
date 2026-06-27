@@ -327,4 +327,3 @@ func TestPostStory_MaxBytesReaderEnforced(t *testing.T) {
 		t.Fatalf("oversized body: got %d, want 400 (MaxBytesReader enforcement)", w.Code)
 	}
 }
-
