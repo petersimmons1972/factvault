@@ -65,3 +65,13 @@ func TestK8sWorkerCronJobsIncludeMigrationInitContainer(t *testing.T) {
 		}
 	}
 }
+
+func TestK8sConfigMapDefinesTenantID(t *testing.T) {
+	data, err := os.ReadFile("k8s/configmap.yaml")
+	if err != nil {
+		t.Fatalf("read configmap.yaml: %v", err)
+	}
+	if !strings.Contains(string(data), "FACTVAULT_TENANT_ID:") {
+		t.Fatal("configmap.yaml must define FACTVAULT_TENANT_ID for worker CronJobs")
+	}
+}
