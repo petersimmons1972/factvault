@@ -3,14 +3,18 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/petersimmons1972/factvault/internal/assembler"
 	"github.com/petersimmons1972/factvault/internal/auth"
 	"github.com/petersimmons1972/factvault/internal/testdb"
 )
@@ -200,5 +204,55 @@ func TestPostBriefGenerate_ForeignEntityIDRejected(t *testing.T) {
 	h.ServeHTTP(resp, req)
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 Forbidden for cross-tenant entity_id, got %d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestWriteError_InternalErrorDoesNotLeakDetail verifies X8: a 500 response must
+// not expose raw err.Error() to the caller; it must include only a correlation ref.
+func TestWriteError_InternalErrorDoesNotLeakDetail(t *testing.T) {
+	internalMsg := "pq: relation \"secret_table\" does not exist"
+	w := httptest.NewRecorder()
+	writeError(w, errors.New(internalMsg))
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	var p Problem
+	if err := json.NewDecoder(w.Body).Decode(&p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if strings.Contains(p.Detail, internalMsg) {
+		t.Fatalf("detail %q leaks internal error message (X8 violation)", p.Detail)
+	}
+	if !strings.HasPrefix(p.Detail, "ref: ") {
+		t.Fatalf("detail %q does not contain correlation ref", p.Detail)
+	}
+}
+
+// TestWriteError_NotFoundDoesNotLeakDetail verifies X8: 404 responses must use a
+// static detail string, not err.Error(), to avoid leaking internal identifiers.
+func TestWriteError_NotFoundDoesNotLeakDetail(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"ErrEntityNotFound", assembler.ErrEntityNotFound},
+		{"pgx.ErrNoRows", pgx.ErrNoRows},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			writeError(w, tc.err)
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", w.Code)
+			}
+			var p Problem
+			if err := json.NewDecoder(w.Body).Decode(&p); err != nil {
+				t.Fatalf("decode problem: %v", err)
+			}
+			if p.Detail != "" {
+				t.Fatalf("detail = %q, want empty (no internal message should be returned)", p.Detail)
+			}
+		})
 	}
 }
