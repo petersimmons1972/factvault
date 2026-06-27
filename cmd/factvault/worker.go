@@ -67,6 +67,11 @@ func newWorkerCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				if f := subcmd.Flags().Lookup("dsn"); f != nil && f.Changed {
+					if err := config.ValidateDSNNoPassword(dsn); err != nil {
+						return err
+					}
+				}
 				// C4: --tenant > FACTVAULT_DEV_TENANT_ID > ERROR; warn when env provides the value.
 				tenantID, err = config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
 				if err != nil {
@@ -142,6 +147,11 @@ func newWorkerCmd() *cobra.Command {
 			resolvedDSN, err := config.ResolveSecret(subcmd.Flags().Lookup("dsn"), "FACTVAULT_DATABASE_URL", "", true)
 			if err != nil {
 				return err
+			}
+			if f := subcmd.Flags().Lookup("dsn"); f != nil && f.Changed {
+				if err := config.ValidateDSNNoPassword(resolvedDSN); err != nil {
+					return err
+				}
 			}
 			resolvedTenant, err := config.ResolveString(subcmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
 			if err != nil {

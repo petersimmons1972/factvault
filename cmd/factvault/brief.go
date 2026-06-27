@@ -116,6 +116,11 @@ func openBriefPool(cmd *cobra.Command, _, _ string) (*pgxpool.Pool, string, erro
 	if err != nil {
 		return nil, "", err
 	}
+	if f := cmd.Flags().Lookup("dsn"); f != nil && f.Changed {
+		if err := config.ValidateDSNNoPassword(dsn); err != nil {
+			return nil, "", err
+		}
+	}
 	// C4: --tenant > FACTVAULT_DEV_TENANT_ID > ERROR.
 	tenantID, err := config.ResolveString(cmd.Flags().Lookup("tenant"), "FACTVAULT_DEV_TENANT_ID", "", true)
 	if err != nil {
