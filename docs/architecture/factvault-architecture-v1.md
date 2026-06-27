@@ -260,7 +260,7 @@ type VectorStore interface {
 
 **Postgres:**
 - Migrations live in `migrations/00001_initial_schema.sql`, `00002_hnsw_indices.sql`, etc.
-- goose is the runner: `factvault migrate up` executes them.
+- goose is the runner: `factvault migrate` executes them.
 - Backward compat: all migrations are reversible (goose Down blocks included).
 
 **SQLite:**
@@ -338,11 +338,14 @@ factvault api                        # Start REST server on :8080
 - Service, Ingress, RoleBinding for RBAC
 
 **Operating model:**
+> **Note:** The Helm chart is not included in this repository. Use the `deploy/k8s/` manifests directly.
+
 ```bash
-helm install factvault ./helm/factvault \
-  --values values-prod.yaml \
-  --set database.external=true \
-  --set llm.type=anthropic
+# Example (chart not included — use deploy/k8s/ manifests):
+# helm install factvault ./helm/factvault \
+#   --values values-prod.yaml \
+#   --set database.external=true \
+#   --set llm.type=anthropic
 ```
 
 ### Tier 3: Bare Metal (Unsupported)
@@ -357,7 +360,7 @@ helm install factvault ./helm/factvault \
 
 ### YAML Schema (Canonical Reference)
 
-See `config/config.schema.yaml` for the full JSON schema. Key sections:
+Configuration is managed via environment variables; see docs/operator-guide.md § Environment variables. Key config areas:
 
 - `llm.*` — LLM backend and model selection
 - `embeddings.*` — embedding service backend
@@ -427,8 +430,8 @@ factvault doctor                                    # 7-check health + remediati
 factvault worker {collect,archive,extract,corroborate,verify,relate,dossier}
 factvault api                                       # Start REST server (port 8080)
 factvault mcp                                       # Start MCP server (stdio)
-factvault examples load <domain>                    # Load example data
-factvault migrate up                                # Run goose migrations
+factvault example <domain>                          # Load example data
+factvault migrate                                   # Run goose migrations
 ```
 
 ### Health Checks (doctor output)

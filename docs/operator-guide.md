@@ -80,7 +80,7 @@ Use `doctor --required-only` to exit 0 when only optional checks (LLM, embedder,
 Run workers in this order for a tenant:
 
 ```bash
-./bin/factvault worker collect --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker rss --once
 ./bin/factvault worker archive --tenant "$FACTVAULT_DEV_TENANT_ID"
 ./bin/factvault worker extract --tenant "$FACTVAULT_DEV_TENANT_ID"
 ./bin/factvault worker corroborate --tenant "$FACTVAULT_DEV_TENANT_ID"
