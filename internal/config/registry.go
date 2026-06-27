@@ -61,7 +61,7 @@ var Registry = []Entry{
 	},
 	{
 		Concept:  "LLM API key",
-		Flag:     "--llm-api-key",
+		Flag:     "", // no CLI flag; secrets must not appear in process args (X4/C9)
 		EnvVar:   "FACTVAULT_LLM_API_KEY",
 		Default:  "",
 		Alias:    "",

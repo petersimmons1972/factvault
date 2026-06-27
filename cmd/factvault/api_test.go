@@ -12,6 +12,7 @@ func TestAPICmdAddrFlag(t *testing.T) {
 	f := cmd.Flags().Lookup("addr")
 	if f == nil {
 		t.Fatal("newAPICmd() missing --addr flag")
+		return // unreachable; helps static analysis
 	}
 	if f.DefValue != ":8080" {
 		t.Fatalf("--addr default = %q, want :8080", f.DefValue)

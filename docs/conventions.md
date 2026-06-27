@@ -215,7 +215,7 @@ they are removed on the next minor bump.
 | migrate DSN        | `--dsn` (migrate cmd)       | `FACTVAULT_MIGRATE_DATABASE_URL`  | falls back to `FACTVAULT_DATABASE_URL`     | —                       | superuser DSN for `CREATE EXTENSION`       |
 | LLM base URL       | `--llm-base-url`            | `FACTVAULT_LLM_BASE_URL`          | `http://localhost:11434/v1`                | `FACTVAULT_LLM_URL`     | alias readable for 1 release, then removed |
 | LLM model          | `--llm-model`               | `FACTVAULT_LLM_MODEL`             | `llama3.1:8b`                              | —                       |                                            |
-| LLM API key        | `--llm-api-key`             | `FACTVAULT_LLM_API_KEY`           | `""` (optional)                            | —                       | `_FILE` variant supported                 |
+| LLM API key        | *(no flag — env only)*      | `FACTVAULT_LLM_API_KEY`           | `""` (optional)                            | —                       | `_FILE` variant supported (C9); use `FACTVAULT_LLM_API_KEY_FILE` for k8s Secret volume |
 | embedder URL       | `--embedder-url`            | `FACTVAULT_EMBEDDER_URL`          | `http://localhost:8081`                    | —                       |                                            |
 | Wayback URL        | `--wayback-url`             | `FACTVAULT_WAYBACK_URL`           | `https://web.archive.org`                  | —                       |                                            |
 | JWT public key     | `--jwt-public-key`          | `FACTVAULT_JWT_PUBLIC_KEY`        | *(required)*                               | `--public-key` (auth)   | path to PEM file; `_FILE` variant = read from path |
