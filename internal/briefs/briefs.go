@@ -132,7 +132,13 @@ type evidenceGap struct {
 
 // Generate builds a deterministic JSON brief from b.
 // The output is stable across repeated calls for the same input.
+// b must not be nil (#268): a nil bundle indicates an assembly failure
+// upstream, and generating claims/citations from it would either panic on
+// nil-pointer field access or silently produce an empty brief.
 func (g BriefGenerator) Generate(b *assembler.Bundle) ([]byte, error) {
+	if b == nil {
+		return nil, ErrNilBundle
+	}
 	doc := briefDoc{
 		KeyClaims:     extractKeyClaims(b),
 		Citations:     extractCitations(b),

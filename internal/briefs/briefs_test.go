@@ -48,6 +48,20 @@ func TestGenerateDeterministic(t *testing.T) {
 	}
 }
 
+// TestGenerateRejectsNilBundle covers issue #268's acceptance criterion:
+// BriefGenerator.Generate must reject a nil bundle with ErrNilBundle instead
+// of panicking on nil-pointer field access.
+func TestGenerateRejectsNilBundle(t *testing.T) {
+	g := BriefGenerator{}
+	payload, err := g.Generate(nil)
+	if !errors.Is(err, ErrNilBundle) {
+		t.Fatalf("expected ErrNilBundle, got %v", err)
+	}
+	if payload != nil {
+		t.Fatalf("expected nil payload on error, got %q", payload)
+	}
+}
+
 func TestServiceGenerateListGetTenantScoped(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Setup(ctx, t)
