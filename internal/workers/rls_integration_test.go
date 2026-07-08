@@ -224,12 +224,16 @@ func TestRLSRestrictedBriefsTenantIsolation(t *testing.T) {
 	tenantA := uuid.NewString()
 	tenantB := uuid.NewString()
 	query := "acme expansion"
-	svc := briefs.Service{Pool: pool}
+	svc := briefs.Service{
+		Pool: pool,
+		BundleLoader: briefs.BundleLoaderFunc(func(context.Context, string, briefs.GenerateRequest) (*assembler.Bundle, error) {
+			return rlsTestBundle(tenantA), nil
+		}),
+	}
 
 	rec, err := svc.GenerateAndStore(ctx, tenantA, briefs.GenerateRequest{
 		SourceKind: briefs.SourceKindStory,
 		Query:      &query,
-		Bundle:     rlsTestBundle(tenantA),
 	})
 	if err != nil {
 		t.Fatalf("GenerateAndStore: %v", err)

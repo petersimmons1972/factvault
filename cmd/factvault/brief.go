@@ -1,10 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
@@ -13,6 +13,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/briefs"
 	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/db"
+	"github.com/petersimmons1972/factvault/internal/retrieval"
 )
 
 func newBriefCmd() *cobra.Command {
@@ -31,7 +32,7 @@ func newBriefGenerateCmd(dsn, tenantID *string) *cobra.Command {
 	var inputPath, sourceKind, entityID, query string
 	cmd := &cobra.Command{
 		Use:   "generate",
-		Short: "Generate and persist a deterministic evidence brief",
+		Short: "Generate and persist a deterministic evidence brief from tenant-scoped data",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			pool, tenant, err := openBriefPool(cmd, *dsn, *tenantID)
@@ -39,29 +40,36 @@ func newBriefGenerateCmd(dsn, tenantID *string) *cobra.Command {
 				return err
 			}
 			defer pool.Close()
-			bundle, err := readBundle(inputPath)
-			if err != nil {
-				return err
+			if inputPath != "" {
+				return errors.New("--input is no longer supported; brief bundles are assembled server-side")
 			}
-			service := briefs.Service{Pool: pool}
-			req := briefs.GenerateRequest{SourceKind: briefs.SourceKind(sourceKind), Bundle: bundle}
+			req := briefs.GenerateRequest{SourceKind: briefs.SourceKind(sourceKind)}
 			if entityID != "" {
 				req.EntityID = &entityID
 			}
 			if query != "" {
 				req.Query = &query
 			}
+			service := briefs.Service{
+				Pool: pool,
+				BundleLoader: briefs.BundleLoaderFunc(func(ctx context.Context, tenantID string, req briefs.GenerateRequest) (*assembler.Bundle, error) {
+					return loadBriefBundleForCLI(ctx, pool, tenantID, req)
+				}),
+			}
 			rec, err := service.GenerateAndStore(cmd.Context(), tenant, req)
 			if err != nil {
 				return err
 			}
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(rec)
+			return writeJSONOutput(cmd, rec)
 		},
 	}
-	cmd.Flags().StringVar(&inputPath, "input", "", "Path to dossier/story bundle JSON (default stdin)")
+	cmd.Flags().StringVar(&inputPath, "input", "", "Deprecated: briefs are assembled server-side")
 	cmd.Flags().StringVar(&sourceKind, "source-kind", string(briefs.SourceKindDossier), "brief source kind: dossier or story")
 	cmd.Flags().StringVar(&entityID, "entity-id", "", "Entity UUID for dossier-derived brief")
 	cmd.Flags().StringVar(&query, "query", "", "Query text for story-derived brief")
+	if err := cmd.Flags().MarkDeprecated("input", "bundle JSON is no longer accepted; briefs are assembled server-side"); err != nil {
+		panic(err)
+	}
 	return cmd
 }
 
@@ -81,7 +89,7 @@ func newBriefListCmd(dsn, tenantID *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
+			return writeJSONOutput(cmd, records)
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 100, "Max records to return")
@@ -103,10 +111,36 @@ func newBriefGetCmd(dsn, tenantID *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(record)
+			return writeJSONOutput(cmd, record)
 		},
 	}
 	return cmd
+}
+
+func loadBriefBundleForCLI(ctx context.Context, pool *pgxpool.Pool, tenantID string, req briefs.GenerateRequest) (*assembler.Bundle, error) {
+	svc := retrieval.NewService(pool, nil, nil)
+	switch req.SourceKind {
+	case briefs.SourceKindDossier:
+		if req.EntityID == nil {
+			return nil, fmt.Errorf("%w: dossier briefs require entity_id", briefs.ErrInvalidGenerateRequest)
+		}
+		resp, err := svc.Dossier(ctx, tenantID, *req.EntityID)
+		if err != nil {
+			return nil, err
+		}
+		return resp.Bundle, nil
+	case briefs.SourceKindStory:
+		if req.Query == nil {
+			return nil, fmt.Errorf("%w: story briefs require query", briefs.ErrInvalidGenerateRequest)
+		}
+		resp, err := svc.Story(ctx, tenantID, retrieval.StoryRequest{Query: *req.Query})
+		if err != nil {
+			return nil, err
+		}
+		return resp.Bundle, nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported source_kind %q", briefs.ErrInvalidGenerateRequest, req.SourceKind)
+	}
 }
 
 func openBriefPool(cmd *cobra.Command, _, _ string) (*pgxpool.Pool, string, error) {
@@ -133,20 +167,6 @@ func openBriefPool(cmd *cobra.Command, _, _ string) (*pgxpool.Pool, string, erro
 	return pool, tenantID, nil
 }
 
-func readBundle(inputPath string) (*assembler.Bundle, error) {
-	var data []byte
-	var err error
-	if inputPath == "" {
-		data, err = io.ReadAll(os.Stdin)
-	} else {
-		data, err = os.ReadFile(inputPath) //nolint:gosec // path provided by operator via --input flag, not from user-supplied HTTP input
-	}
-	if err != nil {
-		return nil, err
-	}
-	var bundle assembler.Bundle
-	if err := json.Unmarshal(data, &bundle); err != nil {
-		return nil, fmt.Errorf("parse bundle json: %w", err)
-	}
-	return &bundle, nil
+func writeJSONOutput(cmd *cobra.Command, value any) error {
+	return json.NewEncoder(cmd.OutOrStdout()).Encode(value)
 }

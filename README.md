@@ -161,19 +161,21 @@ GET /briefs
 GET /briefs/{id}
 ```
 
-Example brief generation payload:
+`POST /briefs/generate` now assembles the bundle server-side under the authenticated tenant. Client-supplied `bundle` JSON is rejected.
+
+Example dossier brief payload:
 ```json
 {
   "source_kind": "dossier",
-  "entity_id": "11111111-1111-1111-1111-111111111111",
-  "bundle": {
-    "entity_id": "11111111-1111-1111-1111-111111111111",
-    "tenant_id": "22222222-2222-2222-2222-222222222222",
-    "entities": [],
-    "statements": [],
-    "sources": [],
-    "assembled_at": "2026-01-01T00:00:00Z"
-  }
+  "entity_id": "11111111-1111-1111-1111-111111111111"
+}
+```
+
+Illustrative story brief payload (adjust the query to your tenant data):
+```json
+{
+  "source_kind": "story",
+  "query": "AI startup funding announcements"
 }
 ```
 
