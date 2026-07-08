@@ -39,7 +39,11 @@ cd factvault
 cp .env.example .env
 
 # Host-run commands use localhost, not the in-compose service name.
+# FACTVAULT_DATABASE_URL (app_user) is the runtime DSN for api/workers/mcp/init.
+# FACTVAULT_MIGRATE_DATABASE_URL (superuser) is used only by `factvault migrate`
+# (CREATE EXTENSION requires superuser). See docs/getting-started.md for the full contract.
 export FACTVAULT_DATABASE_URL='postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_MIGRATE_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
 export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
 
 make setup
@@ -66,8 +70,13 @@ If you prefer to run each step explicitly:
 ```bash
 docker compose up -d postgres embedder
 go build -o bin/factvault ./cmd/factvault
+# Migrate runs as the Postgres superuser — CREATE EXTENSION requires superuser
+# privileges. It reads FACTVAULT_MIGRATE_DATABASE_URL (exported above).
 ./bin/factvault migrate
-./bin/factvault init --dsn "$FACTVAULT_DATABASE_URL" --tenant "$FACTVAULT_DEV_TENANT_ID"
+# init (and everything after it) runs as app_user via FACTVAULT_DATABASE_URL —
+# matches production, exercises the GRANTs. Do not pass password-bearing DSNs
+# via --dsn: the flag rejects embedded passwords by design; use the env var.
+./bin/factvault init --tenant "$FACTVAULT_DEV_TENANT_ID"
 
 # Load a bundled example and assemble its first dossier.
 ./bin/factvault example load ai-startup-tracking \

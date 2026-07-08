@@ -170,7 +170,9 @@ func newInitCmd() *cobra.Command {
 			if _, err := fmt.Fprintf(out, "    Run the worker pipeline:\n"); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(out, "      ./bin/factvault worker dossier --tenant %s --dsn \"$FACTVAULT_DATABASE_URL\"\n", tenantID); err != nil {
+			// DSN comes from the FACTVAULT_DATABASE_URL env var; --dsn rejects
+			// password-bearing URLs by design (ValidateDSNNoPassword).
+			if _, err := fmt.Fprintf(out, "      ./bin/factvault worker dossier --tenant %s\n", tenantID); err != nil {
 				return err
 			}
 			return nil

@@ -17,10 +17,15 @@ Issue #94 owns the final single-command Docker Compose deployment polish. Until 
 
 ## Configuration
 
-Required for most commands:
+Required for most commands. factvault uses two DSNs: `FACTVAULT_DATABASE_URL` (app_user) is the
+runtime DSN for `init`, `api`, `worker`, `mcp`, and `doctor` — it matches production and exercises
+the schema's `GRANT`s end-to-end. `FACTVAULT_MIGRATE_DATABASE_URL` (superuser) is used only by
+`factvault migrate`, because `CREATE EXTENSION` requires superuser privileges. When both are set,
+`factvault migrate` prefers `FACTVAULT_MIGRATE_DATABASE_URL`.
 
 ```bash
-export FACTVAULT_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_DATABASE_URL='postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_MIGRATE_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
 export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
 ```
 
@@ -217,6 +222,21 @@ to converge.
    `factvault-db-credentials` (DSN) via `envFrom`. Do not add `FACTVAULT_DATABASE_URL` back to the
    ConfigMap.
 
+5. **Store a separate migration DSN.** Migrations run `CREATE EXTENSION pgcrypto/vector/pg_trgm`
+   and other DDL that the runtime `app_user` role is deliberately not granted, so the
+   `factvault-migrate` initContainers/Job need their own privileged DSN:
+   - key: `FACTVAULT_MIGRATE_DATABASE_URL`
+   - value: `postgres://<migration-role-or-superuser>:<password>@<host>:5432/factvault?sslmode=require`
+
+   Sync it to a Kubernetes Secret named `factvault-migrate-credentials` (see
+   `deploy/k8s/examples/secret.example.yaml`, second document). Only the `factvault-migrate`
+   initContainers in `api-deployment.yaml` and the `*-worker-cronjob.yaml` files, and the
+   standalone `migrate-job.yaml` Job, reference `factvault-migrate-credentials`. Runtime containers
+   (the API server, worker containers) reference only `factvault-db-credentials` — never give them
+   the migration DSN. `cmd/factvault/migrate.go` prefers `FACTVAULT_MIGRATE_DATABASE_URL` and falls
+   back to `FACTVAULT_DATABASE_URL` only if it is unset, matching the docker-compose
+   `factvault-migrate` service.
+
 Credentials MUST NOT appear in `configmap.yaml` — they are audited by `TestK8sConfigMapContainsNoCredentials`.
 
 ### Migrating an existing deployment
@@ -352,6 +372,24 @@ For fully automated GitOps pipelines, schedule a short-lived `app_user-bootstrap
 Argo CD or Flux dependency hook that runs *before* the `factvault-migrate` Job. The
 `wait-for-app-user` initContainer above provides a belt-and-suspenders guard for race
 conditions even when the bootstrap Job has completed successfully.
+
+### JWT auth bootstrap and readOnlyRootFilesystem
+
+All app pods run `deploy/docker/entrypoint.sh` under `readOnlyRootFilesystem: true`. The
+entrypoint only creates/writes a JWT keypair under `/var/lib/factvault/auth` when it is about to
+exec `factvault api` — `factvault migrate` and `factvault worker <stage>` never need auth material
+and the entrypoint no longer attempts the write for them, so those pods run cleanly on a read-only
+root filesystem (#271). `FACTVAULT_BOOTSTRAP_AUTH=0`/`=1` still overrides the auto-detection
+explicitly if you need to force the behavior either way.
+
+The one container that runs `factvault api` (`api-deployment.yaml`) needs a writable path even
+though the rest of its root filesystem stays read-only, so it mounts a dedicated `emptyDir` volume
+at `/var/lib/factvault/auth`. That volume is ephemeral: with `replicas: 1` (the current default)
+this is fine, but scaling the API Deployment to more than one replica would generate a distinct
+keypair per pod and break token verification across replicas. Before scaling past one replica,
+switch to a shared, pre-generated keypair mounted from a Secret (`FACTVAULT_JWT_PUBLIC_KEY` /
+`FACTVAULT_JWT_PRIVATE_KEY`, or `FACTVAULT_BOOTSTRAP_AUTH=0` with keys supplied out of band) rather
+than relying on the per-pod bootstrap.
 
 ## Security Notes
 

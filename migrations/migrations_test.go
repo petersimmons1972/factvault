@@ -359,6 +359,56 @@ func TestTenantScopedForeignKeysRejectCrossTenantReferences(t *testing.T) {
 	})
 }
 
+// TestAlreadyMigratedDB_GetsPropertiesRLSPolicies mirrors the up-to-N-1 then
+// up pattern used for the cross-tenant FK constraints migration (#283): a
+// database already migrated up to the version immediately before the
+// properties RLS fix (00008) must, on a subsequent "up", pick up the new
+// table-specific policies on `properties` — same assurance a rolling
+// production deploy needs (existing DBs get the fix, not just fresh ones).
+func TestAlreadyMigratedDB_GetsPropertiesRLSPolicies(t *testing.T) {
+	db := startMigrationsDB(t)
+	ctx := context.Background()
+
+	if err := goose.RunContext(ctx, "up-to", db, ".", "7"); err != nil {
+		t.Fatalf("goose up-to 7: %v", err)
+	}
+	if propertiesPolicyExists(t, db, "properties_select_tenant_or_global") {
+		t.Fatal("properties_select_tenant_or_global policy present before migration 00008 applied")
+	}
+
+	if err := goose.RunContext(ctx, "up", db, "."); err != nil {
+		t.Fatalf("goose up: %v", err)
+	}
+
+	for _, policy := range []string{
+		"properties_select_tenant_or_global",
+		"properties_insert_tenant_only",
+		"properties_update_tenant_only",
+		"properties_delete_tenant_only",
+	} {
+		if !propertiesPolicyExists(t, db, policy) {
+			t.Errorf("policy %s missing after goose up", policy)
+		}
+	}
+	if propertiesPolicyExists(t, db, "tenant_isolation") {
+		t.Error("generic tenant_isolation policy still present on properties after migration 00008")
+	}
+}
+
+func propertiesPolicyExists(t *testing.T, db *sql.DB, policyName string) bool {
+	t.Helper()
+	var exists bool
+	err := db.QueryRowContext(
+		context.Background(),
+		"SELECT EXISTS (SELECT FROM pg_policies WHERE tablename = 'properties' AND policyname = $1)",
+		policyName,
+	).Scan(&exists)
+	if err != nil {
+		t.Fatalf("checking policy %s: %v", policyName, err)
+	}
+	return exists
+}
+
 func expectPGCode(t *testing.T, err error, wantCode string) {
 	t.Helper()
 	if err == nil {
