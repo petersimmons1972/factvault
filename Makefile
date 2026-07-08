@@ -1,7 +1,9 @@
 .PHONY: build test lint fmt generate migrate setup pr-watch
 
 BINARY := factvault
-DSN ?= $(FACTVAULT_DATABASE_URL)
+# Migrations need superuser privileges (CREATE EXTENSION); FACTVAULT_MIGRATE_DATABASE_URL is the
+# correct default here, not FACTVAULT_DATABASE_URL (app_user, used by api/workers/mcp at runtime).
+DSN ?= $(FACTVAULT_MIGRATE_DATABASE_URL)
 
 build:
 	go build -o bin/$(BINARY) ./cmd/factvault
@@ -32,8 +34,11 @@ setup:
 	FACTVAULT_DATABASE_URL="$${FACTVAULT_MIGRATE_DATABASE_URL:-postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable}" \
 		./bin/$(BINARY) migrate
 	# Init runs as app_user (matching production access pattern; exercises GRANTs).
-	./bin/$(BINARY) init \
-		--dsn "$${FACTVAULT_DATABASE_URL:-postgres://app_user:$${POSTGRES_APP_USER_PASSWORD:-dev_only_local_password}@localhost:5432/factvault?sslmode=disable}" \
+	# DSN is passed via env, not --dsn: password-bearing --dsn values are rejected
+	# by design (see internal/config.ValidateDSNNoPassword).
+	FACTVAULT_DATABASE_URL="$${FACTVAULT_DATABASE_URL:-postgres://app_user:$${POSTGRES_APP_USER_PASSWORD:-dev_only_local_password}@localhost:5432/factvault?sslmode=disable}" \
+		./bin/$(BINARY) init \
+		--skip-migrate \
 		--tenant "$${FACTVAULT_DEV_TENANT_ID:-11111111-1111-1111-1111-111111111111}"
 
 pr-watch:

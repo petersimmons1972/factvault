@@ -18,10 +18,15 @@ cd factvault
 cp .env.example .env
 ```
 
-For host-run commands, override the in-container Postgres hostname:
+For host-run commands, override the in-container Postgres hostname. factvault uses two DSNs:
+`FACTVAULT_DATABASE_URL` (app_user) is the runtime DSN used by `init`, `api`, `worker`, `mcp`, and
+`doctor` — it matches production and exercises the schema's `GRANT`s end-to-end.
+`FACTVAULT_MIGRATE_DATABASE_URL` (superuser) is used only by `factvault migrate`, because
+`CREATE EXTENSION` requires superuser privileges.
 
 ```bash
-export FACTVAULT_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_DATABASE_URL='postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_MIGRATE_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
 export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
 ```
 
@@ -53,13 +58,17 @@ docker compose up -d postgres embedder
 
 ```bash
 go build -o bin/factvault ./cmd/factvault
+# Migrate runs as the Postgres superuser — CREATE EXTENSION requires superuser
+# privileges. It reads FACTVAULT_MIGRATE_DATABASE_URL (exported in step 1).
 ./bin/factvault migrate
-./bin/factvault init \
-  --dsn "$FACTVAULT_DATABASE_URL" \
-  --tenant "$FACTVAULT_DEV_TENANT_ID"
+# init (and everything after it) runs as app_user via FACTVAULT_DATABASE_URL —
+# matches production, exercises the GRANTs.
+./bin/factvault init --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
 `init` generates JWT keys in `.local/`, runs the doctor health checks, and loads the default example. Keys are written only if they do not exist yet. The awk key-splitting step from older guides is no longer required — `init` writes `private.pem` and `public.pem` directly.
+
+Note on `--dsn`: runtime commands (`init`, `doctor`, `worker`, `api`, `mcp`) reject a `--dsn` value that embeds a password — pass the DSN through `FACTVAULT_DATABASE_URL` instead (as exported in step 1), or use a password-free `--dsn` with `~/.pgpass`/`PGPASSWORD`.
 
 ### 4a. Run Readiness Checks
 
@@ -67,7 +76,6 @@ The `init` command runs doctor automatically. You can also invoke it directly:
 
 ```bash
 ./bin/factvault doctor \
-  --dsn "$FACTVAULT_DATABASE_URL" \
   --embedder-url http://localhost:8081 \
   --llm-url http://localhost:11434/v1
 ```
@@ -75,7 +83,7 @@ The `init` command runs doctor automatically. You can also invoke it directly:
 If you do not have a local LLM running, use `--required-only` to exit 0 when only LLM/embedder/Wayback fail:
 
 ```bash
-./bin/factvault doctor --dsn "$FACTVAULT_DATABASE_URL" --required-only
+./bin/factvault doctor --required-only
 ```
 
 Required checks (postgres, migrations, rls, canary) still fail loudly; optional ones show `WARN`.
@@ -92,7 +100,6 @@ Load one domain into the development tenant:
 
 ```bash
 ./bin/factvault example load ai-startup-tracking \
-  --dsn "$FACTVAULT_DATABASE_URL" \
   --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
@@ -100,7 +107,6 @@ Precompute dossiers for that tenant:
 
 ```bash
 ./bin/factvault worker dossier \
-  --dsn "$FACTVAULT_DATABASE_URL" \
   --tenant "$FACTVAULT_DEV_TENANT_ID" \
   --limit 10
 ```
@@ -124,7 +130,6 @@ Start the API:
 
 ```bash
 ./bin/factvault api \
-  --dsn "$FACTVAULT_DATABASE_URL" \
   --jwt-public-key .local/public.pem \
   --addr :8080
 ```
@@ -147,11 +152,11 @@ A successful response contains an entity bundle for the loaded example entity.
 After the initial dossier works, run the source pipeline against a tenant:
 
 ```bash
-./bin/factvault worker collect --dsn "$FACTVAULT_DATABASE_URL" --tenant "$FACTVAULT_DEV_TENANT_ID"
-./bin/factvault worker archive --dsn "$FACTVAULT_DATABASE_URL" --tenant "$FACTVAULT_DEV_TENANT_ID"
-./bin/factvault worker extract --dsn "$FACTVAULT_DATABASE_URL" --tenant "$FACTVAULT_DEV_TENANT_ID"
-./bin/factvault worker corroborate --dsn "$FACTVAULT_DATABASE_URL" --tenant "$FACTVAULT_DEV_TENANT_ID"
-./bin/factvault worker dossier --dsn "$FACTVAULT_DATABASE_URL" --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker collect --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker archive --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker extract --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker corroborate --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker dossier --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
 The dossier will remain empty until the full pipeline stages complete.
@@ -160,9 +165,9 @@ The dossier will remain empty until the full pipeline stages complete.
 
 | Symptom | Check | Fix |
 |---|---|---|
-| `database DSN required`                       | `echo "$FACTVAULT_DATABASE_URL"`        | Export the localhost DSN or pass `--dsn`.                                        |
+| `database DSN required`                       | `echo "$FACTVAULT_DATABASE_URL"`        | Export the localhost DSN (step 1). `--dsn` rejects password-bearing URLs.        |
 | `failed to connect to postgres`               | `docker compose ps postgres`            | Start Postgres with `docker compose up -d postgres`.                             |
-| `run factvault migrate` from `doctor`         | `./bin/factvault migrate`               | Run migrations against the same DSN used by the API and workers.                 |
+| `run factvault migrate` from `doctor`         | `./bin/factvault migrate`               | Run migrate with `FACTVAULT_MIGRATE_DATABASE_URL` exported (superuser DSN, not the API/worker DSN). |
 | `JWT public key required`                     | API startup args                        | Pass `--jwt-public-key .local/public.pem` or set `FACTVAULT_JWT_PUBLIC_KEY`.     |
 | `missing bearer token`                        | `curl` headers                          | Add `Authorization: Bearer $TOKEN`.                                              |
 | `llm` shows `FAIL` or `WARN` in doctor       | `curl http://localhost:11434/v1/models` | Start your local LLM, or use `doctor --required-only` to ignore optional checks. |

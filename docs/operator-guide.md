@@ -17,10 +17,15 @@ Issue #94 owns the final single-command Docker Compose deployment polish. Until 
 
 ## Configuration
 
-Required for most commands:
+Required for most commands. factvault uses two DSNs: `FACTVAULT_DATABASE_URL` (app_user) is the
+runtime DSN for `init`, `api`, `worker`, `mcp`, and `doctor` — it matches production and exercises
+the schema's `GRANT`s end-to-end. `FACTVAULT_MIGRATE_DATABASE_URL` (superuser) is used only by
+`factvault migrate`, because `CREATE EXTENSION` requires superuser privileges. When both are set,
+`factvault migrate` prefers `FACTVAULT_MIGRATE_DATABASE_URL`.
 
 ```bash
-export FACTVAULT_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_DATABASE_URL='postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_MIGRATE_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
 export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
 ```
 

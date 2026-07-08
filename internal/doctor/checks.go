@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/assembler"
@@ -131,26 +133,39 @@ func CheckRLS(ctx context.Context, cfg Config) CheckResult {
 		defer pool.Close()
 		tenantA := uuid.NewString()
 		tenantB := uuid.NewString()
-		if _, err := pool.Exec(ctx, "INSERT INTO entities (tenant_id, label) VALUES ($1, 'A'), ($2, 'B')", tenantA, tenantB); err != nil {
-			return "", "check schema permissions", err
-		}
+		// The whole probe runs inside one rolled-back transaction so no rows
+		// leak, and as app_user with the tenant GUC set per insert so the check
+		// passes on both superuser DSNs (BYPASSRLS) and the app_user runtime
+		// DSN that api/workers/init actually use.
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			return "", "check database", err
 		}
 		defer func() {
-			if err := tx.Rollback(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+			if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+				fmt.Fprintf(os.Stderr, "rollback: %v\n", err)
 			}
 		}()
-		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantA); err != nil {
-			return "", "check app.tenant_id GUC", err
-		}
 		if _, err := tx.Exec(ctx, "SET LOCAL ROLE app_user"); err != nil {
 			return "", "ensure app_user role exists", err
 		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantA); err != nil {
+			return "", "check app.tenant_id GUC", err
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO entities (tenant_id, label) VALUES ($1, 'A')", tenantA); err != nil {
+			return "", "check schema permissions", err
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantB); err != nil {
+			return "", "check app.tenant_id GUC", err
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO entities (tenant_id, label) VALUES ($1, 'B')", tenantB); err != nil {
+			return "", "check schema permissions", err
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantA); err != nil {
+			return "", "check app.tenant_id GUC", err
+		}
 		var count int
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM entities").Scan(&count); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM entities WHERE tenant_id IN ($1, $2)", tenantA, tenantB).Scan(&count); err != nil {
 			return "", "check RLS policies", err
 		}
 		if count != 1 {
