@@ -20,6 +20,12 @@ if [ "${FACTVAULT_BOOTSTRAP_AUTH:-1}" != "0" ]; then
 		' "$tmp"
 		rm -f "$tmp"
 	fi
+	if [ ! -s "$private_key" ] || [ ! -s "$public_key" ]; then
+		echo "entrypoint: failed to bootstrap JWT key pair (private or public key file is empty)" >&2
+		exit 1
+	fi
+	chmod 600 "$private_key"
+	chmod 644 "$public_key"
 	export FACTVAULT_JWT_PUBLIC_KEY="$public_key"
 	if [ "${FACTVAULT_EXPORT_JWT_PRIVATE_KEY:-0}" = "1" ]; then
 		export FACTVAULT_JWT_PRIVATE_KEY="$private_key"
