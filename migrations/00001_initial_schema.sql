@@ -314,7 +314,7 @@ DECLARE
     t TEXT;
 BEGIN
     FOREACH t IN ARRAY ARRAY[
-        'entities','properties','statements','relations','sources',
+        'entities','statements','relations','sources',
         'statement_sources','source_verifications','proposed_properties','dossiers'
     ] LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
@@ -326,6 +326,37 @@ BEGIN
     END LOOP;
 END;
 $$;
+
+ALTER TABLE properties ENABLE ROW LEVEL SECURITY;
+ALTER TABLE properties FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY properties_select_tenant_or_global ON properties
+FOR SELECT
+USING (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+    OR tenant_id IS NULL
+);
+
+CREATE POLICY properties_insert_tenant_only ON properties
+FOR INSERT
+WITH CHECK (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+);
+
+CREATE POLICY properties_update_tenant_only ON properties
+FOR UPDATE
+USING (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+)
+WITH CHECK (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+);
+
+CREATE POLICY properties_delete_tenant_only ON properties
+FOR DELETE
+USING (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+);
 
 CREATE POLICY tenant_isolation ON qualifiers
 USING (
