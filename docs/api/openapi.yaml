@@ -172,7 +172,8 @@ components:
           type: number
     GenerateBriefRequest:
       type: object
-      required: [source_kind, bundle]
+      required: [source_kind]
+      description: Bundle assembly happens server-side under the authenticated tenant. Client-supplied bundle JSON is rejected.
       properties:
         source_kind:
           type: string
@@ -180,13 +181,10 @@ components:
         entity_id:
           type: string
           format: uuid
-          description: required when source_kind is dossier
+          description: Required when source_kind is dossier.
         query:
           type: string
-          description: required when source_kind is story
-        bundle:
-          type: object
-          description: dossier/story bundle JSON payload
+          description: Required when source_kind is story.
     EvidenceBrief:
       type: object
       properties:

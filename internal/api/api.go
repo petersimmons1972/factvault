@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
@@ -9,17 +10,20 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/assembler"
 	"github.com/petersimmons1972/factvault/internal/auth"
 	"github.com/petersimmons1972/factvault/internal/briefs"
 	"github.com/petersimmons1972/factvault/internal/config"
+	"github.com/petersimmons1972/factvault/internal/db"
 	"github.com/petersimmons1972/factvault/internal/embed"
 	"github.com/petersimmons1972/factvault/internal/retrieval"
 	"github.com/petersimmons1972/factvault/internal/store"
@@ -150,18 +154,23 @@ func (s *Server) postFactsQuery(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) postBriefGenerate(w http.ResponseWriter, r *http.Request) {
 	var req briefs.GenerateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		if strings.Contains(err.Error(), `unknown field "bundle"`) {
+			fmt.Fprintf(os.Stderr, "rejected caller-supplied brief bundle: %v\n", err)
+		}
 		writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
 		return
 	}
 	claims := ClaimsFromContext(r.Context())
 	// A-10: validate that entity_id, if provided, belongs to the calling tenant.
 	if req.EntityID != nil {
-		var exists bool
-		err := s.Service.Pool.QueryRow(r.Context(),
-			"SELECT EXISTS(SELECT 1 FROM entities WHERE id=$1::uuid AND tenant_id=$2::uuid)",
-			*req.EntityID, claims.TenantID,
-		).Scan(&exists)
+		if _, err := uuid.Parse(*req.EntityID); err != nil {
+			writeProblem(w, http.StatusBadRequest, "bad request", "entity_id must be a valid UUID")
+			return
+		}
+		exists, err := s.entityBelongsToTenant(r.Context(), claims.TenantID, *req.EntityID)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -171,12 +180,68 @@ func (s *Server) postBriefGenerate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	rec, err := (briefs.Service{Pool: s.Service.Pool}).GenerateAndStore(r.Context(), claims.TenantID, req)
+	rec, err := (briefs.Service{
+		Pool: s.Service.Pool,
+		BundleLoader: briefs.BundleLoaderFunc(func(ctx context.Context, tenantID string, req briefs.GenerateRequest) (*assembler.Bundle, error) {
+			return s.assembleBriefBundle(ctx, tenantID, req)
+		}),
+	}).GenerateAndStore(r.Context(), claims.TenantID, req)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, rec)
+}
+
+func (s *Server) entityBelongsToTenant(ctx context.Context, tenantID, entityID string) (bool, error) {
+	var tenant pgtype.UUID
+	if err := tenant.Scan(tenantID); err != nil {
+		return false, fmt.Errorf("briefs/generate entity ownership: invalid tenant id: %w", err)
+	}
+	txCtx := db.WithPool(ctx, s.Service.Pool)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
+	if err != nil {
+		return false, fmt.Errorf("briefs/generate entity ownership: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			fmt.Fprintf(os.Stderr, "briefs/generate entity ownership rollback: %v\n", err)
+		}
+	}()
+
+	var exists bool
+	if err := tx.QueryRow(txCtx, "SELECT EXISTS(SELECT 1 FROM entities WHERE id=$1::uuid)", entityID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("briefs/generate entity ownership query: %w", err)
+	}
+	if err := tx.Commit(txCtx); err != nil {
+		return false, fmt.Errorf("briefs/generate entity ownership commit: %w", err)
+	}
+	return exists, nil
+}
+
+func (s *Server) assembleBriefBundle(ctx context.Context, tenantID string, req briefs.GenerateRequest) (*assembler.Bundle, error) {
+	switch req.SourceKind {
+	case briefs.SourceKindDossier:
+		if req.EntityID == nil || strings.TrimSpace(*req.EntityID) == "" {
+			return nil, fmt.Errorf("%w: dossier briefs require entity_id", briefs.ErrInvalidGenerateRequest)
+		}
+		resp, err := s.Service.Dossier(ctx, tenantID, *req.EntityID)
+		if err != nil {
+			return nil, err
+		}
+		return resp.Bundle, nil
+	case briefs.SourceKindStory:
+		if req.Query == nil || strings.TrimSpace(*req.Query) == "" {
+			return nil, fmt.Errorf("%w: story briefs require query", briefs.ErrInvalidGenerateRequest)
+		}
+		resp, err := s.Service.Story(ctx, tenantID, retrieval.StoryRequest{Query: *req.Query})
+		if err != nil {
+			return nil, err
+		}
+		return resp.Bundle, nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported source_kind %q", briefs.ErrInvalidGenerateRequest, req.SourceKind)
+	}
 }
 
 func (s *Server) getBriefs(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +303,8 @@ func writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, assembler.ErrEntityNotFound), errors.Is(err, pgx.ErrNoRows):
 		writeProblem(w, http.StatusNotFound, "not found", "")
+	case errors.Is(err, briefs.ErrInvalidGenerateRequest):
+		writeProblem(w, http.StatusBadRequest, "bad request", err.Error())
 	case errors.Is(err, assembler.ErrInvalidDepth), errors.Is(err, assembler.ErrInvalidEntityCount):
 		writeProblem(w, http.StatusBadRequest, "bad request", err.Error())
 	default:
