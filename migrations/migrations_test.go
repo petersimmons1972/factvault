@@ -223,10 +223,10 @@ func TestTenantScopedForeignKeysRejectCrossTenantReferences(t *testing.T) {
 		args  []any
 	}{
 		{
-			query: `INSERT INTO entities (id, tenant_id, label) VALUES
-				($1, $2, 'Tenant A Subject'),
-				($3, $2, 'Tenant A Value'),
-				($4, $5, 'Tenant B Entity')`,
+			query: `INSERT INTO entities (id, tenant_id, ext_id, label) VALUES
+				($1, $2, 'tenant-a-subject', 'Tenant A Subject'),
+				($3, $2, 'tenant-a-value', 'Tenant A Value'),
+				($4, $5, 'tenant-b-entity', 'Tenant B Entity')`,
 			args: []any{entityA1, tenantA, entityA2, entityB1, tenantB},
 		},
 		{
