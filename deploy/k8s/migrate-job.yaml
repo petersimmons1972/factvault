@@ -18,6 +18,12 @@ spec:
                 name: factvault-config
             - secretRef:
                 name: factvault-db-credentials
+            # Migrations create extensions and run DDL (CREATE EXTENSION
+            # pgcrypto/vector/pg_trgm, GRANTs), which the runtime app_user DSN
+            # above cannot do. FACTVAULT_MIGRATE_DATABASE_URL from this Secret
+            # takes precedence in cmd/factvault/migrate.go. See #272.
+            - secretRef:
+                name: factvault-migrate-credentials
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

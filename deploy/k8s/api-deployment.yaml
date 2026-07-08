@@ -23,6 +23,14 @@ spec:
                 name: factvault-config
             - secretRef:
                 name: factvault-db-credentials
+            # Migrations create extensions and run DDL (CREATE EXTENSION
+            # pgcrypto/vector/pg_trgm, GRANTs), which the runtime app_user DSN
+            # above cannot do. FACTVAULT_MIGRATE_DATABASE_URL from this Secret
+            # takes precedence in cmd/factvault/migrate.go; only this
+            # initContainer (and the standalone migrate Job) receive it —
+            # runtime containers stay on the app-user DSN only. See #272.
+            - secretRef:
+                name: factvault-migrate-credentials
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -59,6 +67,15 @@ spec:
             readOnlyRootFilesystem: true
             seccompProfile:
               type: RuntimeDefault
+          # readOnlyRootFilesystem: true above means the entrypoint's JWT auth
+          # bootstrap (see deploy/docker/entrypoint.sh, #271) needs a writable
+          # path for /var/lib/factvault/auth even though the rest of the root
+          # filesystem stays read-only. This container is the only one that
+          # runs "factvault api" — the one command the entrypoint bootstraps
+          # auth material for — so it is the only one that needs this mount.
+          volumeMounts:
+            - name: auth
+              mountPath: /var/lib/factvault/auth
           resources:
             requests:
               cpu: "100m"
@@ -80,6 +97,9 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 30
             failureThreshold: 3
+      volumes:
+        - name: auth
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
