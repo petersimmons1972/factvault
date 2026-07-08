@@ -82,12 +82,24 @@ func Load(root, name string) (*Example, error) {
 }
 
 // Insert persists the example into the database for the provided tenant.
+// All writes run inside one transaction with the app.tenant_id GUC set so the
+// tenant_isolation RLS policies pass on app_user (runtime DSN) connections,
+// not only on RLS-bypassing superuser connections.
 func (e *Example) Insert(ctx context.Context, pool *pgxpool.Pool, tenantID string) error {
 	if pool == nil {
 		return fmt.Errorf("nil database pool")
 	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after successful commit
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
+		return fmt.Errorf("set tenant context: %w", err)
+	}
 	for _, property := range e.Properties {
-		if _, err := pool.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO properties (id, tenant_id, slug, label, value_type, description)
 			VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''))
 			ON CONFLICT (tenant_id, slug) DO UPDATE SET label = EXCLUDED.label, value_type = EXCLUDED.value_type, description = EXCLUDED.description
@@ -96,13 +108,16 @@ func (e *Example) Insert(ctx context.Context, pool *pgxpool.Pool, tenantID strin
 		}
 	}
 	for _, seed := range e.Seeds {
-		if _, err := pool.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO entities (id, tenant_id, ext_id, label, type_uri, description)
 			VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), NULLIF($6, ''))
 			ON CONFLICT (tenant_id, ext_id) DO UPDATE SET label = EXCLUDED.label, type_uri = EXCLUDED.type_uri, description = EXCLUDED.description
 		`, uuid.NewString(), tenantID, seed.ExtID, seed.Label, seed.TypeURI, seed.Description); err != nil {
 			return fmt.Errorf("insert seed %s: %w", seed.Label, err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }
