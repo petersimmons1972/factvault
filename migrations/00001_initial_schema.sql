@@ -28,7 +28,8 @@ CREATE TABLE entities (
     meta        JSONB NOT NULL DEFAULT '{}',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_entities_tenant_ext_id UNIQUE NULLS NOT DISTINCT (tenant_id, ext_id)
+    CONSTRAINT uq_entities_tenant_ext_id UNIQUE NULLS NOT DISTINCT (tenant_id, ext_id),
+    CONSTRAINT uq_entities_tenant_id UNIQUE (tenant_id, id)
 );
 CREATE INDEX idx_entities_tenant ON entities (tenant_id);
 CREATE INDEX idx_entities_label ON entities (tenant_id, lower(label));
@@ -41,15 +42,16 @@ CREATE TABLE properties (
     label       TEXT NOT NULL,
     value_type  TEXT NOT NULL CHECK (value_type IN ('entity_ref', 'string', 'number', 'date', 'url')),
     description TEXT,
-    CONSTRAINT uq_properties_tenant_slug UNIQUE NULLS NOT DISTINCT (tenant_id, slug)
+    CONSTRAINT uq_properties_tenant_slug UNIQUE NULLS NOT DISTINCT (tenant_id, slug),
+    CONSTRAINT uq_properties_tenant_id UNIQUE (tenant_id, id)
 );
 
 CREATE TABLE statements (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id    UUID NOT NULL,
-    subject_id   UUID NOT NULL REFERENCES entities(id),
-    property_id  UUID NOT NULL REFERENCES properties(id),
-    val_entity   UUID REFERENCES entities(id),
+    subject_id   UUID NOT NULL,
+    property_id  UUID NOT NULL,
+    val_entity   UUID,
     val_text     TEXT,
     val_number   NUMERIC,
     val_date     TIMESTAMPTZ,
@@ -58,6 +60,11 @@ CREATE TABLE statements (
     confidence   NUMERIC(4,3) NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
     embedding    vector(1024),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_statements_tenant_id UNIQUE (tenant_id, id),
+    CONSTRAINT fk_statements_subject_tenant FOREIGN KEY (tenant_id, subject_id)
+        REFERENCES entities (tenant_id, id),
+    CONSTRAINT fk_statements_val_entity_tenant FOREIGN KEY (tenant_id, val_entity)
+        REFERENCES entities (tenant_id, id),
     CONSTRAINT chk_statement_value_populated CHECK (
         (val_entity IS NOT NULL)::int +
         (val_text IS NOT NULL)::int +
@@ -72,12 +79,14 @@ CREATE INDEX idx_statements_confidence ON statements (confidence DESC);
 
 CREATE TABLE qualifiers (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    statement_id UUID NOT NULL REFERENCES statements(id) ON DELETE CASCADE,
-    property_id  UUID NOT NULL REFERENCES properties(id),
+    statement_id UUID NOT NULL,
+    property_id  UUID NOT NULL,
     val_text     TEXT,
     val_number   NUMERIC,
     val_date     TIMESTAMPTZ,
-    val_entity   UUID REFERENCES entities(id),
+    val_entity   UUID,
+    CONSTRAINT fk_qualifiers_statement FOREIGN KEY (statement_id)
+        REFERENCES statements (id) ON DELETE CASCADE,
     CONSTRAINT chk_qualifier_value_populated CHECK (
         (val_entity IS NOT NULL)::int +
         (val_text IS NOT NULL)::int +
@@ -90,15 +99,22 @@ CREATE INDEX idx_qualifiers_statement ON qualifiers (statement_id);
 CREATE TABLE relations (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id    UUID NOT NULL,
-    source_id    UUID NOT NULL REFERENCES entities(id),
-    target_id    UUID NOT NULL REFERENCES entities(id),
+    source_id    UUID NOT NULL,
+    target_id    UUID NOT NULL,
     type         TEXT NOT NULL,
     weight       NUMERIC,
     confidence   NUMERIC(4,3) CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
     description  TEXT,
     embedding    vector(1024),
     meta         JSONB NOT NULL DEFAULT '{}',
-    statement_id UUID REFERENCES statements(id) ON DELETE CASCADE,
+    statement_id UUID,
+    CONSTRAINT uq_relations_tenant_id UNIQUE (tenant_id, id),
+    CONSTRAINT fk_relations_source_tenant FOREIGN KEY (tenant_id, source_id)
+        REFERENCES entities (tenant_id, id),
+    CONSTRAINT fk_relations_target_tenant FOREIGN KEY (tenant_id, target_id)
+        REFERENCES entities (tenant_id, id),
+    CONSTRAINT fk_relations_statement_tenant FOREIGN KEY (tenant_id, statement_id)
+        REFERENCES statements (tenant_id, id) ON DELETE CASCADE,
     CONSTRAINT uq_relations_tenant_source_target_type UNIQUE (tenant_id, source_id, target_id, type)
 );
 CREATE INDEX idx_relations_source ON relations (tenant_id, source_id);
@@ -122,7 +138,8 @@ CREATE TABLE sources (
     status           TEXT NOT NULL DEFAULT 'collected'
         CHECK (status IN ('collected', 'archived', 'extracted', 'verified', 'link-rot', 'content-changed')),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_sources_tenant_url UNIQUE (tenant_id, url)
+    CONSTRAINT uq_sources_tenant_url UNIQUE (tenant_id, url),
+    CONSTRAINT uq_sources_tenant_id UNIQUE (tenant_id, id)
 );
 CREATE INDEX idx_sources_tenant_status ON sources (tenant_id, status);
 CREATE INDEX idx_sources_last_verified ON sources (last_verified_at);
@@ -130,8 +147,8 @@ CREATE INDEX idx_sources_published_at ON sources (published_at);
 
 CREATE TABLE statement_sources (
     id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    statement_id         UUID NOT NULL REFERENCES statements(id) ON DELETE CASCADE,
-    source_id            UUID NOT NULL REFERENCES sources(id),
+    statement_id         UUID NOT NULL,
+    source_id            UUID NOT NULL,
     excerpt              TEXT NOT NULL,
     excerpt_offset_start INTEGER NOT NULL CHECK (excerpt_offset_start >= 0),
     excerpt_offset_end   INTEGER NOT NULL CHECK (excerpt_offset_end > excerpt_offset_start),
@@ -139,6 +156,10 @@ CREATE TABLE statement_sources (
     extracted_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     confidence           NUMERIC(4,3) CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
     tenant_id            UUID NOT NULL,
+    CONSTRAINT fk_statement_sources_statement_tenant FOREIGN KEY (tenant_id, statement_id)
+        REFERENCES statements (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_statement_sources_source_tenant FOREIGN KEY (tenant_id, source_id)
+        REFERENCES sources (tenant_id, id),
     CONSTRAINT uq_statement_sources_stmt_src UNIQUE (statement_id, source_id)
 );
 CREATE INDEX idx_stmt_sources_statement ON statement_sources (statement_id);
@@ -146,12 +167,14 @@ CREATE INDEX idx_stmt_sources_source ON statement_sources (source_id);
 
 CREATE TABLE source_verifications (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_id        UUID NOT NULL REFERENCES sources(id),
+    source_id        UUID NOT NULL,
     tenant_id        UUID NOT NULL,
     verified_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     status           TEXT NOT NULL CHECK (status IN ('live', 'link-rot', 'content-changed', 'excerpt-missing')),
     new_content_hash TEXT,
-    notes            TEXT
+    notes            TEXT,
+    CONSTRAINT fk_source_verifications_source_tenant FOREIGN KEY (tenant_id, source_id)
+        REFERENCES sources (tenant_id, id)
 );
 CREATE INDEX idx_source_verifications_source ON source_verifications (source_id, verified_at DESC);
 CREATE INDEX idx_source_verifications_status ON source_verifications (status, verified_at DESC);
@@ -177,11 +200,13 @@ CREATE TABLE proposed_properties (
     proposed_value_type TEXT NOT NULL CHECK (proposed_value_type IN ('entity_ref', 'string', 'number', 'date', 'url')),
     proposed_by         TEXT NOT NULL,
     example_excerpt     TEXT,
-    example_source_id   UUID REFERENCES sources(id),
+    example_source_id   UUID,
     status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
     reviewed_by         TEXT,
     reviewed_at         TIMESTAMPTZ,
     created_at          TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT fk_proposed_properties_source_tenant FOREIGN KEY (tenant_id, example_source_id)
+        REFERENCES sources (tenant_id, id),
     CONSTRAINT uq_proposed_properties_tenant_slug_status UNIQUE (tenant_id, proposed_slug, status)
 );
 CREATE INDEX idx_proposed_properties_tenant_status ON proposed_properties (tenant_id, status);
@@ -189,12 +214,95 @@ CREATE INDEX idx_proposed_properties_tenant_status ON proposed_properties (tenan
 CREATE TABLE dossiers (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id    UUID NOT NULL,
-    entity_id    UUID NOT NULL REFERENCES entities(id),
+    entity_id    UUID NOT NULL,
     assembled_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     bundle       JSONB NOT NULL,
+    CONSTRAINT fk_dossiers_entity_tenant FOREIGN KEY (tenant_id, entity_id)
+        REFERENCES entities (tenant_id, id),
     CONSTRAINT uq_dossiers_tenant_entity UNIQUE (tenant_id, entity_id)
 );
 CREATE INDEX idx_dossiers_tenant_assembled ON dossiers (tenant_id, assembled_at DESC);
+
+CREATE OR REPLACE FUNCTION enforce_statement_property_scope()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    property_tenant UUID;
+BEGIN
+    SELECT tenant_id INTO property_tenant
+    FROM properties
+    WHERE id = NEW.property_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'property % does not exist', NEW.property_id
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF property_tenant IS NOT NULL AND property_tenant <> NEW.tenant_id THEN
+        RAISE EXCEPTION 'tenant % cannot reference property % owned by tenant %', NEW.tenant_id, NEW.property_id, property_tenant
+            USING ERRCODE = '23503';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_statements_property_scope
+    BEFORE INSERT OR UPDATE OF tenant_id, property_id ON statements
+    FOR EACH ROW EXECUTE FUNCTION enforce_statement_property_scope();
+
+CREATE OR REPLACE FUNCTION enforce_qualifier_scope()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    statement_tenant UUID;
+    property_tenant  UUID;
+    entity_tenant    UUID;
+BEGIN
+    SELECT tenant_id INTO statement_tenant
+    FROM statements
+    WHERE id = NEW.statement_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'statement % does not exist', NEW.statement_id
+            USING ERRCODE = '23503';
+    END IF;
+
+    SELECT tenant_id INTO property_tenant
+    FROM properties
+    WHERE id = NEW.property_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'property % does not exist', NEW.property_id
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF property_tenant IS NOT NULL AND property_tenant <> statement_tenant THEN
+        RAISE EXCEPTION 'statement tenant % cannot reference property % owned by tenant %', statement_tenant, NEW.property_id, property_tenant
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF NEW.val_entity IS NOT NULL THEN
+        SELECT tenant_id INTO entity_tenant
+        FROM entities
+        WHERE id = NEW.val_entity;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'entity % does not exist', NEW.val_entity
+                USING ERRCODE = '23503';
+        END IF;
+
+        IF entity_tenant <> statement_tenant THEN
+            RAISE EXCEPTION 'statement tenant % cannot reference entity % owned by tenant %', statement_tenant, NEW.val_entity, entity_tenant
+                USING ERRCODE = '23503';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_qualifiers_scope
+    BEFORE INSERT OR UPDATE OF statement_id, property_id, val_entity ON qualifiers
+    FOR EACH ROW EXECUTE FUNCTION enforce_qualifier_scope();
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC;
