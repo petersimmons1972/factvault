@@ -327,6 +327,104 @@ func TestRLSRestrictedExtractOnceDoesNotHoldIdleTransactionDuringLLMCall(t *test
 	}
 }
 
+// TestRLSRestrictedExtractOnceReusesGlobalProperty (issue #269) verifies
+// that FactPipeline.ExtractOnce, running under a tenant-scoped app_user
+// transaction (RLS enforced, not BYPASSRLS), can locate and reuse an
+// existing global (tenant_id IS NULL) property when extracting a fact whose
+// slug matches a shared-vocabulary entry. Before the properties RLS fix
+// (migration 00008), the SELECT in ensureProperty (internal/workers/extract.go)
+// would never see the global row under RLS, so extraction would instead
+// create a duplicate tenant-scoped property with the same slug — defeating
+// shared vocabulary reuse.
+func TestRLSRestrictedExtractOnceReusesGlobalProperty(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.RestrictedPool(ctx, t, restrictedAppName)
+	assertRestrictedRoleNoBypassRLS(ctx, t, pool)
+
+	adminPool := testdb.New(t)
+	globalPropertyID := uuid.NewString()
+	const globalSlug = "sec_cik" // known catalog slug (vocabulary.defaultCatalog), resolves the same in strict or permissive mode.
+	if _, err := adminPool.Exec(ctx, `
+		INSERT INTO properties (id, tenant_id, slug, label, value_type)
+		VALUES ($1, NULL, $2, 'SEC CIK', 'string')
+	`, globalPropertyID, globalSlug); err != nil {
+		t.Fatalf("seed global property: %v", err)
+	}
+
+	tenantID := uuid.NewString()
+	sourceID := uuid.NewString()
+	rawText := "Acme Corp filed SEC CIK 0000320193 today."
+	excerpt := "0000320193"
+	offsetStart := strings.Index(rawText, excerpt)
+	if offsetStart < 0 {
+		t.Fatalf("excerpt %q not found in rawText %q", excerpt, rawText)
+	}
+	offsetEnd := offsetStart + len(excerpt)
+
+	withTenantTx(ctx, t, pool, tenantID, func(txCtx context.Context, tx pgx.Tx) {
+		if _, err := tx.Exec(txCtx, `
+			INSERT INTO sources (id, tenant_id, url, content_hash, raw_text, status, title)
+			VALUES ($1, $2::uuid, $3, $4, $5, 'archived', 'Acme SEC filing')
+		`, sourceID, tenantID, "https://example.com/restricted/extract-global-property", "extract-global-hash", rawText); err != nil {
+			t.Fatalf("insert archived source: %v", err)
+		}
+	})
+
+	pipeline := &workers.FactPipeline{
+		DB: pool,
+		Deterministic: fixedFactExtractor{facts: []extractors.ExtractedFact{
+			{
+				SubjectText:        "Acme Corp",
+				PropertySlug:       "SEC CIK",
+				Value:              excerpt,
+				ValueType:          "string",
+				Excerpt:            excerpt,
+				ExcerptOffsetStart: offsetStart,
+				ExcerptOffsetEnd:   offsetEnd,
+				ExtractionMethod:   "test-fixed",
+			},
+		}},
+	}
+
+	if err := pipeline.ExtractOnce(ctx, tenantID, 10); err != nil {
+		t.Fatalf("ExtractOnce: %v", err)
+	}
+
+	var statementCount int
+	var usedPropertyID string
+	if err := adminPool.QueryRow(ctx, `
+		SELECT count(*), max(property_id::text)
+		FROM statements
+		WHERE tenant_id = $1::uuid
+	`, tenantID).Scan(&statementCount, &usedPropertyID); err != nil {
+		t.Fatalf("query statements: %v", err)
+	}
+	if statementCount != 1 {
+		t.Fatalf("statement count=%d want 1", statementCount)
+	}
+	if usedPropertyID != globalPropertyID {
+		t.Fatalf("statement property_id=%s want global property %s (global property was not reused)", usedPropertyID, globalPropertyID)
+	}
+
+	var propertyRowsWithSlug int
+	if err := adminPool.QueryRow(ctx, `
+		SELECT count(*) FROM properties WHERE slug = $1
+	`, globalSlug).Scan(&propertyRowsWithSlug); err != nil {
+		t.Fatalf("count properties with slug: %v", err)
+	}
+	if propertyRowsWithSlug != 1 {
+		t.Fatalf("properties with slug %q=%d want 1 (extraction should not have cloned a tenant-scoped duplicate)", globalSlug, propertyRowsWithSlug)
+	}
+}
+
+type fixedFactExtractor struct {
+	facts []extractors.ExtractedFact
+}
+
+func (f fixedFactExtractor) Extract(context.Context, *db.Source, string) ([]extractors.ExtractedFact, error) {
+	return f.facts, nil
+}
+
 type legacySourcePipeline struct {
 	DB *pgxpool.Pool
 }
