@@ -11,6 +11,7 @@ RUN apk add --no-cache tini ca-certificates
 WORKDIR /app
 RUN mkdir -p /var/lib/factvault/auth && chown -R 65532:65532 /var/lib/factvault
 COPY --from=builder /factvault /usr/local/bin/factvault
+COPY --from=builder /app/config /app/config
 COPY --from=builder /app/migrations /app/migrations
 COPY --from=builder /app/examples /app/examples
 COPY --chmod=0555 deploy/docker/entrypoint.sh /usr/local/bin/factvault-entrypoint
