@@ -91,19 +91,25 @@ func TestDockerComposeRSSFeedsContract(t *testing.T) {
 	}
 }
 
-func TestK8sCollectCronJobRunsRSSContract(t *testing.T) {
+func TestK8sRSSCronJobRunsRSSContract(t *testing.T) {
 	t.Parallel()
 
-	cronData, err := os.ReadFile("k8s/collect-worker-cronjob.yaml")
+	cronData, err := os.ReadFile("k8s/rss-worker-cronjob.yaml")
 	if err != nil {
-		t.Fatalf("read deploy/k8s/collect-worker-cronjob.yaml: %v", err)
+		t.Fatalf("read deploy/k8s/rss-worker-cronjob.yaml: %v", err)
 	}
 	cron := string(cronData)
 
+	if !strings.Contains(cron, "name: factvault-rss") {
+		t.Fatal("k8s RSS CronJob must be named factvault-rss so operators do not confuse it with the retired collect stub")
+	}
+	if strings.Contains(cron, "name: factvault-collect") {
+		t.Fatal("k8s RSS CronJob still uses the retired factvault-collect name")
+	}
 	if !strings.Contains(cron, `"rss", "--once"`) {
-		t.Fatal("k8s collect CronJob must run `worker rss --once` (real feed ingestion), not the static `worker collect` stub — see issue #276")
+		t.Fatal("k8s RSS CronJob must run `worker rss --once` (real feed ingestion), not the static `worker collect` stub — see issue #276")
 	}
 	if strings.Contains(cron, `"collect",`) {
-		t.Fatal("k8s collect CronJob still references the static `worker collect` stub — see issue #276")
+		t.Fatal("k8s RSS CronJob still references the static `worker collect` stub — see issue #276")
 	}
 }

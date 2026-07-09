@@ -8,7 +8,7 @@ import (
 
 func TestK8sWorkerCronJobsIncludeTenantArg(t *testing.T) {
 	files := []string{
-		"k8s/collect-worker-cronjob.yaml",
+		"k8s/rss-worker-cronjob.yaml",
 		"k8s/archive-worker-cronjob.yaml",
 		"k8s/extract-worker-cronjob.yaml",
 		"k8s/corroborate-worker-cronjob.yaml",
@@ -33,7 +33,7 @@ func TestK8sWorkerCronJobsIncludeTenantArg(t *testing.T) {
 
 func TestK8sWorkerCronJobsIncludeMigrationInitContainer(t *testing.T) {
 	files := []string{
-		"k8s/collect-worker-cronjob.yaml",
+		"k8s/rss-worker-cronjob.yaml",
 		"k8s/archive-worker-cronjob.yaml",
 		"k8s/extract-worker-cronjob.yaml",
 		"k8s/corroborate-worker-cronjob.yaml",
@@ -78,7 +78,7 @@ func TestK8sConfigMapDefinesTenantID(t *testing.T) {
 
 func TestK8sWorkerCronJobsConcurrencyPolicy(t *testing.T) {
 	files := []string{
-		"k8s/collect-worker-cronjob.yaml",
+		"k8s/rss-worker-cronjob.yaml",
 		"k8s/archive-worker-cronjob.yaml",
 		"k8s/extract-worker-cronjob.yaml",
 		"k8s/corroborate-worker-cronjob.yaml",
@@ -98,7 +98,7 @@ func TestK8sWorkerCronJobsConcurrencyPolicy(t *testing.T) {
 
 func TestK8sWorkerCronJobsHaveResourceLimits(t *testing.T) {
 	files := []string{
-		"k8s/collect-worker-cronjob.yaml",
+		"k8s/rss-worker-cronjob.yaml",
 		"k8s/archive-worker-cronjob.yaml",
 		"k8s/extract-worker-cronjob.yaml",
 		"k8s/corroborate-worker-cronjob.yaml",
@@ -121,7 +121,7 @@ func TestK8sWorkerCronJobsHaveResourceLimits(t *testing.T) {
 
 func TestK8sWorkerCronJobsHaveSecurityContextHardening(t *testing.T) {
 	files := []string{
-		"k8s/collect-worker-cronjob.yaml",
+		"k8s/rss-worker-cronjob.yaml",
 		"k8s/archive-worker-cronjob.yaml",
 		"k8s/extract-worker-cronjob.yaml",
 		"k8s/corroborate-worker-cronjob.yaml",
