@@ -90,3 +90,20 @@ func TestDockerComposeRSSFeedsContract(t *testing.T) {
 		t.Fatal("docker-compose.yml runs `factvault worker rss --once` using the default config/feeds.yaml, so deploy/docker/Dockerfile must copy /app/config into the runtime image or Compose must set FACTVAULT_FEEDS_PATH explicitly")
 	}
 }
+
+func TestK8sCollectCronJobRunsRSSContract(t *testing.T) {
+	t.Parallel()
+
+	cronData, err := os.ReadFile("k8s/collect-worker-cronjob.yaml")
+	if err != nil {
+		t.Fatalf("read deploy/k8s/collect-worker-cronjob.yaml: %v", err)
+	}
+	cron := string(cronData)
+
+	if !strings.Contains(cron, `"rss", "--once"`) {
+		t.Fatal("k8s collect CronJob must run `worker rss --once` (real feed ingestion), not the static `worker collect` stub — see issue #276")
+	}
+	if strings.Contains(cron, `"collect",`) {
+		t.Fatal("k8s collect CronJob still references the static `worker collect` stub — see issue #276")
+	}
+}
