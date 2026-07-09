@@ -16,6 +16,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # golangci-lint-action only-new-issues needs the base commit to diff
+          # against; a shallow clone makes its patch-fetch 404 and fall back to a
+          # whole-repo scan that fails on pre-existing lint debt.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
