@@ -26,7 +26,7 @@ func indexOfContainersBlock(manifest string) int {
 // factvault-migrate initContainer ahead of their main workload container.
 var migrateInitContainerManifests = []string{
 	"k8s/api-deployment.yaml",
-	"k8s/collect-worker-cronjob.yaml",
+	"k8s/rss-worker-cronjob.yaml",
 	"k8s/archive-worker-cronjob.yaml",
 	"k8s/extract-worker-cronjob.yaml",
 	"k8s/corroborate-worker-cronjob.yaml",

@@ -48,7 +48,7 @@ func TestK8sAPIDeploymentMountsWritableAuthVolume(t *testing.T) {
 func TestK8sMigrateAndWorkerStepsHaveNoAuthVolume(t *testing.T) {
 	files := []string{
 		"k8s/migrate-job.yaml",
-		"k8s/collect-worker-cronjob.yaml",
+		"k8s/rss-worker-cronjob.yaml",
 		"k8s/archive-worker-cronjob.yaml",
 		"k8s/extract-worker-cronjob.yaml",
 		"k8s/corroborate-worker-cronjob.yaml",
