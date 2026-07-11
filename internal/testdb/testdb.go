@@ -46,9 +46,13 @@ func init() { //nolint:gochecknoinits // the re-executed test binary must become
 	}
 	container := os.Getenv("TESTDB_CONTAINER")
 	volume := os.Getenv("TESTDB_VOLUME")
-	_, _ = io.Copy(io.Discard, os.NewFile(3, "testdb-parent"))
+	if _, err := io.Copy(io.Discard, os.NewFile(3, "testdb-parent")); err != nil {
+		fmt.Fprintf(os.Stderr, "testdb guardian: parent pipe read: %v\n", err)
+	}
 	for _, command := range dockerCleanupCommands(container, volume) {
-		_ = runDockerCommand(command...)
+		if err := runDockerCommand(command...); err != nil {
+			fmt.Fprintf(os.Stderr, "testdb guardian: cleanup %v: %v\n", command, err)
+		}
 	}
 	os.Exit(0)
 }
@@ -176,12 +180,18 @@ func startCleanupGuardian(containerName, dataVolumeName string) error {
 		"TESTDB_VOLUME="+dataVolumeName,
 	)
 	if err := cmd.Start(); err != nil {
-		_ = reader.Close()
-		_ = writer.Close()
+		if cerr := reader.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "testdb guardian: reader close after failed start: %v\n", cerr)
+		}
+		if cerr := writer.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "testdb guardian: writer close after failed start: %v\n", cerr)
+		}
 		return fmt.Errorf("start testdb cleanup guardian: %w", err)
 	}
 	if err := reader.Close(); err != nil {
-		_ = writer.Close()
+		if cerr := writer.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "testdb guardian: writer close after reader-close failure: %v\n", cerr)
+		}
 		return fmt.Errorf("close parent guardian reader: %w", err)
 	}
 	guardianPipe = writer
