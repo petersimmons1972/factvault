@@ -81,7 +81,9 @@ You are the execution engine. The coordinator (Claude) opens GitHub Issues descr
 Before claiming any issue:
 1. `docs/codex/onboarding.md` — full execution loop protocol
 2. `docs/codex/toolchain.md` — mandatory Go toolchain + invocation order
-3. `.agent-comms/README.md` — message bus schema and semantics
+
+(The old `.agent-comms` message bus was retired 2026-05-28 — dispatch is now
+issue-driven; see `.agent-comms/ABANDONED.md` for history.)
 
 ## Protected files
 
@@ -92,7 +94,6 @@ not modify them unless the issue explicitly authorizes it:
 - `CLAUDE.md` (if present)
 - `docs/codex/onboarding.md`
 - `.github/**`
-- `.agent-comms/README.md`, `.agent-comms/schema.json`
 
 ## Test-before-commit
 
