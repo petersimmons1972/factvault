@@ -103,6 +103,11 @@ jobs:
       - name: Test (race)
         run: go test -race ./... -count=1
 
+      - name: Test database leak gate
+        env:
+          TESTDB_LEAK_GATE: "1"
+        run: go test ./internal/testdb -run '^TestNoTestDBLeaks$' -count=1
+
   embedder:
     name: embedder pytest
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt generate migrate setup pr-watch
+.PHONY: build test testdb-leak-gate lint fmt generate migrate setup pr-watch
 
 BINARY := factvault
 # Migrations need superuser privileges (CREATE EXTENSION); FACTVAULT_MIGRATE_DATABASE_URL is the
@@ -10,6 +10,10 @@ build:
 
 test:
 	go test ./... -count=1
+	$(MAKE) testdb-leak-gate
+
+testdb-leak-gate:
+	TESTDB_LEAK_GATE=1 go test ./internal/testdb -run '^TestNoTestDBLeaks$$' -count=1
 
 lint:
 	go vet ./...
