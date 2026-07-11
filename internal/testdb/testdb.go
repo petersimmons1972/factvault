@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"net"
 	neturl "net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,16 +26,36 @@ import (
 )
 
 var (
-	once     sync.Once
-	startErr error
-	contName string
-	dsn      string
+	once         sync.Once
+	startErr     error
+	contName     string
+	volumeName   string
+	dsn          string
+	cleanupOnce  sync.Once
+	guardianPipe *os.File
 )
 
 const (
 	restrictedRoleUser     = "factvault_app"
 	restrictedRolePassword = "factvault_app" //nolint:gosec // test-only fixed password for a throwaway restricted role
 )
+
+func init() { //nolint:gochecknoinits // the re-executed test binary must become the cleanup guardian before TestMain
+	if os.Getenv("TESTDB_CLEANUP_GUARDIAN") != "1" {
+		return
+	}
+	container := os.Getenv("TESTDB_CONTAINER")
+	volume := os.Getenv("TESTDB_VOLUME")
+	if _, err := io.Copy(io.Discard, os.NewFile(3, "testdb-parent")); err != nil {
+		fmt.Fprintf(os.Stderr, "testdb guardian: parent pipe read: %v\n", err)
+	}
+	for _, command := range dockerCleanupCommands(container, volume) {
+		if err := runDockerCommand(command...); err != nil {
+			fmt.Fprintf(os.Stderr, "testdb guardian: cleanup %v: %v\n", command, err)
+		}
+	}
+	os.Exit(0)
+}
 
 // StartContainer launches a shared PostgreSQL container for tests in this process.
 func StartContainer() {
@@ -48,22 +70,24 @@ func StartContainer() {
 
 		repository, tag := postgresImage()
 		contName = fmt.Sprintf("factvault-testdb-%d", time.Now().UnixNano())
+		volumeName = contName
 		image := fmt.Sprintf("%s:%s", repository, tag)
-		err = runDockerCommand(
-			"run", "-d",
-			"--name", contName,
-			"--rm",
-			"-p", "127.0.0.1::5432",
-			"-e", "POSTGRES_USER=factvault_test",
-			"-e", "POSTGRES_PASSWORD=factvault_test",
-			"-e", "POSTGRES_DB=factvault_test",
-			"-e", "POSTGRES_INITDB_ARGS=--no-sync",
-			image,
-		)
+		err = runDockerCommand(dockerRunArgs(contName, volumeName, image)...)
 		if err != nil {
 			startErr = err
 			return
 		}
+		if err := startCleanupGuardian(contName, volumeName); err != nil {
+			startErr = err
+			return
+		}
+		installSignalCleanup()
+		started := false
+		defer func() {
+			if !started {
+				StopContainer()
+			}
+		}()
 		hostPort, err := dockerMappedPort(contName, "5432/tcp")
 		if err != nil {
 			startErr = err
@@ -119,17 +143,154 @@ GRANT USAGE ON SCHEMA public TO `+restrictedRoleUser+`;
 			startErr = err
 			return
 		}
+		started = true
 	})
 }
 
 // StopContainer stops and removes the shared PostgreSQL test container.
 func StopContainer() {
-	if contName != "" {
-		if err := runDockerCommand("rm", "-f", contName); err != nil {
-			fmt.Fprintf(os.Stderr, "remove container: %v\n", err)
+	cleanupOnce.Do(func() {
+		for _, command := range dockerCleanupCommands(contName, volumeName) {
+			if err := runDockerCommand(command...); err != nil {
+				fmt.Fprintf(os.Stderr, "testdb cleanup: %v\n", err)
+			}
+		}
+		if guardianPipe != nil {
+			if err := guardianPipe.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "close testdb cleanup guardian: %v\n", err)
+			}
+			guardianPipe = nil
 		}
 		contName = ""
+		volumeName = ""
+	})
+}
+
+func startCleanupGuardian(containerName, dataVolumeName string) error {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("create testdb cleanup guardian pipe: %w", err)
 	}
+	cmd := exec.Command(os.Args[0]) //nolint:gosec // re-executes the current trusted test binary as a cleanup guardian
+	cmd.ExtraFiles = []*os.File{reader}
+	cmd.Env = append(
+		os.Environ(),
+		"TESTDB_CLEANUP_GUARDIAN=1",
+		"TESTDB_CONTAINER="+containerName,
+		"TESTDB_VOLUME="+dataVolumeName,
+	)
+	if err := cmd.Start(); err != nil {
+		if cerr := reader.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "testdb guardian: reader close after failed start: %v\n", cerr)
+		}
+		if cerr := writer.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "testdb guardian: writer close after failed start: %v\n", cerr)
+		}
+		return fmt.Errorf("start testdb cleanup guardian: %w", err)
+	}
+	if err := reader.Close(); err != nil {
+		if cerr := writer.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "testdb guardian: writer close after reader-close failure: %v\n", cerr)
+		}
+		return fmt.Errorf("close parent guardian reader: %w", err)
+	}
+	guardianPipe = writer
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			fmt.Fprintf(os.Stderr, "testdb cleanup guardian: %v\n", err)
+		}
+	}()
+	return nil
+}
+
+func dockerRunArgs(containerName, dataVolumeName, image string) []string {
+	return []string{
+		"run", "-d", "--rm",
+		"--name", containerName,
+		"--mount", "type=volume,source=" + dataVolumeName + ",target=/var/lib/postgresql/data",
+		"-p", "127.0.0.1::5432",
+		"-e", "POSTGRES_USER=factvault_test",
+		"-e", "POSTGRES_PASSWORD=factvault_test",
+		"-e", "POSTGRES_DB=factvault_test",
+		"-e", "POSTGRES_INITDB_ARGS=--no-sync",
+		image,
+	}
+}
+
+func dockerCleanupCommands(containerName, dataVolumeName string) [][]string {
+	commands := [][]string{}
+	if containerName != "" {
+		commands = append(commands, []string{"rm", "-f", "-v", containerName})
+	}
+	if dataVolumeName != "" {
+		commands = append(commands, []string{"volume", "rm", "-f", dataVolumeName})
+	}
+	return commands
+}
+
+func installSignalCleanup() {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	go func() {
+		sig := <-signals
+		StopContainer()
+		signal.Stop(signals)
+		if unixSignal, ok := sig.(syscall.Signal); ok {
+			os.Exit(128 + int(unixSignal))
+		}
+		os.Exit(1)
+	}()
+}
+
+type resourceLister interface {
+	listContainers() ([]string, error)
+	listVolumes() ([]string, error)
+}
+
+type dockerResourceLister struct{}
+
+func (dockerResourceLister) listContainers() ([]string, error) {
+	return dockerNames("ps", "-a", "--filter", "name=^/factvault-testdb-", "--format", "{{.Names}}")
+}
+
+func (dockerResourceLister) listVolumes() ([]string, error) {
+	return dockerNames("volume", "ls", "--filter", "name=^factvault-testdb-", "--format", "{{.Name}}")
+}
+
+func dockerNames(args ...string) ([]string, error) {
+	cmd := exec.Command("docker", args...) //nolint:gosec // fixed Docker inspection arguments used only by the test harness
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	output := strings.TrimSpace(string(out))
+	if output == "" {
+		return []string{}, nil
+	}
+	return strings.Split(output, "\n"), nil
+}
+
+func findTestDBLeaks(lister resourceLister) ([]string, error) {
+	containers, err := lister.listContainers()
+	if err != nil {
+		return nil, fmt.Errorf("list testdb containers: %w", err)
+	}
+	volumes, err := lister.listVolumes()
+	if err != nil {
+		return nil, fmt.Errorf("list testdb volumes: %w", err)
+	}
+	leaks := []string{}
+	for _, name := range containers {
+		if strings.HasPrefix(name, "factvault-testdb-") {
+			leaks = append(leaks, "container "+name)
+		}
+	}
+	for _, name := range volumes {
+		if strings.HasPrefix(name, "factvault-testdb-") {
+			leaks = append(leaks, "volume "+name)
+		}
+	}
+	return leaks, nil
 }
 
 // New returns a pgx pool connected to the current test database.
