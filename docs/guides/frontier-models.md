@@ -24,6 +24,7 @@ Set the endpoint, model, and API key deliberately:
 export FACTVAULT_LLM_BASE_URL='https://api.openai.com/v1'
 export FACTVAULT_LLM_MODEL='gpt-4o-mini'
 export FACTVAULT_LLM_API_KEY='...'
+# For mounted secrets, prefer FACTVAULT_LLM_API_KEY_FILE=/run/secrets/llm-api-key.
 ```
 
 Then restart the extract worker or API process that owns the LLM client.
@@ -88,7 +89,7 @@ to the environment variables above and take precedence over them:
 | `--llm-provider` | -- | Provider hint: `local` or `openai` |
 | `--llm-model` | `FACTVAULT_LLM_MODEL` | Model name (e.g. `llama3.1:8b`, `gpt-4o-mini`) |
 | `--llm-base-url` | `FACTVAULT_LLM_BASE_URL`, `FACTVAULT_LLM_URL` | OpenAI-compatible base URL; `FACTVAULT_LLM_URL` is the deprecated fallback |
-| `--llm-api-key` | `FACTVAULT_LLM_API_KEY` | API key for hosted endpoints |
+| API key | `FACTVAULT_LLM_API_KEY`, `FACTVAULT_LLM_API_KEY_FILE` | Environment-only secret; no CLI flag is exposed |
 | `--confirm-cost` | -- | Confirm extraction batches above the guardrail threshold |
 | `--llm-cost-guardrail-threshold` | -- | Paid extractions per run that require confirmation (default: 1000) |
 
@@ -100,7 +101,6 @@ Example with flags:
   --llm-provider openai \
   --llm-model gpt-4o-mini \
   --llm-base-url https://api.openai.com/v1 \
-  --llm-api-key "$OPENAI_API_KEY" \
   --confirm-cost \
   --limit 25
 ```

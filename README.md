@@ -76,7 +76,7 @@ go build -o bin/factvault ./cmd/factvault
 # init (and everything after it) runs as app_user via FACTVAULT_DATABASE_URL —
 # matches production, exercises the GRANTs. Do not pass password-bearing DSNs
 # via --dsn: the flag rejects embedded passwords by design; use the env var.
-./bin/factvault init --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault init --skip-migrate --tenant "$FACTVAULT_DEV_TENANT_ID"
 
 # Load a bundled example and assemble its first dossier.
 ./bin/factvault example load ai-startup-tracking \

@@ -46,7 +46,7 @@ progress in others.
   --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
-The embedder URL defaults to `http://localhost:8080` (or `FACTVAULT_EMBEDDER_URL`). Override
+The embedder URL defaults to `http://localhost:8081` (or `FACTVAULT_EMBEDDER_URL`). Override
 explicitly when running outside the default port:
 
 ```bash
@@ -61,8 +61,9 @@ Output:
 embed: populated=47 skipped=0
 ```
 
-The command is fully idempotent: run it multiple times and rows with existing embeddings are
-counted as `skipped`, not re-embedded.
+The command is idempotent: rows with existing embeddings are excluded from the query and are not
+re-embedded. A completed rerun normally reports `populated=0 skipped=0`; `skipped` does not count
+already-populated rows.
 
 ---
 
@@ -70,7 +71,7 @@ counted as `skipped`, not re-embedded.
 
 | Flag | Default | Env var | Description |
 |------|---------|---------|-------------|
-| `--embedder-url` | `http://localhost:8080` | `FACTVAULT_EMBEDDER_URL` | Embedder service base URL |
+| `--embedder-url` | `http://localhost:8081` | `FACTVAULT_EMBEDDER_URL` | Embedder service base URL |
 | `--tenant` | required | -- | Tenant UUID |
 | `--dsn` | -- | `FACTVAULT_DATABASE_URL` | Postgres DSN |
 | `--limit` | `100` | -- | Max rows per table per run (inherited from `worker` persistent flags) |
@@ -92,7 +93,8 @@ embedder as `WARN` or `FAIL` until the model finishes loading.
 
 The `embed.Client` (`internal/embed/client.go`) calls `POST /embed` and converts the returned
 `[][]float64` to `[][]float32` for pgvector storage. If the embedder returns a non-200 status,
-`worker embed` exits with an error and no rows are written.
+`worker embed` exits with an error. Each table commits separately, so embeddings written for an
+earlier table remain if a later table fails; rerun after remediation to continue the backfill.
 
 ---
 

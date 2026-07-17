@@ -51,7 +51,8 @@ Use `.env.example` as the compose-oriented baseline. Use localhost hostnames whe
 2. Start Postgres and embedder: `docker compose up -d postgres embedder`.
 3. Build the binary: `go build -o bin/factvault ./cmd/factvault`.
 4. Run migrations: `./bin/factvault migrate`.
-5. Generate JWT keys and initialize the deployment with `./bin/factvault init`; unlike `auth keys`,
+5. Generate JWT keys and initialize the deployment with `./bin/factvault init --skip-migrate`;
+   unlike `auth keys`,
    `init` writes `.local/private.pem` and `.local/public.pem` for the later API steps.
 6. Run `./bin/factvault doctor` and resolve every failing check that applies to your deployment.
 7. Load an example with `./bin/factvault example load <name>`.

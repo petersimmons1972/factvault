@@ -39,7 +39,7 @@ Every field is validated against the `FeedSpec` struct in `internal/collectors/f
 feeds:
   - name: "CISA Alerts"            # string, human-readable label (optional)
     url: "https://..."             # string, REQUIRED: full RSS/Atom feed URL
-    tenant: "uuid-here"            # string, optional when --tenant or FACTVAULT_DEV_TENANT_ID is set
+    tenant: "uuid-here"            # string, REQUIRED by the current scheduler
     topic: "threat-intelligence"   # string, free-form topic tag (optional)
     tags: ["cisa", "security"]     # []string, free-form tag list (optional)
     interval: "15m"               # string, Go duration format (optional; falls back to --interval)
@@ -50,7 +50,7 @@ Field details:
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `url` | string | yes | Full URL to RSS or Atom feed |
-| `tenant` | string | no | UUID of the tenant to collect into; overridden by `--tenant`, with `FACTVAULT_DEV_TENANT_ID` as the final fallback |
+| `tenant` | string | yes | UUID used to schedule the feed; `--tenant` may override it during collection |
 | `name` | string | no | Human-readable label for logs |
 | `topic` | string | no | Free-form topic string stored with the source |
 | `tags` | []string | no | Free-form tag list |
@@ -59,8 +59,9 @@ Field details:
 **Valid interval formats:** any string accepted by Go's `time.ParseDuration`: `15m`, `1h30m`,
 `30s`, `24h`, etc. Negative or zero durations fall back to the `--interval` default.
 
-Tenant resolution is explicit: `--tenant` overrides every feed, otherwise the feed's YAML `tenant`
-is used, then `FACTVAULT_DEV_TENANT_ID`. A feed with none of those configured fails loudly.
+The current scheduler drops feeds with an empty YAML `tenant` before command-line or environment
+fallbacks are applied. Keep a tenant in every feed. `--tenant` can override that configured value
+during collection, but it does not make a tenantless feed schedulable.
 
 ---
 
@@ -94,10 +95,10 @@ Run in loop mode (default) with a 15-minute minimum interval between polls:
 | `--once` | `false` | Run one polling cycle then exit |
 | `--interval` | `15m` | Default polling interval for feeds without an explicit `interval` field |
 | `--dsn` | `FACTVAULT_DATABASE_URL` | Postgres DSN |
-| `--tenant` | per-feed tenant, then `FACTVAULT_DEV_TENANT_ID` | Override tenant for every configured feed |
+| `--tenant` | per-feed tenant | Override tenant for every feed that already has a YAML tenant |
 
-The `--tenant` persistent flag is optional. When present it overrides every feed's YAML tenant;
-otherwise each feed tenant is used, with `FACTVAULT_DEV_TENANT_ID` as the final fallback.
+The `--tenant` persistent flag is optional. When present it overrides every scheduled feed's YAML
+tenant. It does not rescue a feed with a missing YAML tenant, because scheduling happens first.
 
 ---
 

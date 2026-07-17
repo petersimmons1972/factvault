@@ -21,8 +21,8 @@ produces is URLs with collected HTML, each tagged `status='collected'` and `meta
 
 After that point the research package is done. It cannot touch:
 
-- **ExtractOnce** -- which calls the LLM extractor to produce facts. The research package cannot
-  invoke it and cannot influence its inputs.
+- **ExtractOnce** -- which calls the LLM extractor to propose facts. Research selects which source
+  documents enter the pipeline, but it cannot invoke extraction or bypass its validation gates.
 - **Excerpt-offset verification** -- the deterministic gate that rejects LLM-fabricated excerpts.
 - **Confidence** -- computed deterministically from independent source count; never settable by the
   acquisition layer.
@@ -36,8 +36,9 @@ If acquisition could write to the truth layer, a search-planning model could pro
 unverified output into facts, bypassing excerpt verification and independent-source confidence.
 The one-way package boundary prevents that failure mode.
 
-**An LLM decides what to research and how to file it as a source. An LLM never decides what is
-true, what an excerpt says, or what the confidence of a fact is.**
+**An LLM decides what to research and proposes extracted facts and excerpts. Deterministic checks
+require the excerpt to exist at the claimed offset, and the LLM cannot write truth-layer rows or
+set fact confidence directly.**
 
 ---
 
@@ -78,9 +79,16 @@ Total LLM calls per run: exactly 2, regardless of scale parameters.
 
 ## Usage
 
+`worker research` requires a reachable SearXNG instance; factvault does not bundle one. Set
+`FACTVAULT_SEARXNG_URL` to your operator-managed base URL and verify its `/search` endpoint before
+starting a run. The built-in example-domain value is a placeholder, not an operational service.
+
 ```bash
+export FACTVAULT_SEARXNG_URL='https://search.example.net'
+
 ./bin/factvault worker research "Acme Corp" \
   --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --searxng-url "$FACTVAULT_SEARXNG_URL" \
   --llm-base-url http://localhost:11434/v1 \
   --llm-model llama3.1:8b
 ```
@@ -111,6 +119,7 @@ These flags control how much work one run does. All have conservative defaults.
 | `--results-per-query` | `5` | Search results fetched per query |
 | `--max-fetches` | `40` | Hard ceiling on page fetches per run |
 | `--entity-type` | `""` | Entity type hint (e.g. `Person`, `City`, `Company`) |
+| `--searxng-url` | `FACTVAULT_SEARXNG_URL` | Operator-managed SearXNG base URL; configure explicitly |
 
 The `--max-fetches` flag is a hard guarantee, not a soft suggestion. The `SearchCollector` tracks
 a live fetch counter and stops mid-query if the ceiling is reached, regardless of how many queries

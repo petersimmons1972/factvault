@@ -63,7 +63,7 @@ go build -o bin/factvault ./cmd/factvault
 ./bin/factvault migrate
 # init (and everything after it) runs as app_user via FACTVAULT_DATABASE_URL —
 # matches production, exercises the GRANTs.
-./bin/factvault init --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault init --skip-migrate --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
 `init` generates JWT keys in `.local/`, runs the doctor health checks, and loads the default example. Keys are written only if they do not exist yet. The awk key-splitting step from older guides is no longer required — `init` writes `private.pem` and `public.pem` directly.
@@ -154,8 +154,8 @@ A successful response contains an entity bundle for the loaded example entity.
 After the initial dossier works, run the source pipeline against a tenant.
 
 If you opened a new shell for these commands, re-export `FACTVAULT_DATABASE_URL` with the runtime
-`app_user` DSN from step 1. Runtime commands read that environment variable; do not pass its
-password-bearing value through `--dsn`.
+`app_user` DSN from step 1, and re-export `FACTVAULT_DEV_TENANT_ID`. Runtime commands read those
+environment variables; do not pass a password-bearing DSN through `--dsn`.
 
 **Source population** -- choose one or combine:
 

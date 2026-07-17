@@ -25,7 +25,7 @@ Run goose database migrations (schema up).
 
 | Flag | Default | Env var | Description |
 |------|---------|---------|-------------|
-| `--dsn` | -- | `FACTVAULT_DATABASE_URL` | Postgres DSN |
+| `--dsn` | -- | `FACTVAULT_MIGRATE_DATABASE_URL`, then `FACTVAULT_DATABASE_URL` | Postgres DSN; migration credential takes precedence |
 
 **Note:** `factvault migrate` requires CREATE EXTENSION privileges (pgvector, pg_trgm). Use the
 superuser DSN `FACTVAULT_MIGRATE_DATABASE_URL` for this command. All other workers and the API
@@ -49,9 +49,13 @@ loads an example domain.
 | `--key-dir` | `.local` | -- | Directory to write `private.pem` / `public.pem` |
 | `--example` | `ai-startup-tracking` | -- | Example name to load; set to empty string to skip |
 | `--skip-example` | `false` | -- | Skip example data loading |
+| `--skip-migrate` | `false` | -- | Skip migrations when they were already run with the privileged migration DSN |
 
 `init` is idempotent: if keys already exist in `--key-dir`, key generation is skipped. If the
 example is already loaded, `example.Insert` is a no-op (INSERT ... WHERE NOT EXISTS).
+By default `init` also attempts migrations using its resolved runtime DSN. When migrations were
+already run with `FACTVAULT_MIGRATE_DATABASE_URL`, pass `--skip-migrate` so initialization remains
+on the restricted app-user connection.
 
 ---
 
@@ -104,11 +108,10 @@ Run the MCP server over stdio (for Claude Desktop, Cursor, or any MCP-compatible
 |------|---------|---------|-------------|
 | `--dsn` | -- | `FACTVAULT_DATABASE_URL` | Postgres DSN |
 | `--jwt-public-key` | -- | `FACTVAULT_JWT_PUBLIC_KEY` | Path to PEM public key for JWT verification |
-| `--auth-token` | -- | `FACTVAULT_MCP_AUTH_TOKEN` | Optional default Bearer token for MCP clients that cannot set per-tool authorization |
+| auth token | required | `FACTVAULT_MCP_AUTH_TOKEN`, `FACTVAULT_MCP_AUTH_TOKEN_FILE` | Required default Bearer token; environment-only because the CLI flag is deprecated |
 
-The `--auth-token` / `FACTVAULT_MCP_AUTH_TOKEN` flag is useful when the MCP client cannot inject
-an `authorization` parameter into individual tool calls. Set it to a valid tenant-scoped JWT
-generated with `auth token`.
+Set `FACTVAULT_MCP_AUTH_TOKEN` (or its `_FILE` companion) to a valid tenant-scoped JWT generated
+with `auth token`. MCP startup fails when no token is configured.
 
 ---
 
@@ -196,7 +199,8 @@ Prints the example metadata as JSON.
 
 Generate and read deterministic evidence briefs.
 
-All `brief` subcommands accept `--dsn` and `--tenant` as persistent flags.
+All `brief` subcommands accept `--dsn` and `--tenant` as persistent flags. Brief bundles are
+assembled server-side; client-supplied bundle files and stdin input are not accepted.
 
 ### brief generate
 
@@ -208,7 +212,6 @@ All `brief` subcommands accept `--dsn` and `--tenant` as persistent flags.
 |------|---------|-------------|
 | `--dsn` | `FACTVAULT_DATABASE_URL` | Postgres DSN |
 | `--tenant` | required | Tenant UUID |
-| `--input` | stdin | Path to dossier/story bundle JSON |
 | `--source-kind` | `dossier` | Brief source kind: `dossier` or `story` |
 | `--entity-id` | -- | Entity UUID for dossier-derived brief |
 | `--query` | -- | Query text for story-derived brief |
@@ -245,7 +248,7 @@ Run source pipeline workers. All `worker` subcommands share these persistent fla
 | `--llm-provider` | -- | -- | LLM provider for extraction: `local` or `openai` |
 | `--llm-model` | -- | `FACTVAULT_LLM_MODEL` | LLM model name |
 | `--llm-base-url` | -- | `FACTVAULT_LLM_BASE_URL`, `FACTVAULT_LLM_URL` | LLM base URL |
-| `--llm-api-key` | -- | `FACTVAULT_LLM_API_KEY` | LLM API key |
+| LLM API key | -- | `FACTVAULT_LLM_API_KEY`, `FACTVAULT_LLM_API_KEY_FILE` | Environment-only secret; no CLI flag |
 | `--confirm-cost` | `false` | -- | Confirm frontier-model extraction batches above the guardrail threshold |
 | `--llm-cost-guardrail-threshold` | `1000` | -- | Paid extractions per run that require confirmation |
 | `--feeds` | `config/feeds.yaml` | -- | RSS feed config file (rss worker only) |
@@ -283,7 +286,6 @@ verification rejects hallucinated excerpts before INSERT.
   --llm-provider local \
   --llm-model llama3.1:8b \
   --llm-base-url http://localhost:11434/v1 \
-  [--llm-api-key KEY] \
   [--confirm-cost] \
   [--llm-cost-guardrail-threshold N] \
   [--limit N]
@@ -318,8 +320,8 @@ Poll RSS/Atom feeds from `config/feeds.yaml` and ingest source items.
 ./bin/factvault worker rss [--feeds PATH] [--once] [--interval DURATION]
 ```
 
-`--tenant` overrides each feed's YAML tenant. Without it, the feed tenant is used, with
-`FACTVAULT_DEV_TENANT_ID` as the final fallback. See [RSS Ingestion](../guides/rss-ingestion.md).
+`--tenant` overrides each scheduled feed's YAML tenant. Every feed currently still needs a YAML
+tenant to enter the scheduler. See [RSS Ingestion](../guides/rss-ingestion.md).
 
 ### worker embed
 
@@ -331,7 +333,7 @@ Populate NULL embedding columns for entities, statements, and sources.
 
 | Flag | Default | Env var | Description |
 |------|---------|---------|-------------|
-| `--embedder-url` | `http://localhost:8080` | `FACTVAULT_EMBEDDER_URL` | Embedder service base URL |
+| `--embedder-url` | `http://localhost:8081` | `FACTVAULT_EMBEDDER_URL` | Embedder service base URL |
 
 Idempotent: rows with existing embeddings are skipped. See [Embedding Population](../guides/embedding-population.md).
 
@@ -342,6 +344,7 @@ and collect them into the pipeline.
 
 ```bash
 ./bin/factvault worker research "Entity Name" --tenant UUID \
+  --searxng-url URL \
   --llm-base-url URL \
   --llm-model MODEL \
   [--perspectives N] \
@@ -358,9 +361,9 @@ and collect them into the pipeline.
 | `--results-per-query` | `5` | -- | Search results per query |
 | `--max-fetches` | `40` | -- | Hard ceiling on page fetches |
 | `--entity-type` | `""` | -- | Entity type hint (e.g. `Person`, `City`, `Company`) |
+| `--searxng-url` | example-domain placeholder | `FACTVAULT_SEARXNG_URL` | Operator-managed SearXNG base URL; configure explicitly |
 | `--llm-base-url` | required | `FACTVAULT_LLM_BASE_URL`, `FACTVAULT_LLM_URL` | LLM base URL |
 | `--llm-model` | required | `FACTVAULT_LLM_MODEL` | LLM model name |
-| `--llm-api-key` | -- | `FACTVAULT_LLM_API_KEY` | LLM API key |
 
 Exactly one positional argument (the entity label) is required.
 
