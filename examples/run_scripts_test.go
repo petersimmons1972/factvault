@@ -119,10 +119,10 @@ func TestRunScriptsRequireEnvironment(t *testing.T) {
 
 func TestExampleReadmesUseCanonicalLocalDatabaseURL(t *testing.T) {
 	_, scripts := exampleScripts(t)
-	const canonical = "postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable"
+	const canonical = "postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable" //nolint:gosec // documented local-only development fixture, not a credential
 	for _, script := range scripts {
 		readme := filepath.Join(filepath.Dir(script), "README.md")
-		data, err := os.ReadFile(readme)
+		data, err := os.ReadFile(readme) //nolint:gosec // path comes from the repository-controlled examples/*/run.sh glob
 		if err != nil {
 			t.Fatalf("read %s: %v", readme, err)
 		}
