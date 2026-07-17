@@ -13,7 +13,9 @@ This runbook covers the current operational surface for factvault on the Go impl
 | Workers | One-shot pipeline stages | `factvault worker <stage>` |
 | Doctor | First-boot and health diagnostics | `factvault doctor` |
 
-Issue #94 owns the final single-command Docker Compose deployment polish. Until it lands, prefer explicit host-run API and worker commands for predictable key and tenant setup.
+[Issue #94](https://github.com/petersimmons1972/factvault/issues/94), the single-command
+Docker Compose deployment work, is complete. The explicit host-run commands below remain useful
+for inspecting key and tenant setup step by step.
 
 ## Configuration
 
@@ -49,7 +51,8 @@ Use `.env.example` as the compose-oriented baseline. Use localhost hostnames whe
 2. Start Postgres and embedder: `docker compose up -d postgres embedder`.
 3. Build the binary: `go build -o bin/factvault ./cmd/factvault`.
 4. Run migrations: `./bin/factvault migrate`.
-5. Generate JWT keys with `./bin/factvault auth keys`.
+5. Generate JWT keys and initialize the deployment with `./bin/factvault init`; unlike `auth keys`,
+   `init` writes `.local/private.pem` and `.local/public.pem` for the later API steps.
 6. Run `./bin/factvault doctor` and resolve every failing check that applies to your deployment.
 7. Load an example with `./bin/factvault example load <name>`.
 8. Run `./bin/factvault worker dossier`.
@@ -100,6 +103,11 @@ story-seeding.
 # Option C: Pipeline smoke test only (static stub; not for real content)
 ./bin/factvault worker collect --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
+
+The source still carries a historical reference to
+[Issue #94](https://github.com/petersimmons1972/factvault/issues/94), but that closed issue shipped
+Docker Compose deployment rather than collector configurability. Treat `worker collect` only as a
+smoke-test stub; use `worker rss` or `worker research` for real acquisition.
 
 ### Steps 2-7: Core Pipeline + Embedding
 

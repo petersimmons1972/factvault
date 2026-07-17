@@ -9,7 +9,7 @@ Frontier models are opt-in for operators who explicitly want a hosted OpenAI-com
 Use local endpoints and leave API keys empty:
 
 ```bash
-export FACTVAULT_LLM_URL='http://localhost:11434/v1'
+export FACTVAULT_LLM_BASE_URL='http://localhost:11434/v1'
 export FACTVAULT_LLM_MODEL='llama3.1:8b'
 unset FACTVAULT_LLM_API_KEY
 ```
@@ -21,7 +21,7 @@ With this configuration, extraction calls are expected to stay on the local netw
 Set the endpoint, model, and API key deliberately:
 
 ```bash
-export FACTVAULT_LLM_URL='https://api.openai.com/v1'
+export FACTVAULT_LLM_BASE_URL='https://api.openai.com/v1'
 export FACTVAULT_LLM_MODEL='gpt-4o-mini'
 export FACTVAULT_LLM_API_KEY='...'
 ```
@@ -72,11 +72,11 @@ Unset the key and point the URL back to the local endpoint:
 
 ```bash
 unset FACTVAULT_LLM_API_KEY
-export FACTVAULT_LLM_URL='http://localhost:11434/v1'
+export FACTVAULT_LLM_BASE_URL='http://localhost:11434/v1'
 export FACTVAULT_LLM_MODEL='llama3.1:8b'
 ```
 
-Restart workers and rerun `factvault doctor --llm-url "$FACTVAULT_LLM_URL"`.
+Restart workers and rerun `factvault doctor --llm-url "$FACTVAULT_LLM_BASE_URL"`.
 
 ## worker extract CLI Flags
 
@@ -87,10 +87,10 @@ to the environment variables above and take precedence over them:
 |------|-------------------|-------------|
 | `--llm-provider` | -- | Provider hint: `local` or `openai` |
 | `--llm-model` | `FACTVAULT_LLM_MODEL` | Model name (e.g. `llama3.1:8b`, `gpt-4o-mini`) |
-| `--llm-base-url` | `FACTVAULT_LLM_BASE_URL` | OpenAI-compatible base URL |
+| `--llm-base-url` | `FACTVAULT_LLM_BASE_URL`, `FACTVAULT_LLM_URL` | OpenAI-compatible base URL; `FACTVAULT_LLM_URL` is the deprecated fallback |
 | `--llm-api-key` | `FACTVAULT_LLM_API_KEY` | API key for hosted endpoints |
 | `--confirm-cost` | -- | Confirm extraction batches above the guardrail threshold |
-| `--llm-cost-guardrail-threshold` | -- | Guardrail threshold in (default: 1000) |
+| `--llm-cost-guardrail-threshold` | -- | Paid extractions per run that require confirmation (default: 1000) |
 
 Example with flags:
 

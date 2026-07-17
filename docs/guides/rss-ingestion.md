@@ -39,7 +39,7 @@ Every field is validated against the `FeedSpec` struct in `internal/collectors/f
 feeds:
   - name: "CISA Alerts"            # string, human-readable label (optional)
     url: "https://..."             # string, REQUIRED: full RSS/Atom feed URL
-    tenant: "uuid-here"            # string, REQUIRED: tenant UUID (feeds without tenant are skipped)
+    tenant: "uuid-here"            # string, optional when --tenant or FACTVAULT_DEV_TENANT_ID is set
     topic: "threat-intelligence"   # string, free-form topic tag (optional)
     tags: ["cisa", "security"]     # []string, free-form tag list (optional)
     interval: "15m"               # string, Go duration format (optional; falls back to --interval)
@@ -50,7 +50,7 @@ Field details:
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `url` | string | yes | Full URL to RSS or Atom feed |
-| `tenant` | string | yes | UUID of the tenant to collect into; feeds missing this field are silently skipped |
+| `tenant` | string | no | UUID of the tenant to collect into; overridden by `--tenant`, with `FACTVAULT_DEV_TENANT_ID` as the final fallback |
 | `name` | string | no | Human-readable label for logs |
 | `topic` | string | no | Free-form topic string stored with the source |
 | `tags` | []string | no | Free-form tag list |
@@ -59,8 +59,8 @@ Field details:
 **Valid interval formats:** any string accepted by Go's `time.ParseDuration`: `15m`, `1h30m`,
 `30s`, `24h`, etc. Negative or zero durations fall back to the `--interval` default.
 
-Feeds with an empty or missing `tenant` field are skipped by the scheduler. This is logged but is
-not an error -- it allows commenting out a feed by removing its `tenant` line.
+Tenant resolution is explicit: `--tenant` overrides every feed, otherwise the feed's YAML `tenant`
+is used, then `FACTVAULT_DEV_TENANT_ID`. A feed with none of those configured fails loudly.
 
 ---
 
@@ -71,8 +71,8 @@ Run one polling cycle and exit (recommended for cron jobs or first-run verificat
 ```bash
 ./bin/factvault worker rss \
   --feeds config/feeds.yaml \
-  --once \
-  --dsn "$FACTVAULT_DATABASE_URL"
+  --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --once
 ```
 
 Run in loop mode (default) with a 15-minute minimum interval between polls:
@@ -80,8 +80,8 @@ Run in loop mode (default) with a 15-minute minimum interval between polls:
 ```bash
 ./bin/factvault worker rss \
   --feeds config/feeds.yaml \
-  --interval 15m \
-  --dsn "$FACTVAULT_DATABASE_URL"
+  --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --interval 15m
 ```
 
 ---
@@ -94,15 +94,18 @@ Run in loop mode (default) with a 15-minute minimum interval between polls:
 | `--once` | `false` | Run one polling cycle then exit |
 | `--interval` | `15m` | Default polling interval for feeds without an explicit `interval` field |
 | `--dsn` | `FACTVAULT_DATABASE_URL` | Postgres DSN |
+| `--tenant` | per-feed tenant, then `FACTVAULT_DEV_TENANT_ID` | Override tenant for every configured feed |
 
-The `--tenant` persistent flag is NOT required for `worker rss` -- tenant is read from each
-feed's YAML `tenant` field instead.
+The `--tenant` persistent flag is optional. When present it overrides every feed's YAML tenant;
+otherwise each feed tenant is used, with `FACTVAULT_DEV_TENANT_ID` as the final fallback.
 
 ---
 
 ## worker rss vs. worker collect
 
-`worker collect` is a stub with a static seed URL (see TODO #94 in the source). It inserts a
+`worker collect` is a stub with a static seed URL. Its source comment's historical reference to
+[Issue #94](https://github.com/petersimmons1972/factvault/issues/94) is stale: that closed issue
+shipped Docker Compose deployment rather than collector configurability. The command inserts a
 single placeholder source (`https://example.com/factvault-seed`) to exercise the pipeline
 mechanically. It does not fetch real URLs and is not intended for production use.
 

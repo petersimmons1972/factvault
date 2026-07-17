@@ -102,9 +102,9 @@ Both share one assembler and one bundle JSON shape. See [docs/superpowers/specs/
 
 ---
 
-## The Six-Stage Pipeline
+## The Seven-Stage Pipeline
 
-![Factvault Six-Stage Ingestion Pipeline](docs/assets/svg/pipeline-stages.svg)
+![Factvault ingestion pipeline](docs/assets/svg/pipeline-stages.svg)
 
 | # | Stage | Key guarantee |
 |---|-------|---------------|
@@ -228,7 +228,7 @@ The controlled vocabulary is not bureaucracy — it prevents `founded_in`, `foun
 
 | Document | What it covers |
 |----------|---------------|
-| [Design Spec](docs/superpowers/specs/2026-05-22-factvault-design.md) | Complete architecture -- all four pillars, all six pipeline stages, full DDL, bundle JSON shape, retrieval API, operational requirements |
+| [Design Spec](docs/superpowers/specs/2026-05-22-factvault-design.md) | Complete architecture -- all four pillars, all seven pipeline stages, full DDL, bundle JSON shape, retrieval API, operational requirements |
 | [Source Existence](docs/concepts/source-existence.md) | Why `raw_text` + `archive_url` + `content_hash` together; the verification lifecycle; what happens when URLs die |
 | [Facts and Sources](docs/concepts/facts-and-sources.md) | The statement model; how a fact differs from a source; what excerpt offsets mean and why they exist |
 | [Dossiers vs. Stories](docs/concepts/dossiers-vs-stories.md) | Full treatment of both modes including cosine seeding (shipped) and all worked examples |

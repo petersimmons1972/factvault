@@ -131,12 +131,12 @@ No flags. To write keys to files, use `init` or redirect stdout.
 Issue a development RS256 JWT.
 
 ```bash
-./bin/factvault auth token --private-key PATH --tenant UUID [flags]
+./bin/factvault auth token --jwt-private-key PATH --tenant UUID [flags]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--private-key` | required | PEM private key file path |
+| `--jwt-private-key` | required | PEM private key file path (or `FACTVAULT_JWT_PRIVATE_KEY`) |
 | `--tenant` | required | Tenant UUID to embed in the token |
 | `--sub` | `dev` | Token subject claim |
 | `--ttl` | `24h` | Token TTL (Go duration format) |
@@ -146,12 +146,12 @@ Issue a development RS256 JWT.
 Verify an RS256 JWT and print its claims.
 
 ```bash
-./bin/factvault auth verify --public-key PATH --token JWT
+./bin/factvault auth verify --jwt-public-key PATH --token JWT
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--public-key` | required | PEM public key file path |
+| `--jwt-public-key` | required | PEM public key file path (or `FACTVAULT_JWT_PUBLIC_KEY`) |
 | `--token` | required | JWT string to verify |
 
 ---
@@ -247,7 +247,7 @@ Run source pipeline workers. All `worker` subcommands share these persistent fla
 | `--llm-base-url` | -- | `FACTVAULT_LLM_BASE_URL`, `FACTVAULT_LLM_URL` | LLM base URL |
 | `--llm-api-key` | -- | `FACTVAULT_LLM_API_KEY` | LLM API key |
 | `--confirm-cost` | `false` | -- | Confirm frontier-model extraction batches above the guardrail threshold |
-| `--llm-cost-guardrail-threshold` | `1000` | -- | Frontier-model extraction batch guardrail threshold |
+| `--llm-cost-guardrail-threshold` | `1000` | -- | Paid extractions per run that require confirmation |
 | `--feeds` | `config/feeds.yaml` | -- | RSS feed config file (rss worker only) |
 | `--once` | `false` | -- | Run one RSS polling cycle and exit (rss worker only) |
 | `--interval` | `15m` | -- | Default RSS polling interval (rss worker only) |
@@ -255,8 +255,10 @@ Run source pipeline workers. All `worker` subcommands share these persistent fla
 ### worker collect
 
 Insert a seed source into the pipeline. **Note:** Currently inserts a static stub URL
-(`https://example.com/factvault-seed`) -- TODO #94 tracks making this configurable. For real
-source ingestion, use `worker rss` or `worker research`.
+(`https://example.com/factvault-seed`). The source's historical reference to
+[Issue #94](https://github.com/petersimmons1972/factvault/issues/94) is stale: that closed issue
+shipped Docker Compose deployment, not collector configurability. For real source ingestion, use
+`worker rss` or `worker research`.
 
 ```bash
 ./bin/factvault worker collect --tenant UUID
@@ -264,7 +266,8 @@ source ingestion, use `worker rss` or `worker research`.
 
 ### worker archive
 
-Extract `raw_text` via trafilatura, submit Wayback SPN2 snapshot, compress `raw_html`.
+Extract `raw_text` via the Go `stripHTML` tag-stripper, submit a Wayback SPN2 snapshot, and
+compress `raw_html`.
 
 ```bash
 ./bin/factvault worker archive --tenant UUID [--limit N]
@@ -315,7 +318,8 @@ Poll RSS/Atom feeds from `config/feeds.yaml` and ingest source items.
 ./bin/factvault worker rss [--feeds PATH] [--once] [--interval DURATION]
 ```
 
-Tenant is per-feed from YAML (not the `--tenant` flag). See [RSS Ingestion](../guides/rss-ingestion.md).
+`--tenant` overrides each feed's YAML tenant. Without it, the feed tenant is used, with
+`FACTVAULT_DEV_TENANT_ID` as the final fallback. See [RSS Ingestion](../guides/rss-ingestion.md).
 
 ### worker embed
 

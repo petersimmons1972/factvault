@@ -32,6 +32,10 @@ The bridge from acquisition to ingest is exactly `SourcePipeline.CollectOnce`. I
 `status='collected'` and no fact columns. All subsequent pipeline stages -- archive, extract,
 corroborate, verify -- run independently of how the source arrived.
 
+If acquisition could write to the truth layer, a search-planning model could promote its own
+unverified output into facts, bypassing excerpt verification and independent-source confidence.
+The one-way package boundary prevents that failure mode.
+
 **An LLM decides what to research and how to file it as a source. An LLM never decides what is
 true, what an excerpt says, or what the confidence of a fact is.**
 
@@ -77,7 +81,6 @@ Total LLM calls per run: exactly 2, regardless of scale parameters.
 ```bash
 ./bin/factvault worker research "Acme Corp" \
   --tenant "$FACTVAULT_DEV_TENANT_ID" \
-  --dsn "$FACTVAULT_DATABASE_URL" \
   --llm-base-url http://localhost:11434/v1 \
   --llm-model llama3.1:8b
 ```

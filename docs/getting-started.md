@@ -111,7 +111,9 @@ Precompute dossiers for that tenant:
   --limit 10
 ```
 
-The dossier is empty until the full collect/archive/extract/corroborate pipeline runs. The retrieval path is live and tenant-scoped immediately.
+The initial example dossier is expected to contain no facts until the full
+collect/archive/extract/corroborate pipeline runs. The retrieval path is live and tenant-scoped
+immediately; an empty result at this point is not a setup failure.
 
 ---
 
@@ -121,7 +123,7 @@ Keys are in `.local/` (written by `init` or `make setup`). Issue a tenant-scoped
 
 ```bash
 TOKEN=$(./bin/factvault auth token \
-  --private-key .local/private.pem \
+  --jwt-private-key .local/private.pem \
   --tenant "$FACTVAULT_DEV_TENANT_ID" \
   --sub local-dev)
 ```
@@ -151,6 +153,10 @@ A successful response contains an entity bundle for the loaded example entity.
 
 After the initial dossier works, run the source pipeline against a tenant.
 
+If you opened a new shell for these commands, re-export `FACTVAULT_DATABASE_URL` with the runtime
+`app_user` DSN from step 1. Runtime commands read that environment variable; do not pass its
+password-bearing value through `--dsn`.
+
 **Source population** -- choose one or combine:
 
 ```bash
@@ -174,6 +180,7 @@ After the initial dossier works, run the source pipeline against a tenant.
 For RSS, `--tenant` overrides each feed's configured tenant during collection. Each feed still
 needs a YAML `tenant` to enter the current scheduler; tenantless feeds are skipped before the
 override is applied. Keep the YAML tenant even when supplying `--tenant`.
+
 
 **Core pipeline + embedding:**
 
@@ -211,7 +218,9 @@ pipeline stages. For the full CLI reference, see [docs/reference/cli.md](referen
 ### worker collect is a stub
 
 `worker collect` currently inserts a single static placeholder URL
-(`https://example.com/factvault-seed`) -- see TODO #94 in the source. It is useful for
+(`https://example.com/factvault-seed`). The source's historical reference to
+[Issue #94](https://github.com/petersimmons1972/factvault/issues/94) is stale: that closed issue
+shipped Docker Compose deployment, not collector configurability. The command is useful for
 smoke-testing the pipeline but does not ingest real content. For real source ingestion, use:
 
 - `worker rss` -- poll operator-defined RSS/Atom feeds from `config/feeds.yaml`
@@ -234,7 +243,7 @@ run as the Postgres superuser. Use `FACTVAULT_MIGRATE_DATABASE_URL` (the superus
 migrations:
 
 ```bash
-./bin/factvault migrate --dsn "$FACTVAULT_MIGRATE_DATABASE_URL"
+./bin/factvault migrate
 ```
 
 All other workers, the API, and the MCP server connect as `app_user` via `FACTVAULT_DATABASE_URL`.
@@ -249,8 +258,7 @@ these two new workers:
 ```bash
 # Populate embedding columns (enables cosine story-seeding)
 ./bin/factvault worker embed \
-  --tenant "$FACTVAULT_DEV_TENANT_ID" \
-  --dsn "$FACTVAULT_DATABASE_URL"
+  --tenant "$FACTVAULT_DEV_TENANT_ID"
 
 # Actively research a new entity (generates sources via LLM + web search)
 ./bin/factvault worker research "Your Entity Name" \

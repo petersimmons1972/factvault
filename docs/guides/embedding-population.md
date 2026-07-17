@@ -30,7 +30,7 @@ The worker runs one backfill pass over three tables for the given tenant:
 | Table | Text used for embedding |
 |-------|------------------------|
 | `entities` | `label` + `description` (space-separated; description omitted if empty) |
-| `sources` | `title` + first 2048 chars of `raw_text` |
+| `sources` | `title` and the first 2048 bytes of `raw_text`, separated by a newline |
 | `statements` | `"subject property value"` rendered from `val_text`, subject label, and property slug |
 
 Rows where `embedding IS NULL` are processed. Rows that already have an embedding are skipped.
@@ -43,8 +43,7 @@ progress in others.
 
 ```bash
 ./bin/factvault worker embed \
-  --tenant "$FACTVAULT_DEV_TENANT_ID" \
-  --dsn "$FACTVAULT_DATABASE_URL"
+  --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
 The embedder URL defaults to `http://localhost:8080` (or `FACTVAULT_EMBEDDER_URL`). Override
@@ -129,7 +128,7 @@ table, so the worker can run frequently without hammering the embedder.
 
 ```bash
 # Via doctor (shows embedder check line)
-./bin/factvault doctor --dsn "$FACTVAULT_DATABASE_URL" --required-only
+./bin/factvault doctor --required-only
 
 # Direct health check
 curl -s http://localhost:8081/healthz
