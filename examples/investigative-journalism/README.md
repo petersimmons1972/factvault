@@ -5,7 +5,7 @@ Fictional Plan 5 example domain for factvault. It defines properties, seed entit
 Set the required database and tenant configuration before loading the example:
 
 ```sh
-export FACTVAULT_DATABASE_URL='postgres://factvault_app:password@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_DATABASE_URL='postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable'
 export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
 ```
 

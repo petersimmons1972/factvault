@@ -56,6 +56,7 @@ func TestRunScriptsRequireEnvironment(t *testing.T) {
 		name       string
 		missingEnv string
 		setEnv     string
+		emptyEnv   string
 		wantError  string
 	}{
 		{
@@ -70,6 +71,20 @@ func TestRunScriptsRequireEnvironment(t *testing.T) {
 			setEnv:     databaseURL + "=postgres://stub/unused",
 			wantError:  tenantID + " is required",
 		},
+		{
+			name:       "empty database URL",
+			missingEnv: databaseURL,
+			setEnv:     tenantID + "=00000000-0000-0000-0000-000000000000",
+			emptyEnv:   databaseURL + "=",
+			wantError:  databaseURL + " is required",
+		},
+		{
+			name:       "empty tenant ID",
+			missingEnv: tenantID,
+			setEnv:     databaseURL + "=postgres://stub/unused",
+			emptyEnv:   tenantID + "=",
+			wantError:  tenantID + " is required",
+		},
 	}
 
 	for _, script := range scripts {
@@ -79,10 +94,14 @@ func TestRunScriptsRequireEnvironment(t *testing.T) {
 			t.Run(exampleName+"/"+tt.name, func(t *testing.T) {
 				cmd := exec.Command("./run.sh")
 				cmd.Dir = exampleDir
-				cmd.Env = commandEnv(
-					"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				overrides := []string{
+					"PATH=" + stubDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 					tt.setEnv,
-				)
+				}
+				if tt.emptyEnv != "" {
+					overrides = append(overrides, tt.emptyEnv)
+				}
+				cmd.Env = commandEnv(overrides...)
 				output, err := cmd.CombinedOutput()
 				if err == nil {
 					t.Fatalf("run.sh succeeded without %s; output: %s", tt.missingEnv, output)
@@ -94,6 +113,21 @@ func TestRunScriptsRequireEnvironment(t *testing.T) {
 					t.Fatal("factvault stub was invoked")
 				}
 			})
+		}
+	}
+}
+
+func TestExampleReadmesUseCanonicalLocalDatabaseURL(t *testing.T) {
+	_, scripts := exampleScripts(t)
+	const canonical = "postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable"
+	for _, script := range scripts {
+		readme := filepath.Join(filepath.Dir(script), "README.md")
+		data, err := os.ReadFile(readme)
+		if err != nil {
+			t.Fatalf("read %s: %v", readme, err)
+		}
+		if !strings.Contains(string(data), canonical) {
+			t.Errorf("%s does not use canonical local database URL", readme)
 		}
 	}
 }
