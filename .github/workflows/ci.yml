@@ -6,10 +6,15 @@ on:
   pull_request:
     branches: ["**"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   go:
     name: go quality
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       CGO_ENABLED: "1"
 
@@ -21,6 +26,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
 
       - name: Install sqlite build deps
         run: |
@@ -101,6 +107,7 @@ jobs:
   bats:
     name: bats regression
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -117,6 +124,7 @@ jobs:
   embedder:
     name: embedder pytest
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -126,6 +134,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: 'pip'
 
       - name: Install embedder deps
         env:
@@ -138,3 +147,19 @@ jobs:
         env:
           PYTHONPATH: services/embedder
         run: pytest services/embedder/tests -v --tb=short
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
