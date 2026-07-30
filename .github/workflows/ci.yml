@@ -21,6 +21,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # golangci-lint-action only-new-issues needs the base commit to diff
+          # against; a shallow clone makes its patch-fetch 404 and fall back to a
+          # whole-repo scan that fails on pre-existing lint debt.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -104,6 +109,11 @@ jobs:
       - name: Test (race)
         run: go test -race ./... -count=1
 
+      - name: Test database leak gate
+        env:
+          TESTDB_LEAK_GATE: "1"
+        run: go test ./internal/testdb -run '^TestNoTestDBLeaks$' -count=1
+
   bats:
     name: bats regression
     runs-on: ubuntu-latest
@@ -152,6 +162,9 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
 
     steps:
       - name: Checkout

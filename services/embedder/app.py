@@ -24,6 +24,8 @@ log = logging.getLogger(__name__)
 MODEL_NAME = os.environ.get("EMBEDDER_MODEL", "BAAI/bge-m3")
 CACHE_DIR = os.environ.get("HF_HOME", "/home/nonroot/.cache")
 EXPECTED_DIM = 1024
+DEFAULT_MAX_EMBED_TEXTS = 512
+DEFAULT_MAX_EMBED_BYTES = 2 * 1024 * 1024
 
 # Module-level reference; populated during lifespan startup.
 _model = None  # type: ignore[assignment]
@@ -40,6 +42,29 @@ class EmbedResponse(BaseModel):
 class InfoResponse(BaseModel):
     model: str
     dim: int
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Invalid %s=%r; falling back to %d", name, raw, default)
+        return default
+    if value <= 0:
+        log.warning("Non-positive %s=%r; falling back to %d", name, raw, default)
+        return default
+    return value
+
+
+def max_embed_texts() -> int:
+    return _int_env("MAX_EMBED_TEXTS", DEFAULT_MAX_EMBED_TEXTS)
+
+
+def max_embed_bytes() -> int:
+    return _int_env("MAX_EMBED_BYTES", DEFAULT_MAX_EMBED_BYTES)
 
 
 @asynccontextmanager
@@ -67,7 +92,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(lifespan=lifespan)
 
 
-@app.get("/health")
+# C6: /health endpoint removed; doctor checks probe only /healthz.
 @app.get("/healthz")
 def health() -> JSONResponse:
     """Model-aware health.
@@ -90,6 +115,11 @@ def info() -> InfoResponse:
 
 @app.post("/embed", response_model=EmbedResponse)
 def embed(req: EmbedRequest) -> EmbedResponse:
+    if len(req.texts) > max_embed_texts():
+        raise HTTPException(status_code=422, detail=f"too many texts: max {max_embed_texts()}")
+    total_bytes = sum(len(text.encode()) for text in req.texts)
+    if total_bytes > max_embed_bytes():
+        raise HTTPException(status_code=422, detail=f"total text bytes exceed max {max_embed_bytes()}")
     if not req.texts:
         return EmbedResponse(vectors=[])
     if _model is None:
@@ -97,4 +127,11 @@ def embed(req: EmbedRequest) -> EmbedResponse:
         # Clients with retry/backoff will recover; explicit 500 would mislead.
         raise HTTPException(status_code=503, detail="model not yet loaded")
     embeddings = _model.encode(req.texts, convert_to_numpy=True, normalize_embeddings=True)
+    # E-10: validate that the model returned the expected shape — guard against
+    # model version drift that silently changes the embedding dimension.
+    if embeddings.shape != (len(req.texts), EXPECTED_DIM):
+        raise HTTPException(
+            status_code=500,
+            detail=f"embedder shape error: got {embeddings.shape}, want ({len(req.texts)}, {EXPECTED_DIM})",
+        )
     return EmbedResponse(vectors=embeddings.tolist())

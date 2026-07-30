@@ -19,13 +19,15 @@ func newExampleCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List examples",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			names, err := fvexamples.List(root)
 			if err != nil {
 				return err
 			}
 			for _, name := range names {
-				fmt.Fprintln(cmd.OutOrStdout(), name)
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), name); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
@@ -74,7 +76,9 @@ func newExampleLoadCmd(root *string) *cobra.Command {
 			if err := ex.Insert(cmd.Context(), pool, tenantID); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "loaded %s: %d properties, %d seeds\n", ex.Name, len(ex.Properties), len(ex.Seeds))
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "loaded %s: %d properties, %d seeds\n", ex.Name, len(ex.Properties), len(ex.Seeds)); err != nil {
+				return err
+			}
 			return nil
 		},
 	}

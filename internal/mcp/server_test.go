@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 
 func TestEntityLookupRequiresAuthorization(t *testing.T) {
 	pool := testdb.Setup(context.Background(), t)
-	server := New(pool, mustPublicKey(t), "")
+	server := New(pool, mustPublicKey(t), "", "")
 
 	_, _, err := server.entityLookup(context.Background(), nil, EntityLookupArgs{EntityID: uuid.NewString()})
 	if err == nil {
@@ -33,7 +34,7 @@ func TestEntityLookupUsesAuthorizedTenant(t *testing.T) {
 	entityB := uuid.NewString()
 
 	_, publicKey, tokenA := mustSignedToken(t, tenantA)
-	server := New(pool, publicKey, "")
+	server := New(pool, publicKey, "", "")
 
 	_, err := pool.Exec(context.Background(),
 		"INSERT INTO entities (id, tenant_id, label) VALUES ($1, $2, 'Tenant A'), ($3, $4, 'Tenant B')",
@@ -60,6 +61,24 @@ func TestEntityLookupUsesAuthorizedTenant(t *testing.T) {
 	}
 	if !errors.Is(err, assembler.ErrEntityNotFound) {
 		t.Fatalf("expected entity not found error, got %T %v", err, err)
+	}
+}
+
+// TestTenantFromAuthorization_EmptyAuthReturnsError verifies S-03: empty
+// authorization must be rejected immediately even when DefaultToken is set.
+// Previously the code fell back to DefaultToken on empty auth, which meant a
+// caller could be silently authenticated as the default tenant.
+func TestTenantFromAuthorization_EmptyAuthReturnsError(t *testing.T) {
+	pool := testdb.Setup(context.Background(), t)
+	// Pass a non-empty DefaultToken; empty authorization must still be rejected.
+	server := New(pool, mustPublicKey(t), "someDefaultToken", "")
+
+	_, err := server.tenantFromAuthorization("")
+	if err == nil {
+		t.Fatal("expected an error for empty authorization, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing authorization token") {
+		t.Fatalf("expected 'missing authorization token', got: %v", err)
 	}
 }
 

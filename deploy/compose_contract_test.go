@@ -56,3 +56,60 @@ func TestDockerComposeTier1Contract(t *testing.T) {
 		t.Fatal("Tier 1 compose must use an existing latest-tag pgvector image")
 	}
 }
+
+func TestDockerComposeRSSFeedsContract(t *testing.T) {
+	t.Parallel()
+
+	composeData, err := os.ReadFile("../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+	dockerfileData, err := os.ReadFile("docker/Dockerfile")
+	if err != nil {
+		t.Fatalf("read deploy/docker/Dockerfile: %v", err)
+	}
+	workerCmdData, err := os.ReadFile("../cmd/factvault/worker.go")
+	if err != nil {
+		t.Fatalf("read cmd/factvault/worker.go: %v", err)
+	}
+
+	compose := string(composeData)
+	dockerfile := string(dockerfileData)
+	workerCmd := string(workerCmdData)
+
+	if !strings.Contains(compose, "factvault worker rss --once") {
+		t.Fatal("docker-compose.yml no longer starts the worker loop with `factvault worker rss --once`; update this contract test")
+	}
+	if !strings.Contains(workerCmd, `"config/feeds.yaml"`) {
+		t.Fatal("cmd/factvault/worker.go no longer defaults RSS feeds to config/feeds.yaml; update this contract test")
+	}
+
+	composeSetsFeedsPath := strings.Contains(compose, "FACTVAULT_FEEDS_PATH")
+	dockerfileCopiesConfig := strings.Contains(dockerfile, "COPY --from=builder /app/config /app/config")
+	if !composeSetsFeedsPath && !dockerfileCopiesConfig {
+		t.Fatal("docker-compose.yml runs `factvault worker rss --once` using the default config/feeds.yaml, so deploy/docker/Dockerfile must copy /app/config into the runtime image or Compose must set FACTVAULT_FEEDS_PATH explicitly")
+	}
+}
+
+func TestK8sRSSCronJobRunsRSSContract(t *testing.T) {
+	t.Parallel()
+
+	cronData, err := os.ReadFile("k8s/rss-worker-cronjob.yaml")
+	if err != nil {
+		t.Fatalf("read deploy/k8s/rss-worker-cronjob.yaml: %v", err)
+	}
+	cron := string(cronData)
+
+	if !strings.Contains(cron, "name: factvault-rss") {
+		t.Fatal("k8s RSS CronJob must be named factvault-rss so operators do not confuse it with the retired collect stub")
+	}
+	if strings.Contains(cron, "name: factvault-collect") {
+		t.Fatal("k8s RSS CronJob still uses the retired factvault-collect name")
+	}
+	if !strings.Contains(cron, `"rss", "--once"`) {
+		t.Fatal("k8s RSS CronJob must run `worker rss --once` (real feed ingestion), not the static `worker collect` stub — see issue #276")
+	}
+	if strings.Contains(cron, `"collect",`) {
+		t.Fatal("k8s RSS CronJob still references the static `worker collect` stub — see issue #276")
+	}
+}

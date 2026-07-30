@@ -3,6 +3,7 @@ package briefs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -12,18 +13,18 @@ import (
 	"github.com/petersimmons1972/factvault/internal/testdb"
 )
 
-func testBundle(tenantID string) *assembler.Bundle {
+func testBundle(tenantID, entityID string) *assembler.Bundle {
 	return &assembler.Bundle{
 		TenantID:   tenantID,
-		EntityID:   "e1",
-		Statements: []assembler.BundleStatement{{ID: "s1", EntityID: "e1", PropertySlug: "role", Value: "CEO", Confidence: 0.9, SourceIDs: []string{"src1"}}, {ID: "s2", EntityID: "e1", PropertySlug: "role", Value: "CTO", Confidence: 0.8}},
+		EntityID:   entityID,
+		Statements: []assembler.BundleStatement{{ID: "s1", EntityID: entityID, PropertySlug: "role", Value: "CEO", Confidence: 0.9, SourceIDs: []string{"src1"}}, {ID: "s2", EntityID: entityID, PropertySlug: "role", Value: "CTO", Confidence: 0.8}},
 		Sources:    []assembler.BundleSource{{ID: "src1", URL: "https://example.com/1", VerificationStatus: "verified"}},
 	}
 }
 
 func TestGenerateDeterministic(t *testing.T) {
 	g := BriefGenerator{}
-	b := testBundle("t")
+	b := testBundle("t", "e1")
 	a, err := g.Generate(b)
 	if err != nil {
 		t.Fatalf("generate a: %v", err)
@@ -44,6 +45,20 @@ func TestGenerateDeterministic(t *testing.T) {
 		if _, ok := parsed[key]; !ok {
 			t.Fatalf("missing key %q", key)
 		}
+	}
+}
+
+// TestGenerateRejectsNilBundle covers issue #268's acceptance criterion:
+// BriefGenerator.Generate must reject a nil bundle with ErrNilBundle instead
+// of panicking on nil-pointer field access.
+func TestGenerateRejectsNilBundle(t *testing.T) {
+	g := BriefGenerator{}
+	payload, err := g.Generate(nil)
+	if !errors.Is(err, ErrNilBundle) {
+		t.Fatalf("expected ErrNilBundle, got %v", err)
+	}
+	if payload != nil {
+		t.Fatalf("expected nil payload on error, got %q", payload)
 	}
 }
 
@@ -69,8 +84,13 @@ func TestServiceGenerateListGetTenantScoped(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	svc := Service{Pool: pool}
-	rec, err := svc.GenerateAndStore(ctx, tenantA, GenerateRequest{SourceKind: SourceKindDossier, EntityID: &entityID, Bundle: testBundle(tenantA)})
+	svc := Service{
+		Pool: pool,
+		BundleLoader: BundleLoaderFunc(func(context.Context, string, GenerateRequest) (*assembler.Bundle, error) {
+			return testBundle(tenantA, entityID), nil
+		}),
+	}
+	rec, err := svc.GenerateAndStore(ctx, tenantA, GenerateRequest{SourceKind: SourceKindDossier, EntityID: &entityID})
 	if err != nil {
 		t.Fatalf("generate/store: %v", err)
 	}
@@ -113,12 +133,21 @@ func TestServiceListFilters(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	svc := Service{Pool: pool}
-	if _, err := svc.GenerateAndStore(ctx, tenantID, GenerateRequest{SourceKind: SourceKindDossier, EntityID: &entityA, Bundle: testBundle(tenantID)}); err != nil {
+	svc := Service{
+		Pool: pool,
+		BundleLoader: BundleLoaderFunc(func(_ context.Context, tenant string, req GenerateRequest) (*assembler.Bundle, error) {
+			entity := entityA
+			if req.EntityID != nil {
+				entity = *req.EntityID
+			}
+			return testBundle(tenant, entity), nil
+		}),
+	}
+	if _, err := svc.GenerateAndStore(ctx, tenantID, GenerateRequest{SourceKind: SourceKindDossier, EntityID: &entityA}); err != nil {
 		t.Fatalf("store dossier: %v", err)
 	}
 	q := "sec investigations"
-	if _, err := svc.GenerateAndStore(ctx, tenantID, GenerateRequest{SourceKind: SourceKindStory, EntityID: &entityB, Query: &q, Bundle: testBundle(tenantID)}); err != nil {
+	if _, err := svc.GenerateAndStore(ctx, tenantID, GenerateRequest{SourceKind: SourceKindStory, EntityID: &entityB, Query: &q}); err != nil {
 		t.Fatalf("store story: %v", err)
 	}
 
@@ -137,5 +166,45 @@ func TestServiceListFilters(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].EntityID == nil || *rows[0].EntityID != entityB {
 		t.Fatalf("unexpected entity filter rows=%+v", rows)
+	}
+}
+
+func TestGenerateAndStoreRejectsMismatchedBundleTenant(t *testing.T) {
+	svc := Service{}
+
+	entityID := uuid.NewString()
+	_, err := svc.generateAndStoreBundle(context.Background(), "tenant-a", GenerateRequest{
+		SourceKind: SourceKindDossier,
+		EntityID:   &entityID,
+	}, testBundle("tenant-b", entityID))
+	if !errors.Is(err, ErrBundleTenantMismatch) {
+		t.Fatalf("expected ErrBundleTenantMismatch, got %v", err)
+	}
+}
+
+func TestGenerateAndStoreRejectsMismatchedBundleEntity(t *testing.T) {
+	svc := Service{}
+
+	entityID := uuid.NewString()
+	bundle := testBundle("tenant-a", uuid.NewString())
+	_, err := svc.generateAndStoreBundle(context.Background(), "tenant-a", GenerateRequest{
+		SourceKind: SourceKindDossier,
+		EntityID:   &entityID,
+	}, bundle)
+	if !errors.Is(err, ErrBundleEntityMismatch) {
+		t.Fatalf("expected ErrBundleEntityMismatch, got %v", err)
+	}
+}
+
+func TestGenerateAndStoreRequiresBundleLoader(t *testing.T) {
+	svc := Service{}
+
+	entityID := uuid.NewString()
+	_, err := svc.GenerateAndStore(context.Background(), "tenant-a", GenerateRequest{
+		SourceKind: SourceKindDossier,
+		EntityID:   &entityID,
+	})
+	if !errors.Is(err, ErrBundleLoaderRequired) {
+		t.Fatalf("expected ErrBundleLoaderRequired, got %v", err)
 	}
 }

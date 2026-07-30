@@ -1,22 +1,27 @@
+// Package doctor implements first-boot health checks for factvault service dependencies.
 package doctor
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/petersimmons1972/factvault/internal/assembler"
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
+// CheckResult is the result of one doctor health check.
 type CheckResult struct {
 	Name     string `json:"name"`
 	OK       bool   `json:"ok"`
@@ -26,6 +31,7 @@ type CheckResult struct {
 	Elapsed  string `json:"elapsed"`
 }
 
+// Config carries the dependencies used by each doctor check.
 type Config struct {
 	DatabaseURL string
 	LLMURL      string
@@ -44,6 +50,8 @@ var (
 	optionalChecks = []checkFunc{CheckLLM, CheckEmbedder, CheckWayback}
 )
 
+// RunAll executes required checks first, then optional checks, and marks each
+// result as required or optional.
 func RunAll(ctx context.Context, cfg Config) []CheckResult {
 	results := make([]CheckResult, 0, len(requiredChecks)+len(optionalChecks))
 	for _, check := range requiredChecks {
@@ -59,6 +67,7 @@ func RunAll(ctx context.Context, cfg Config) []CheckResult {
 	return results
 }
 
+// AllOK reports whether every check in results completed successfully.
 func AllOK(results []CheckResult) bool {
 	for _, result := range results {
 		if !result.OK {
@@ -79,6 +88,7 @@ func RequiredOK(results []CheckResult) bool {
 	return true
 }
 
+// CheckPostgres verifies connectivity and pgvector extension presence.
 func CheckPostgres(ctx context.Context, cfg Config) CheckResult {
 	return timed("postgres", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -94,6 +104,7 @@ func CheckPostgres(ctx context.Context, cfg Config) CheckResult {
 	})
 }
 
+// CheckMigrations verifies at least one migration has been applied.
 func CheckMigrations(ctx context.Context, cfg Config) CheckResult {
 	return timed("migrations", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -112,6 +123,7 @@ func CheckMigrations(ctx context.Context, cfg Config) CheckResult {
 	})
 }
 
+// CheckRLS verifies tenant-isolated row-level security is enforced.
 func CheckRLS(ctx context.Context, cfg Config) CheckResult {
 	return timed("rls", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -121,22 +133,39 @@ func CheckRLS(ctx context.Context, cfg Config) CheckResult {
 		defer pool.Close()
 		tenantA := uuid.NewString()
 		tenantB := uuid.NewString()
-		if _, err := pool.Exec(ctx, "INSERT INTO entities (tenant_id, label) VALUES ($1, 'A'), ($2, 'B')", tenantA, tenantB); err != nil {
-			return "", "check schema permissions", err
-		}
+		// The whole probe runs inside one rolled-back transaction so no rows
+		// leak, and as app_user with the tenant GUC set per insert so the check
+		// passes on both superuser DSNs (BYPASSRLS) and the app_user runtime
+		// DSN that api/workers/init actually use.
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			return "", "check database", err
 		}
-		defer tx.Rollback(ctx)
-		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantA); err != nil {
-			return "", "check app.tenant_id GUC", err
-		}
+		defer func() {
+			if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+				fmt.Fprintf(os.Stderr, "rollback: %v\n", err)
+			}
+		}()
 		if _, err := tx.Exec(ctx, "SET LOCAL ROLE app_user"); err != nil {
 			return "", "ensure app_user role exists", err
 		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantA); err != nil {
+			return "", "check app.tenant_id GUC", err
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO entities (tenant_id, label) VALUES ($1, 'A')", tenantA); err != nil {
+			return "", "check schema permissions", err
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantB); err != nil {
+			return "", "check app.tenant_id GUC", err
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO entities (tenant_id, label) VALUES ($1, 'B')", tenantB); err != nil {
+			return "", "check schema permissions", err
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantA); err != nil {
+			return "", "check app.tenant_id GUC", err
+		}
 		var count int
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM entities").Scan(&count); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM entities WHERE tenant_id IN ($1, $2)", tenantA, tenantB).Scan(&count); err != nil {
 			return "", "check RLS policies", err
 		}
 		if count != 1 {
@@ -146,6 +175,7 @@ func CheckRLS(ctx context.Context, cfg Config) CheckResult {
 	})
 }
 
+// CheckLLM verifies that the configured LLM endpoint responds.
 func CheckLLM(ctx context.Context, cfg Config) CheckResult {
 	url := strings.TrimRight(defaultString(cfg.LLMURL, "http://localhost:11434/v1"), "/") + "/models"
 	return checkHTTP(ctx, cfg, "llm", url, http.StatusOK)
@@ -156,29 +186,27 @@ func CheckLLM(ctx context.Context, cfg Config) CheckResult {
 // (Required=false) — operators running without an embedder should not see a
 // required failure.  If /info is available, the model name is included in the
 // detail string.
+// CheckEmbedder verifies that the embedder is reachable and producing non-zero
+// vectors of the expected dimension.
 func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 	return timed("embedder", func() (string, string, error) {
-		base := strings.TrimRight(defaultString(cfg.EmbedderURL, "http://localhost:8080"), "/")
+		base := strings.TrimRight(defaultString(cfg.EmbedderURL, "http://localhost:8081"), "/") // C7: default changed to :8081
 		client := httpClient(cfg)
 
-		// 1. Health check — try /healthz then /health.
-		var healthOK bool
-		for _, path := range []string{"/healthz", "/health"} {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
-			if err != nil {
-				continue
-			}
-			resp, err := client.Do(req)
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					healthOK = true
-					break
-				}
-			}
+		// 1. Health check — C6: probe only /healthz; /health endpoint removed from embedder.
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/healthz", nil)
+		if err != nil {
+			return "", "check embedder URL", err
 		}
-		if !healthOK {
-			return "", "start embedder service", fmt.Errorf("embedder health check failed")
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", "start embedder service", err
+		}
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "close: %v\n", closeErr)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return "", "start embedder service", fmt.Errorf("embedder /healthz returned %d", resp.StatusCode)
 		}
 
 		// 2. Optional /info — collect model name for the detail string.
@@ -186,7 +214,11 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 		infoReq, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/info", nil)
 		if err == nil {
 			if infoResp, err := client.Do(infoReq); err == nil {
-				defer infoResp.Body.Close()
+				defer func() {
+					if err := infoResp.Body.Close(); err != nil {
+						fmt.Fprintf(os.Stderr, "close: %v\n", err)
+					}
+				}()
 				if infoResp.StatusCode == http.StatusOK {
 					var infoBody struct {
 						Model string `json:"model"`
@@ -200,7 +232,10 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 		}
 
 		// 3. POST /embed with a probe text; verify non-zero 1024-dim vector.
-		probeBody, _ := json.Marshal(map[string]any{"texts": []string{"factvault embedder probe"}})
+		probeBody, err := json.Marshal(map[string]any{"texts": []string{"factvault embedder probe"}})
+		if err != nil {
+			return "", "internal error", err
+		}
 		embedReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/embed",
 			bytes.NewReader(probeBody))
 		if err != nil {
@@ -211,7 +246,11 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 		if err != nil {
 			return "", "start embedder service", err
 		}
-		defer embedResp.Body.Close()
+		defer func() {
+			if err := embedResp.Body.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "close: %v\n", err)
+			}
+		}()
 		if embedResp.StatusCode != http.StatusOK {
 			return "", "check embedder /embed endpoint", fmt.Errorf("embed status=%d", embedResp.StatusCode)
 		}
@@ -230,16 +269,23 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 			return "", fmt.Sprintf("expect %d-dim vectors", wantDim),
 				fmt.Errorf("vector dim=%d, want %d", len(vec), wantDim)
 		}
-		// Verify at least one component is non-zero (real model, not stub).
+		// Verify the vector norm is above the model-appropriate threshold.
+		//
+		// BGE-M3 and E5 models return L2-normalised vectors (norm≈1.0).
+		// A norm below 0.5 for these models almost certainly means a stub.
+		// Other models may return un-normalised vectors of arbitrary scale, so
+		// we only guard against the all-zero case (norm > 1e-9).
 		var norm float64
 		for _, v := range vec {
 			norm += v * v
 		}
-		if math.Sqrt(norm) < 1e-6 {
-			return "", "embedder returned zero vector — stub still active?",
-				fmt.Errorf("vector norm≈0, expected real BGE-M3 embedding")
+		norm = math.Sqrt(norm)
+		normThreshold, normLabel := normThresholdFor(modelName)
+		if norm < normThreshold {
+			return "", "embedder returned near-zero vector — stub still active?",
+				fmt.Errorf("vector norm=%.6g < %s threshold %.6g (model=%q)", norm, normLabel, normThreshold, modelName)
 		}
-		detail := fmt.Sprintf("dim=%d norm=%.4f", wantDim, math.Sqrt(norm))
+		detail := fmt.Sprintf("dim=%d norm=%.4f", wantDim, norm)
 		if modelName != "" {
 			detail = fmt.Sprintf("%s model=%s", detail, modelName)
 		}
@@ -247,11 +293,13 @@ func CheckEmbedder(ctx context.Context, cfg Config) CheckResult {
 	})
 }
 
+// CheckWayback verifies the Wayback archive endpoint responds as healthy.
 func CheckWayback(ctx context.Context, cfg Config) CheckResult {
 	url := strings.TrimRight(defaultString(cfg.WaybackURL, "https://web.archive.org"), "/") + "/"
 	return checkHTTP(ctx, cfg, "wayback", url, http.StatusOK)
 }
 
+// CheckCanary performs a lightweight end-to-end persistence path check.
 func CheckCanary(ctx context.Context, cfg Config) CheckResult {
 	return timed("canary", func() (string, string, error) {
 		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -265,7 +313,11 @@ func CheckCanary(ctx context.Context, cfg Config) CheckResult {
 		if err != nil {
 			return "", "check database", err
 		}
-		defer tx.Rollback(ctx)
+		defer func() {
+			if err := tx.Rollback(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+			}
+		}()
 		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
 			return "", "check app.tenant_id GUC", err
 		}
@@ -276,9 +328,29 @@ func CheckCanary(ctx context.Context, cfg Config) CheckResult {
 		if err != nil {
 			return "", "check assembler", err
 		}
-		data, _ := json.Marshal(bundle)
+		data, err := json.Marshal(bundle)
+		if err != nil {
+			return "", "marshal bundle", err
+		}
 		return fmt.Sprintf("assembled %d bytes", len(data)), "", nil
 	})
+}
+
+// normThresholdFor returns the minimum acceptable L2-norm for a vector from
+// the named model, plus a short label for error messages.
+//
+//   - BGE-M3 and E5 models are L2-normalised (norm≈1.0).  Anything below 0.5
+//     means the model is not actually running.
+//   - All other models may return un-normalised vectors of arbitrary scale.
+//     We only reject the all-zero case (true stubs).  Threshold is 1e-9.
+//
+// The model name is matched case-insensitively against "bge" and "e5".
+func normThresholdFor(modelName string) (threshold float64, label string) {
+	lower := strings.ToLower(modelName)
+	if strings.Contains(lower, "bge") || strings.Contains(lower, "e5") {
+		return 0.5, "BGE/E5 normalised"
+	}
+	return 1e-9, "non-zero"
 }
 
 func checkHTTP(ctx context.Context, cfg Config, name, url string, want int) CheckResult {
@@ -291,24 +363,16 @@ func checkHTTP(ctx context.Context, cfg Config, name, url string, want int) Chec
 		if err != nil {
 			return "", "start dependent service", err
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "close: %v\n", err)
+			}
+		}()
 		if resp.StatusCode != want {
 			return "", "check service health", fmt.Errorf("status=%d", resp.StatusCode)
 		}
 		return url, "", nil
 	})
-}
-
-func checkHTTPAny(ctx context.Context, cfg Config, name string, urls []string) CheckResult {
-	var last CheckResult
-	for _, url := range urls {
-		res := checkHTTP(ctx, cfg, name, url, http.StatusOK)
-		if res.OK {
-			return res
-		}
-		last = res
-	}
-	return last
 }
 
 func timed(name string, fn func() (detail, remedy string, err error)) CheckResult {

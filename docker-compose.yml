@@ -35,7 +35,7 @@ services:
       SENTENCE_TRANSFORMERS_HOME: /home/nonroot/.cache
       EMBEDDER_MODEL: "${EMBEDDER_MODEL:-BAAI/bge-m3}"
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080/health\")' || exit 1"]
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080/healthz\")' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -86,8 +86,8 @@ services:
       FACTVAULT_AUTH_DIR: "/var/lib/factvault/auth"
       FACTVAULT_DEV_TENANT_ID: "${FACTVAULT_DEV_TENANT_ID:-11111111-1111-1111-1111-111111111111}"
       FACTVAULT_EMBEDDER_URL: "${FACTVAULT_EMBEDDER_URL:-http://embedder:8080}"
-      FACTVAULT_LLM_URL: "${FACTVAULT_LLM_URL:-http://ollama:11434/v1}"
-      FACTVAULT_LLM_MODEL: "${FACTVAULT_LLM_MODEL:-qwen3:32b}"
+      FACTVAULT_LLM_BASE_URL: "${FACTVAULT_LLM_BASE_URL:-http://ollama:11434/v1}"
+      FACTVAULT_LLM_MODEL: "${FACTVAULT_LLM_MODEL:-llama3.1:8b}"
       FACTVAULT_WAYBACK_URL: "${FACTVAULT_WAYBACK_URL:-https://web.archive.org}"
       FACTVAULT_WORKER_LIMIT: "${FACTVAULT_WORKER_LIMIT:-100}"
       FACTVAULT_VERIFY_AGE_DAYS: "${FACTVAULT_VERIFY_AGE_DAYS:-7}"
@@ -117,7 +117,7 @@ services:
         echo "starting" > "$$status_file"
         while true; do
           echo "running" > "$$status_file"
-          if factvault worker collect --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" && \
+          if factvault worker rss --once && \
              factvault worker archive --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" && \
              factvault worker verify --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" --age-days "$$FACTVAULT_VERIFY_AGE_DAYS" && \
              factvault worker extract --tenant "$$FACTVAULT_DEV_TENANT_ID" --limit "$$FACTVAULT_WORKER_LIMIT" && \

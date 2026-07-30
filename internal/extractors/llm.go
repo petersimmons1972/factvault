@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/petersimmons1972/factvault/internal/config"
 	"github.com/petersimmons1972/factvault/internal/db"
 	"github.com/petersimmons1972/factvault/internal/netx"
 )
 
+// StatementProposal is a candidate factual statement extracted from raw source text.
 type StatementProposal struct {
 	SubjectText        string `json:"subject_text"`
 	PropertySlug       string `json:"property_slug"`
@@ -24,6 +27,7 @@ type StatementProposal struct {
 	ExcerptOffsetEnd   int    `json:"excerpt_offset_end"`
 }
 
+// LLMClient queries an LLM completion endpoint and parses statement proposals.
 type LLMClient struct {
 	BaseURL    string
 	APIKey     string
@@ -51,7 +55,10 @@ type chatCompletionResponse struct {
 	} `json:"choices"`
 }
 
-func (c *LLMClient) Extract(ctx context.Context, source *db.Source, rawText string) ([]StatementProposal, error) {
+const defaultMaxLLMBodyBytes = 4 * 1024 * 1024
+
+// Extract sends source text to the configured LLM and returns candidate proposals.
+func (c *LLMClient) Extract(ctx context.Context, _ *db.Source, rawText string) ([]StatementProposal, error) {
 	client := c.httpClient()
 	requestBody := chatCompletionRequest{
 		Model: c.Model,
@@ -77,24 +84,59 @@ func (c *LLMClient) Extract(ctx context.Context, source *db.Source, rawText stri
 	}
 
 	endpoint := strings.TrimRight(c.BaseURL, "/") + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+	// E-09: retry on 429 (rate-limit) and 5xx (transient server errors).
+	// Delays: 0s on first attempt, 1s before second, 2s before third.
+	// Context cancellation aborts early.
+	maxBodyBytes := maxLLMBodyBytes()
+	var (
+		resp *http.Response
+		body []byte
+	)
+	for attempt := range 3 {
+		if attempt > 0 {
+			var delay time.Duration
+			switch attempt {
+			case 1:
+				delay = 1 * time.Second
+			default:
+				delay = 2 * time.Second
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		// Recreate the request each attempt: the body reader is consumed per attempt.
+		retryReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		retryReq.Header.Set("Content-Type", "application/json")
+		if c.APIKey != "" {
+			retryReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+		}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+		resp, err = client.Do(retryReq)
+		if err != nil {
+			return nil, err
+		}
+		body, err = io.ReadAll(io.LimitReader(resp.Body, int64(maxBodyBytes)+1))
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "close: %v\n", closeErr)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			fmt.Fprintf(os.Stderr, "llm request: status %d, retrying (attempt %d/3)\n", resp.StatusCode, attempt+1)
+			continue
+		}
+		break
+	}
+	if len(body) > maxBodyBytes {
+		return nil, fmt.Errorf("llm response body exceeds %d bytes", maxBodyBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, fmt.Errorf("llm request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -129,6 +171,8 @@ func parseStatementProposals(content []byte) ([]StatementProposal, error) {
 		return direct, nil
 	}
 
+	// E-05: if the wrapper unmarshals successfully, return the result even when
+	// both slices are empty — that means the LLM found no facts, which is valid.
 	var wrapper struct {
 		Proposals  []StatementProposal `json:"proposals"`
 		Statements []StatementProposal `json:"statements"`
@@ -137,14 +181,14 @@ func parseStatementProposals(content []byte) ([]StatementProposal, error) {
 		if len(wrapper.Proposals) > 0 {
 			return wrapper.Proposals, nil
 		}
-		if len(wrapper.Statements) > 0 {
-			return wrapper.Statements, nil
-		}
+		// wrapper.Statements may also be empty — still not a parse error.
+		return wrapper.Statements, nil
 	}
 
 	return nil, fmt.Errorf("unable to parse statement proposals")
 }
 
+// VerifyExcerptOffset checks that an excerpt appears at the claimed rune offsets.
 func VerifyExcerptOffset(rawText, excerpt string, offsetStart, offsetEnd int) bool {
 	if offsetStart < 0 || offsetEnd < offsetStart {
 		return false
@@ -164,6 +208,7 @@ func VerifyExcerptOffset(rawText, excerpt string, offsetStart, offsetEnd int) bo
 	return rawText[startByte:endByte] == excerpt
 }
 
+// FilterVerifiedStatementProposals drops proposals that fail excerpt verification.
 func FilterVerifiedStatementProposals(rawText string, proposals []StatementProposal) []StatementProposal {
 	out := make([]StatementProposal, 0, len(proposals))
 	for _, proposal := range proposals {
@@ -192,4 +237,12 @@ func runeOffsetToByteOffset(rawText string, runeOffset int) (int, bool) {
 		return len(rawText), true
 	}
 	return 0, false
+}
+
+func maxLLMBodyBytes() int {
+	size, err := config.ResolveInt(nil, "FACTVAULT_MAX_LLM_BODY_BYTES", defaultMaxLLMBodyBytes, false)
+	if err != nil || size <= 0 {
+		return defaultMaxLLMBodyBytes
+	}
+	return size
 }

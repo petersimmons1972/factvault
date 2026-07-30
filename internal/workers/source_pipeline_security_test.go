@@ -19,9 +19,11 @@ func TestVerifySourceRejectsLoopbackAndInvalidScheme(t *testing.T) {
 }
 
 func TestVerifySourceRejectsLargeResponses(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		payload := make([]byte, maxVerifyBodyBytes+1)
-		_, _ = w.Write(payload)
+		if _, err := w.Write(payload); err != nil {
+			panic(err)
+		}
 	}))
 	defer server.Close()
 
@@ -36,8 +38,10 @@ func TestVerifySourceRejectsLargeResponses(t *testing.T) {
 }
 
 func TestVerifyClientBlocksRedirectToLoopback(t *testing.T) {
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "private")
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := io.WriteString(w, "private"); err != nil {
+			panic(err)
+		}
 	}))
 	defer target.Close()
 

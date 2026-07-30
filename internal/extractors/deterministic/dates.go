@@ -1,3 +1,4 @@
+// Package deterministic implements deterministic extraction logic for factual values.
 package deterministic
 
 import (
@@ -10,6 +11,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/extractors"
 )
 
+// DateExtractor extracts date facts from text.
 type DateExtractor struct{}
 
 var (
@@ -19,6 +21,7 @@ var (
 	dayMonthYearPattern = regexp.MustCompile(`\b\d{1,2} (?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4}\b`)
 )
 
+// Extract returns date facts discovered in raw text using deterministic regex patterns.
 func (DateExtractor) Extract(ctx context.Context, source *db.Source, rawText string) ([]extractors.ExtractedFact, error) {
 	_ = ctx
 
@@ -50,7 +53,7 @@ func appendDateFacts(
 		if !ok {
 			continue
 		}
-		if overlapsExistingDateFact(facts, start, end) {
+		if overlapsExistingDateFact(rawText, facts, start, end) {
 			continue
 		}
 		facts = append(facts, extractors.ExtractedFact{
@@ -67,11 +70,16 @@ func appendDateFacts(
 	return facts
 }
 
-func overlapsExistingDateFact(facts []extractors.ExtractedFact, start, end int) bool {
+// overlapsExistingDateFact reports whether the byte range [start, end) in
+// rawText overlaps any already-extracted fact. The stored ExcerptOffsetStart
+// and ExcerptOffsetEnd are rune (character) offsets, so the incoming byte
+// offsets must be converted first (E-06: mismatch caused false non-overlaps on
+// multi-byte UTF-8 text).
+func overlapsExistingDateFact(rawText string, facts []extractors.ExtractedFact, start, end int) bool {
+	runeStart := byteOffsetToCharOffset(rawText, start)
+	runeEnd := byteOffsetToCharOffset(rawText, end)
 	for _, fact := range facts {
-		existingStart := fact.ExcerptOffsetStart
-		existingEnd := fact.ExcerptOffsetEnd
-		if start < existingEnd && end > existingStart {
+		if runeStart < fact.ExcerptOffsetEnd && runeEnd > fact.ExcerptOffsetStart {
 			return true
 		}
 	}

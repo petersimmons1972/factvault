@@ -1,3 +1,4 @@
+// Package workers implements background worker processes: fact extraction, dossier assembly, and corroboration.
 package workers
 
 import (
@@ -15,6 +16,7 @@ import (
 	"github.com/petersimmons1972/factvault/internal/db"
 )
 
+// Corroborator validates and re-weights statement confidence across sources.
 type Corroborator struct {
 	DB     *pgxpool.Pool
 	Logger *slog.Logger
@@ -29,6 +31,7 @@ type sourceEvidence struct {
 	Confidence  float64
 }
 
+// CorroborateOnce verifies corroboration evidence for extracted statements.
 func (c *Corroborator) CorroborateOnce(ctx context.Context, tenantID string) error {
 	if c == nil || c.DB == nil {
 		return fmt.Errorf("corroborate worker: nil db pool")
@@ -45,14 +48,19 @@ func (c *Corroborator) CorroborateOnce(ctx context.Context, tenantID string) err
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(txCtx)
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+		}
+	}()
 
 	rows, err := tx.Query(txCtx, `
-		SELECT ss.statement_id::text, ss.source_id::text, s.url, COALESCE(s.publisher, ''), COALESCE(s.raw_text, ''), COALESCE(ss.confidence::float8, 0.5)
+		SELECT ss.statement_id::text, ss.source_id::text, s.url, COALESCE(s.publisher, ''), LEFT(COALESCE(s.raw_text, ''), 32768), COALESCE(ss.confidence::float8, 0.5)
 		FROM statement_sources ss
 		JOIN sources s ON s.id = ss.source_id
 		WHERE ss.tenant_id = $1::uuid
 		ORDER BY ss.statement_id, ss.source_id
+		LIMIT 1000
 	`, tenantID)
 	if err != nil {
 		return err
@@ -92,6 +100,7 @@ type sourceCluster struct {
 	texts  []string
 }
 
+// CountIndependentSources estimates independent evidence clusters across domains.
 func CountIndependentSources(evidence []sourceEvidence) int {
 	var clusters []sourceCluster
 	for _, ev := range evidence {

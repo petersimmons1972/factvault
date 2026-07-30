@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -14,10 +15,12 @@ import (
 	"github.com/petersimmons1972/factvault/internal/db"
 )
 
+// DossierWorker builds and persists dossier bundles.
 type DossierWorker struct {
 	DB *pgxpool.Pool
 }
 
+// DossierOptions controls the scope for dossier generation.
 type DossierOptions struct {
 	TenantID string
 	EntityID string
@@ -25,6 +28,7 @@ type DossierOptions struct {
 	Limit    int
 }
 
+// RunOnce builds dossier bundles for one batch of entities.
 func (w DossierWorker) RunOnce(ctx context.Context, opts DossierOptions) (int, error) {
 	if w.DB == nil {
 		return 0, fmt.Errorf("dossier worker: nil db pool")
@@ -41,7 +45,11 @@ func (w DossierWorker) RunOnce(ctx context.Context, opts DossierOptions) (int, e
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(txCtx)
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback after commit: %v\n", err)
+		}
+	}()
 
 	ids, err := dossierEntityIDs(txCtx, tx, opts)
 	if err != nil {

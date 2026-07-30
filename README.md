@@ -39,7 +39,11 @@ cd factvault
 cp .env.example .env
 
 # Host-run commands use localhost, not the in-compose service name.
-export FACTVAULT_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
+# FACTVAULT_DATABASE_URL (app_user) is the runtime DSN for api/workers/mcp/init.
+# FACTVAULT_MIGRATE_DATABASE_URL (superuser) is used only by `factvault migrate`
+# (CREATE EXTENSION requires superuser). See docs/getting-started.md for the full contract.
+export FACTVAULT_DATABASE_URL='postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_MIGRATE_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
 export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
 
 make setup
@@ -51,7 +55,7 @@ The `doctor` command runs health checks — database reachability, RLS policies,
 
 ```
 postgres                     OK pgvector loaded
-migrations                   OK schema version 4
+migrations                   OK schema version 6
 rls                          OK cross-tenant row hidden
 canary                       OK assembled 312 bytes
 llm                          WARN connection refused  (optional)
@@ -66,8 +70,13 @@ If you prefer to run each step explicitly:
 ```bash
 docker compose up -d postgres embedder
 go build -o bin/factvault ./cmd/factvault
+# Migrate runs as the Postgres superuser — CREATE EXTENSION requires superuser
+# privileges. It reads FACTVAULT_MIGRATE_DATABASE_URL (exported above).
 ./bin/factvault migrate
-./bin/factvault init --dsn "$FACTVAULT_DATABASE_URL" --tenant "$FACTVAULT_DEV_TENANT_ID"
+# init (and everything after it) runs as app_user via FACTVAULT_DATABASE_URL —
+# matches production, exercises the GRANTs. Do not pass password-bearing DSNs
+# via --dsn: the flag rejects embedded passwords by design; use the env var.
+./bin/factvault init --tenant "$FACTVAULT_DEV_TENANT_ID"
 
 # Load a bundled example and assemble its first dossier.
 ./bin/factvault example load ai-startup-tracking \
@@ -100,7 +109,7 @@ Both share one assembler and one bundle JSON shape. See [docs/superpowers/specs/
 | # | Stage | Key guarantee |
 |---|-------|---------------|
 | 1 | **Collect** | Idempotent on `(tenant_id, url)`. Raw HTML stored at INSERT; never re-fetched downstream. |
-| 2 | **Archive** | `raw_text` extracted via trafilatura. Wayback SPN2 snapshot submitted. `raw_html` zlib-compressed. |
+| 2 | **Archive** | `raw_text` extracted via Go `stripHTML` tag-stripper. Wayback SPN2 snapshot submitted. `raw_html` zlib-compressed. |
 | 3 | **Extract** | Deterministic extractors run first. LLM runs on uncovered text only. Excerpt-offset check rejects hallucinations before INSERT. |
 | 4 | **Corroborate** | Confidence recomputed from scratch on every run. Conflicts surfaced in `v_conflicts`, never silently resolved. |
 | 5 | **Verify** | Daily CronJob. Append-only `source_verifications` log. No source or statement ever deleted. |
@@ -112,7 +121,7 @@ Both share one assembler and one bundle JSON shape. See [docs/superpowers/specs/
 
 ![Confidence Formula and Conflict Surface](docs/assets/svg/confidence-formula.svg)
 
-Confidence is computed in `factvault/assembler/confidence.py`. The formula is deterministic and auditable: independence is tested by publisher domain and trigram similarity, not guessed. No statement ever reaches 1.0 through the automated pipeline.
+Confidence is computed in `internal/assembler/confidence.go`. The formula is deterministic and auditable: independence is tested by publisher domain and trigram similarity, not guessed. No statement ever reaches 1.0 through the automated pipeline.
 
 ---
 
@@ -161,19 +170,21 @@ GET /briefs
 GET /briefs/{id}
 ```
 
-Example brief generation payload:
+`POST /briefs/generate` now assembles the bundle server-side under the authenticated tenant. Client-supplied `bundle` JSON is rejected.
+
+Example dossier brief payload:
 ```json
 {
   "source_kind": "dossier",
-  "entity_id": "11111111-1111-1111-1111-111111111111",
-  "bundle": {
-    "entity_id": "11111111-1111-1111-1111-111111111111",
-    "tenant_id": "22222222-2222-2222-2222-222222222222",
-    "entities": [],
-    "statements": [],
-    "sources": [],
-    "assembled_at": "2026-01-01T00:00:00Z"
-  }
+  "entity_id": "11111111-1111-1111-1111-111111111111"
+}
+```
+
+Illustrative story brief payload (adjust the query to your tenant data):
+```json
+{
+  "source_kind": "story",
+  "query": "AI startup funding announcements"
 }
 ```
 

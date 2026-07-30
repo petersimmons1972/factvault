@@ -1,3 +1,4 @@
+// Package auth implements JWT generation, parsing, and verification utilities.
 package auth
 
 import (
@@ -16,10 +17,13 @@ import (
 )
 
 var (
+	// ErrInvalidToken indicates authentication data that cannot be parsed or validated.
 	ErrInvalidToken = errors.New("invalid jwt")
+	// ErrExpiredToken indicates the JWT has passed its expiration.
 	ErrExpiredToken = errors.New("jwt expired")
 )
 
+// Claims carries the JWT claims used by factvault.
 type Claims struct {
 	TenantID  string `json:"tenant_id"`
 	Subject   string `json:"sub"`
@@ -27,11 +31,13 @@ type Claims struct {
 	ExpiresAt int64  `json:"exp"`
 }
 
+// Verifier verifies RS256-signed tokens with optional test clock injection.
 type Verifier struct {
 	PublicKey *rsa.PublicKey
 	Now       func() time.Time
 }
 
+// GenerateKeyPair creates a new RSA key pair and returns PEM-encoded private/public keys.
 func GenerateKeyPair() (privatePEM []byte, publicPEM []byte, err error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -45,6 +51,7 @@ func GenerateKeyPair() (privatePEM []byte, publicPEM []byte, err error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: priv}), pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub}), nil
 }
 
+// ParsePrivateKeyPEM parses PEM-encoded RSA private key bytes.
 func ParsePrivateKeyPEM(data []byte) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {
@@ -64,6 +71,7 @@ func ParsePrivateKeyPEM(data []byte) (*rsa.PrivateKey, error) {
 	return key, nil
 }
 
+// ParsePublicKeyPEM parses PEM-encoded RSA public key bytes.
 func ParsePublicKeyPEM(data []byte) (*rsa.PublicKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {
@@ -80,6 +88,7 @@ func ParsePublicKeyPEM(data []byte) (*rsa.PublicKey, error) {
 	return key, nil
 }
 
+// SignRS256 returns a signed RS256 JWT string for the provided claims.
 func SignRS256(privateKey *rsa.PrivateKey, claims Claims) (string, error) {
 	header := map[string]string{"alg": "RS256", "typ": "JWT"}
 	headerJSON, err := json.Marshal(header)
@@ -99,6 +108,7 @@ func SignRS256(privateKey *rsa.PrivateKey, claims Claims) (string, error) {
 	return unsigned + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
+// Verify validates an RS256 JWT and returns claims when valid.
 func (v Verifier) Verify(token string) (Claims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 || v.PublicKey == nil {
@@ -142,6 +152,7 @@ func (v Verifier) Verify(token string) (Claims, error) {
 	return claims, nil
 }
 
+// BearerToken extracts the bearer token value from an Authorization header.
 func BearerToken(header string) (string, bool) {
 	prefix := "Bearer "
 	if !strings.HasPrefix(header, prefix) {

@@ -4,8 +4,13 @@ metadata:
   name: factvault-verify
 spec:
   schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 600
+      backoffLimit: 1
       template:
         spec:
           restartPolicy: OnFailure
@@ -20,10 +25,29 @@ spec:
                     name: factvault-config
                 - secretRef:
                     name: factvault-db-credentials
+                # Migrations create extensions and run DDL (CREATE EXTENSION
+                # pgcrypto/vector/pg_trgm, GRANTs), which the runtime app_user DSN
+                # above cannot do. FACTVAULT_MIGRATE_DATABASE_URL from this Secret
+                # takes precedence in cmd/factvault/migrate.go; only this
+                # initContainer receives it. See #272.
+                - secretRef:
+                    name: factvault-migrate-credentials
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities:
                   drop: ["ALL"]
+                runAsNonRoot: true
+                runAsUser: 65532
+                readOnlyRootFilesystem: true
+                seccompProfile:
+                  type: RuntimeDefault
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"
           containers:
             - name: factvault-verify
               image: factvault-app:latest
@@ -37,3 +61,15 @@ spec:
                 allowPrivilegeEscalation: false
                 capabilities:
                   drop: ["ALL"]
+                runAsNonRoot: true
+                runAsUser: 65532
+                readOnlyRootFilesystem: true
+                seccompProfile:
+                  type: RuntimeDefault
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "1Gi"

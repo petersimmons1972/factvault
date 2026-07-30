@@ -1,5 +1,7 @@
 > **Global Claude↔Codex loop, QA, and protocol:** petersimmons1972/claude-codex/AGENTS.md — repo-specific notes below.
 
+> **RETIRED PROTOCOL** — The agent-comms mailbox (JSON inbox/heartbeat) was retired 2026-05-28. The current workflow uses GitHub Issues (labeled `agent/codex`) dispatched via fleet-dispatch. See the **Loop** section below.
+
 # Codex Onboarding — Read This First
 
 ## Role
@@ -10,30 +12,23 @@ PRs that close them.
 
 ## Loop
 
-1. Check `${AGENT_COMMS_ROOT:-~/.local/share/agent-comms}/inbox/codex/` —
-   read and process any pending messages in `ts` order before doing anything
-   else. `.agent-comms/` is a back-compat symlink to that shared bus. See the
-   **Message bus** section below and the shared bus `README.md` for full
-   semantics.
-2. Poll for open GitHub Issues labeled `agent/codex`, sorted by priority label
+1. Poll for open GitHub Issues labeled `agent/codex`, sorted by priority label
    (`priority/p0` highest, then `priority/p1`, `priority/p2`, `priority/p3`,
    then unlabeled) and then by creation date ascending within each priority.
-3. If the queue is empty, wait and re-poll. Do not idle into unrelated work.
-4. Claim the oldest available issue by:
+2. If the queue is empty, wait and re-poll. Do not idle into unrelated work.
+3. Claim the oldest available issue by:
    - Applying the `agent/codex/working` label
    - Removing the `agent/codex` label
-   - Writing a `handoff` message to the shared bus `inbox/claude/` referencing
-     the issue with cross-repo refs (e.g. `refs: ["factvault#N"]`)
-5. Read the issue body in full. Every coordinator-authored issue guarantees
+4. Read the issue body in full. Every coordinator-authored issue guarantees
    exact file paths, acceptance criteria, spec pointers, and constraints. If
-   any of these are missing, write a `question` to the coordinator inbox and
-   apply `agent/codex/needs-input`. **Do not guess.**
-6. Implement the work per the conventions in this doc and `AGENTS.md`.
-7. Run the full toolchain sequence from `docs/codex/toolchain.md`. Stop on
+   any of these are missing, comment on the issue with your question and apply
+   `agent/codex/needs-input`. **Do not guess.**
+5. Implement the work per the conventions in this doc and `AGENTS.md`.
+6. Run the full toolchain sequence from `docs/codex/toolchain.md`. Stop on
    first failure; do not commit a failing build or test.
-8. Open a PR with `Closes #N` on the last line of the final commit message
+7. Open a PR with `Closes #N` on the last line of the final commit message
    and in the PR body.
-9. On merge, return to step 1.
+8. On merge, return to step 1.
 
 **One issue at a time.** Do not claim a second issue while one is in progress.
 
@@ -59,16 +54,10 @@ Transitions:
 
 ## Message bus
 
-See `${AGENT_COMMS_ROOT:-~/.local/share/agent-comms}/README.md` for the full
-schema and semantics. The repo-local `.agent-comms/` path is preserved only as
-a back-compat symlink to the shared bus.
-
-Quick rules:
-- Check the inbox **between every Issue-queue poll** (step 1 of the loop above)
-- Process messages in `ts` order
-- Always write an `ack` with `in_reply_to` set before moving the original to `processed/`
-- Schema-validate before processing; malformed message → ack with `body: "rejected: schema validation failed: <error>"`, move to `processed/`
-- Never silently drop a message
+> **RETIRED** — The JSON inbox/heartbeat/handoff protocol was retired 2026-05-28.
+> Codex no longer reads from or writes to `~/.local/share/agent-comms/`.
+> Coordinator communication now happens exclusively via GitHub Issues and
+> fleet-dispatch. See the **Loop** section above.
 
 ## Conventions
 
@@ -114,10 +103,10 @@ For dispatch commands, see `docs/codex/qa-personas/invocation-codex.md`.
 
 ## Stuck or blocked?
 
-- **Ambiguous brief:** write a `question` to the shared bus `inbox/claude/`,
+- **Ambiguous brief:** comment on the GitHub Issue with your question,
   apply `agent/codex/needs-input`, stop work on that issue
-- **Tooling/environment failure you cannot resolve:** write a `block` to
-  the shared bus `inbox/claude/`, apply `agent/codex/blocked`, stop the loop
-  on that issue
+- **Tooling/environment failure you cannot resolve:** comment on the GitHub
+  Issue with `BLOCKED:` and the error, apply `agent/codex/blocked`, stop the
+  loop on that issue
 - **Test failure you cannot fix in ~10 minutes:** STOP, report BLOCKED with
   verbatim failure output. Do not commit a known-failing test

@@ -38,6 +38,7 @@ func VerifyExcerptOffset(rawText, excerpt string, offsetStart, offsetEnd int) bo
 	return rawText[startBytePos:endBytePos] == excerpt
 }
 
+// FactPipeline orchestrates extraction from archived source text into statements.
 type FactPipeline struct {
 	DB                     *pgxpool.Pool
 	Deterministic          extractors.Extractor
@@ -49,6 +50,7 @@ type FactPipeline struct {
 	Logger                 *slog.Logger
 }
 
+// LLMExtractor submits source text to an LLM and returns statement proposals.
 type LLMExtractor interface {
 	Extract(ctx context.Context, source *db.Source, rawText string) ([]extractors.StatementProposal, error)
 }
@@ -59,6 +61,7 @@ type queryExecutor interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// ExtractOnce runs deterministic extraction (and optional LLM augmentation) once.
 func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit int) error {
 	if p == nil || p.DB == nil {
 		return fmt.Errorf("extract worker: nil db pool")
@@ -76,41 +79,11 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 	if err := tenant.Scan(tenantID); err != nil {
 		return fmt.Errorf("invalid tenant id: %w", err)
 	}
-	txCtx := db.WithPool(ctx, p.DB)
-	txCtx, tx, err := db.TenantContext(txCtx, tenant)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(txCtx)
-
 	logger := p.logger()
-	rows, err := tx.Query(txCtx, `
-		SELECT id, tenant_id, url, fetched_at, content_hash, raw_html, raw_text, archive_url, publisher, title, published_at, last_verified_at, status, created_at
-		FROM sources
-		WHERE tenant_id = $1::uuid AND raw_text IS NOT NULL AND status = 'archived'
-		ORDER BY fetched_at ASC
-		LIMIT $2
-	`, tenantID, limit)
+	sources, err := p.loadArchivedSources(ctx, tenant, tenantID, limit)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-
-	var sources []db.Source
-	for rows.Next() {
-		var source db.Source
-		if err := rows.Scan(
-			&source.ID, &source.TenantID, &source.Url, &source.FetchedAt, &source.ContentHash, &source.RawHtml, &source.RawText,
-			&source.ArchiveUrl, &source.Publisher, &source.Title, &source.PublishedAt, &source.LastVerifiedAt, &source.Status, &source.CreatedAt,
-		); err != nil {
-			return err
-		}
-		sources = append(sources, source)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	rows.Close()
 
 	for _, source := range sources {
 		rawText, ok := extractors.SourceRawText(&source)
@@ -121,24 +94,100 @@ func (p *FactPipeline) ExtractOnce(ctx context.Context, tenantID string, limit i
 		if err != nil {
 			return err
 		}
-		acceptedFacts := 0
-		for _, fact := range facts {
-			if !VerifyExcerptOffset(rawText, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd) {
-				logger.WarnContext(txCtx, "rejecting fact with invalid excerpt offset", "source_id", source.ID.String(), "property", fact.PropertySlug)
-				continue
-			}
-			inserted, err := p.insertFact(txCtx, tx, tenantID, source.ID.String(), fact)
-			if err != nil {
-				return err
-			}
-			if inserted {
-				acceptedFacts++
-			}
+		if err := p.writeExtractedFacts(ctx, tenant, tenantID, &source, rawText, facts, logger); err != nil {
+			return err
 		}
-		if acceptedFacts > 0 {
-			if _, err := tx.Exec(txCtx, "UPDATE sources SET status = 'extracted' WHERE id = $1", source.ID); err != nil {
-				return err
-			}
+	}
+	return nil
+}
+
+func (p *FactPipeline) loadArchivedSources(ctx context.Context, tenant pgtype.UUID, tenantID string, limit int) ([]db.Source, error) {
+	txCtx := db.WithPool(ctx, p.DB)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil && !isRollbackAfterCommit(err) {
+			fmt.Fprintf(os.Stderr, "extract worker: rollback read tx: %v\n", err)
+		}
+	}()
+
+	rows, err := tx.Query(txCtx, `
+		SELECT id, tenant_id, url, fetched_at, content_hash, raw_html, raw_text, archive_url, publisher, title, published_at, last_verified_at, status, created_at
+		FROM sources
+		WHERE tenant_id = $1::uuid AND raw_text IS NOT NULL AND status = 'archived'
+		ORDER BY fetched_at ASC
+		LIMIT $2
+	`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sources []db.Source
+	for rows.Next() {
+		var source db.Source
+		if err := rows.Scan(
+			&source.ID, &source.TenantID, &source.Url, &source.FetchedAt, &source.ContentHash, &source.RawHtml, &source.RawText,
+			&source.ArchiveUrl, &source.Publisher, &source.Title, &source.PublishedAt, &source.LastVerifiedAt, &source.Status, &source.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	if err := tx.Commit(txCtx); err != nil {
+		return nil, err
+	}
+	return sources, nil
+}
+
+func (p *FactPipeline) writeExtractedFacts(
+	ctx context.Context,
+	tenant pgtype.UUID,
+	tenantID string,
+	source *db.Source,
+	rawText string,
+	facts []extractors.ExtractedFact,
+	logger *slog.Logger,
+) error {
+	if len(facts) == 0 {
+		return nil
+	}
+
+	txCtx := db.WithPool(ctx, p.DB)
+	txCtx, tx, err := db.TenantContext(txCtx, tenant)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tx.Rollback(txCtx); err != nil && !isRollbackAfterCommit(err) {
+			fmt.Fprintf(os.Stderr, "extract worker: rollback write tx: %v\n", err)
+		}
+	}()
+
+	acceptedFacts := 0
+	for _, fact := range facts {
+		if !VerifyExcerptOffset(rawText, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd) {
+			logger.WarnContext(ctx, "rejecting fact with invalid excerpt offset", "source_id", source.ID.String(), "property", fact.PropertySlug)
+			continue
+		}
+		inserted, err := p.insertFact(txCtx, tx, tenantID, source.ID.String(), fact)
+		if err != nil {
+			return err
+		}
+		if inserted {
+			acceptedFacts++
+		}
+	}
+	if acceptedFacts > 0 {
+		if _, err := tx.Exec(txCtx, "UPDATE sources SET status = 'extracted' WHERE id = $1", source.ID); err != nil {
+			return err
 		}
 	}
 	return tx.Commit(txCtx)
@@ -192,14 +241,22 @@ func (p *FactPipeline) insertFact(ctx context.Context, exec queryExecutor, tenan
 	if fact.SourceConfidence != nil {
 		confidence = *fact.SourceConfidence
 	}
+	// W-07: use RETURNING id so ON CONFLICT DO NOTHING lets us detect duplicates
+	// inserted by a concurrent worker.
 	query, args := insertStatementQuery(statementID, tenantID, subjectID, propertyID, valueType, fact.Value, confidence)
-	if _, err := exec.Exec(ctx, query, args...); err != nil {
+	var insertedID string
+	err = exec.QueryRow(ctx, query, args...).Scan(&insertedID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// ON CONFLICT DO NOTHING — another worker already inserted this statement.
+			return false, nil
+		}
 		return false, err
 	}
 	_, err = exec.Exec(ctx, `
 		INSERT INTO statement_sources (id, statement_id, source_id, excerpt, excerpt_offset_start, excerpt_offset_end, extraction_method, confidence, tenant_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, uuid.NewString(), statementID, sourceID, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd, fact.ExtractionMethod, confidence, tenantID)
+	`, uuid.NewString(), insertedID, sourceID, fact.Excerpt, fact.ExcerptOffsetStart, fact.ExcerptOffsetEnd, fact.ExtractionMethod, confidence, tenantID)
 	if err != nil {
 		return false, err
 	}
@@ -211,25 +268,29 @@ func (p *FactPipeline) ensureEntity(ctx context.Context, exec queryExecutor, ten
 		label = "unknown subject"
 	}
 	extID := entityExtIDForLabel(label)
+	// W-05: use INSERT ... ON CONFLICT DO NOTHING RETURNING to handle concurrent
+	// workers that may race to create the same entity. The fallback SELECT
+	// by ext_id fetches the row that the competing worker already committed.
 	var id string
 	err := exec.QueryRow(ctx, `
-		SELECT id::text
-		FROM entities
-		WHERE tenant_id = $1 AND label = $2
-		ORDER BY created_at ASC
-		LIMIT 1
-	`, tenantID, label).Scan(&id)
+		INSERT INTO entities (id, tenant_id, ext_id, label, type_uri)
+		VALUES ($1, $2, $3, $4, NULL)
+		ON CONFLICT ON CONSTRAINT uq_entities_tenant_ext_id DO NOTHING
+		RETURNING id::text
+	`, uuid.NewString(), tenantID, extID, label).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", err
 	}
+	// Conflict: another concurrent worker inserted first — re-fetch by ext_id.
 	err = exec.QueryRow(ctx, `
-		INSERT INTO entities (id, tenant_id, ext_id, label, type_uri)
-		VALUES ($1, $2, $3, $4, NULL)
-		RETURNING id::text
-	`, uuid.NewString(), tenantID, extID, label).Scan(&id)
+		SELECT id::text
+		FROM entities
+		WHERE tenant_id = $1 AND ext_id = $2
+		LIMIT 1
+	`, tenantID, extID).Scan(&id)
 	return id, err
 }
 
@@ -278,16 +339,37 @@ func (p *FactPipeline) ensureProperty(ctx context.Context, exec queryExecutor, t
 	if !result.Known {
 		label = slug
 	}
+	// W-06: use ON CONFLICT DO NOTHING RETURNING to handle concurrent workers
+	// racing to create the same tenant-specific property.
 	err = exec.QueryRow(ctx, `
 		INSERT INTO properties (id, tenant_id, slug, label, value_type)
 		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT ON CONSTRAINT uq_properties_tenant_slug DO NOTHING
 		RETURNING id::text
 	`, uuid.NewString(), tenantID, slug, label, valueType).Scan(&id)
+	if err == nil {
+		return id, valueType, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, err
+	}
+	// Conflict: another concurrent worker inserted first — re-fetch.
+	err = exec.QueryRow(ctx, `
+		SELECT id::text
+		FROM properties
+		WHERE slug = $1 AND (tenant_id = $2 OR tenant_id IS NULL)
+		ORDER BY tenant_id NULLS LAST
+		LIMIT 1
+	`, slug, tenantID).Scan(&id)
 	return id, valueType, true, err
 }
 
+// insertStatementQuery builds the INSERT query for a statement.
+// It uses ON CONFLICT ON CONSTRAINT uq_statements_content_hash DO NOTHING so
+// concurrent workers cannot produce duplicate key errors (W-07).
+// RETURNING id::text lets the caller detect a conflict (ErrNoRows = duplicate).
 func insertStatementQuery(statementID, tenantID, subjectID, propertyID, valueType, value string, confidence float64) (string, []any) {
-	base := `INSERT INTO statements (id, tenant_id, subject_id, property_id, %s, rank, confidence) VALUES ($1, $2, $3, $4, %s, 'normal', $6)`
+	base := `INSERT INTO statements (id, tenant_id, subject_id, property_id, %s, rank, confidence) VALUES ($1, $2, $3, $4, %s, 'normal', $6) ON CONFLICT ON CONSTRAINT uq_statements_content_hash DO NOTHING RETURNING id::text`
 	args := []any{statementID, tenantID, subjectID, propertyID, value, confidence}
 	switch valueType {
 	case "number":

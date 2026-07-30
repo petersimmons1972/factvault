@@ -17,10 +17,15 @@ Issue #94 owns the final single-command Docker Compose deployment polish. Until 
 
 ## Configuration
 
-Required for most commands:
+Required for most commands. factvault uses two DSNs: `FACTVAULT_DATABASE_URL` (app_user) is the
+runtime DSN for `init`, `api`, `worker`, `mcp`, and `doctor` — it matches production and exercises
+the schema's `GRANT`s end-to-end. `FACTVAULT_MIGRATE_DATABASE_URL` (superuser) is used only by
+`factvault migrate`, because `CREATE EXTENSION` requires superuser privileges. When both are set,
+`factvault migrate` prefers `FACTVAULT_MIGRATE_DATABASE_URL`.
 
 ```bash
-export FACTVAULT_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_DATABASE_URL='postgres://app_user:dev_only_local_password@localhost:5432/factvault?sslmode=disable'
+export FACTVAULT_MIGRATE_DATABASE_URL='postgres://factvault:factvault@localhost:5432/factvault?sslmode=disable'
 export FACTVAULT_DEV_TENANT_ID='11111111-1111-1111-1111-111111111111'
 ```
 
@@ -67,7 +72,7 @@ headers installed.
 | Goose migrations | Schema version is current enough | Run `factvault migrate`. |
 | RLS enforced | Tenant isolation policies hide cross-tenant rows | Verify migrations and app role setup. |
 | LLM endpoint | OpenAI-compatible `/models` endpoint responds | Start local Ollama/olla or configure frontier endpoint. |
-| Embedder health | BGE-M3 service responds on `/healthz` (200 when model loaded; 503 while loading) AND returns a real non-zero 1024-dim vector for a probe text (stub detection) | Start embedder; wait for model initialization (cold model download can take several minutes). |
+| Embedder health | BGE-M3 service responds with `200 OK` on `/healthz` or `/health` AND returns a real non-zero 1024-dim vector for a probe text (stub detection) | Start embedder; wait for model initialization (cold model download can take several minutes). |
 | Wayback reachable | Archive endpoint can be contacted | Check outbound network or set alternate `FACTVAULT_WAYBACK_URL`. |
 | Canary fact | Assembler can produce a bundle from a tenant-scoped entity | Check migrations and RLS context. |
 
@@ -80,7 +85,7 @@ Use `doctor --required-only` to exit 0 when only optional checks (LLM, embedder,
 Run workers in this order for a tenant:
 
 ```bash
-./bin/factvault worker collect --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker rss --once
 ./bin/factvault worker archive --tenant "$FACTVAULT_DEV_TENANT_ID"
 ./bin/factvault worker extract --tenant "$FACTVAULT_DEV_TENANT_ID"
 ./bin/factvault worker corroborate --tenant "$FACTVAULT_DEV_TENANT_ID"
@@ -187,15 +192,50 @@ to converge.
 3. **Create `app_user` on first Postgres init.** The role must exist before migrations run. Options:
    - Mount an init script (equivalent to `deploy/initdb/01-create-app-user.sh`) via a ConfigMap into
      the Postgres pod's `docker-entrypoint-initdb.d/`.
-   - Run a pre-migration init container that executes:
-     ```sql
-     CREATE ROLE app_user WITH LOGIN PASSWORD '<password from secret>';
+   - Run the one-shot Job example at `deploy/k8s/examples/postgres-app-user-init.example.yaml`
+     before the first `factvault-migrate` Job. It uses a dedicated
+     `factvault-postgres-bootstrap` Secret for the superuser DSN and `POSTGRES_APP_USER_PASSWORD`,
+     then idempotently creates or alters `app_user` using the same safe SQL-string `psql` quoting
+     pattern as the compose init script. Copy it to a working file, run it, verify completion, and
+     delete the bootstrap Secret after success:
+     ```bash
+     kubectl create secret generic factvault-postgres-bootstrap \
+       --from-literal=POSTGRES_SUPERUSER_DATABASE_URL='postgres://postgres:<superuser-password>@<host>:5432/factvault?sslmode=require' \
+       --from-literal=POSTGRES_APP_USER_PASSWORD='<same password used in FACTVAULT_DATABASE_URL>' \
+       -n factvault \
+       --dry-run=client -o yaml | kubectl apply -f -
+
+     cp deploy/k8s/examples/postgres-app-user-init.example.yaml /tmp/factvault-postgres-app-user-init.yaml
+     kubectl apply -f /tmp/factvault-postgres-app-user-init.yaml
+     kubectl wait --for=condition=complete job/factvault-postgres-app-user-init -n factvault --timeout=120s
+     kubectl logs job/factvault-postgres-app-user-init -n factvault
+     kubectl delete job factvault-postgres-app-user-init -n factvault
+     kubectl delete secret factvault-postgres-bootstrap -n factvault
      ```
+     Replace `<host>` and `sslmode` to match your Postgres TLS mode. Managed Postgres commonly uses
+     `sslmode=require`; in-cluster test Postgres may use `sslmode=disable`. The superuser DSN and
+     `POSTGRES_APP_USER_PASSWORD` are visible to processes inside the short-lived Job pod, so keep
+     this as a bootstrap-only step.
    - Use your managed Postgres provider's user management API (e.g. Cloud SQL IAM auth, RDS Users).
 
 4. **All Deployments, Jobs, and CronJobs** reference both `factvault-config` (non-secret config) and
    `factvault-db-credentials` (DSN) via `envFrom`. Do not add `FACTVAULT_DATABASE_URL` back to the
    ConfigMap.
+
+5. **Store a separate migration DSN.** Migrations run `CREATE EXTENSION pgcrypto/vector/pg_trgm`
+   and other DDL that the runtime `app_user` role is deliberately not granted, so the
+   `factvault-migrate` initContainers/Job need their own privileged DSN:
+   - key: `FACTVAULT_MIGRATE_DATABASE_URL`
+   - value: `postgres://<migration-role-or-superuser>:<password>@<host>:5432/factvault?sslmode=require`
+
+   Sync it to a Kubernetes Secret named `factvault-migrate-credentials` (see
+   `deploy/k8s/examples/secret.example.yaml`, second document). Only the `factvault-migrate`
+   initContainers in `api-deployment.yaml` and the `*-worker-cronjob.yaml` files, and the
+   standalone `migrate-job.yaml` Job, reference `factvault-migrate-credentials`. Runtime containers
+   (the API server, worker containers) reference only `factvault-db-credentials` — never give them
+   the migration DSN. `cmd/factvault/migrate.go` prefers `FACTVAULT_MIGRATE_DATABASE_URL` and falls
+   back to `FACTVAULT_DATABASE_URL` only if it is unset, matching the docker-compose
+   `factvault-migrate` service.
 
 Credentials MUST NOT appear in `configmap.yaml` — they are audited by `TestK8sConfigMapContainsNoCredentials`.
 
@@ -236,6 +276,120 @@ rotate the credential — `CREATE ROLE ... IF NOT EXISTS` is a no-op when the ro
 **Do NOT** drop and recreate `app_user`. The `GRANT`s from the migration are attached to the
 role; dropping it requires re-running the GRANTs, which the migration does not idempotently
 re-apply on schema-current databases.
+
+### Managed Postgres app_user requirements
+
+When using a managed Postgres provider (Cloud SQL, RDS, Azure Database, Neon, etc.), the `app_user`
+role must be pre-created with the following attributes before migrations run.
+
+**Required role attributes**
+
+| Attribute     | Value        | Reason                                              |
+|---------------|--------------|-----------------------------------------------------|
+| LOGIN         | yes          | The application must authenticate as this role.     |
+| NOSUPERUSER   | yes          | Principle of least privilege.                       |
+| NOCREATEDB    | yes          | The application never creates databases.            |
+
+**Required grants** (run as a superuser or owner after database/schema creation):
+
+```sql
+GRANT CONNECT ON DATABASE factvault TO app_user;
+GRANT USAGE ON SCHEMA public TO app_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
+-- Repeat the last line after each new migration that adds tables, or set as default:
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+```
+
+**Password / DSN sync check**
+
+Verify the Kubernetes Secret matches the database password:
+
+```bash
+# 1. Decode the current DSN from the Secret
+kubectl get secret factvault-db-credentials -n factvault \
+    -o jsonpath='{.data.FACTVAULT_DATABASE_URL}' | base64 -d
+
+# 2. Test connectivity with that DSN (run from a pod with psql, or use kubectl exec)
+psql "$(kubectl get secret factvault-db-credentials -n factvault \
+    -o jsonpath='{.data.FACTVAULT_DATABASE_URL}' | base64 -d)" -c '\conninfo'
+
+# 3. If the connection fails, the Secret and DB password are out of sync.
+#    Rotate via your managed provider console, update Infisical, then
+#    re-sync ExternalSecrets and restart affected Deployments.
+```
+
+### GitOps ordering: app_user bootstrap before migrations
+
+The `app_user` Postgres role **must exist before the migration Job runs**. Migrations apply
+`GRANT` statements that reference `app_user`; if the role is absent those statements fail and
+the migration is left in a broken state.
+
+**Dependency chain**
+
+```
+app_user bootstrap Job → MUST complete before factvault-migrate starts
+```
+
+**Concrete implementation: initContainer in the migration Job**
+
+Add an `initContainer` to `deploy/k8s/migrate-job.yaml` that gates execution on two conditions:
+
+1. Postgres is accepting connections (`pg_isready`).
+2. The `app_user` role exists (`SELECT 1 FROM pg_roles WHERE rolname='app_user'`).
+
+```yaml
+initContainers:
+  - name: wait-for-app-user
+    image: postgres:16-alpine          # lightweight; only needs psql / pg_isready
+    envFrom:
+      - secretRef:
+          name: factvault-db-credentials
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        echo "Waiting for Postgres to accept connections..."
+        until pg_isready -d "$FACTVAULT_DATABASE_URL" -q; do
+          echo "Postgres not ready — sleeping 2s"
+          sleep 2
+        done
+        echo "Postgres ready. Checking for app_user role..."
+        until psql "$FACTVAULT_DATABASE_URL" -Atc \
+          "SELECT 1 FROM pg_roles WHERE rolname='app_user'" | grep -q 1; do
+          echo "app_user role not found — sleeping 2s"
+          sleep 2
+        done
+        echo "app_user exists. Proceeding with migration."
+```
+
+This pattern is idempotent and safe to ship before the managed Postgres bootstrap automation is
+in place: the initContainer loops until the precondition is satisfied, so the migration Job
+will not start until the operator (or an upstream bootstrap Job) has created the role.
+
+For fully automated GitOps pipelines, schedule a short-lived `app_user-bootstrap` Job with an
+Argo CD or Flux dependency hook that runs *before* the `factvault-migrate` Job. The
+`wait-for-app-user` initContainer above provides a belt-and-suspenders guard for race
+conditions even when the bootstrap Job has completed successfully.
+
+### JWT auth bootstrap and readOnlyRootFilesystem
+
+All app pods run `deploy/docker/entrypoint.sh` under `readOnlyRootFilesystem: true`. The
+entrypoint only creates/writes a JWT keypair under `/var/lib/factvault/auth` when it is about to
+exec `factvault api` — `factvault migrate` and `factvault worker <stage>` never need auth material
+and the entrypoint no longer attempts the write for them, so those pods run cleanly on a read-only
+root filesystem (#271). `FACTVAULT_BOOTSTRAP_AUTH=0`/`=1` still overrides the auto-detection
+explicitly if you need to force the behavior either way.
+
+The one container that runs `factvault api` (`api-deployment.yaml`) needs a writable path even
+though the rest of its root filesystem stays read-only, so it mounts a dedicated `emptyDir` volume
+at `/var/lib/factvault/auth`. That volume is ephemeral: with `replicas: 1` (the current default)
+this is fine, but scaling the API Deployment to more than one replica would generate a distinct
+keypair per pod and break token verification across replicas. Before scaling past one replica,
+switch to a shared, pre-generated keypair mounted from a Secret (`FACTVAULT_JWT_PUBLIC_KEY` /
+`FACTVAULT_JWT_PRIVATE_KEY`, or `FACTVAULT_BOOTSTRAP_AUTH=0` with keys supplied out of band) rather
+than relying on the per-pod bootstrap.
 
 ## Security Notes
 

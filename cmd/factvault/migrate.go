@@ -18,7 +18,7 @@ func newMigrateCmd() *cobra.Command {
 		Use:   "migrate",
 		Short: "Run goose database migrations",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runMigrations(cmd.Context(), dsn)
 		},
 	}
@@ -27,18 +27,27 @@ func newMigrateCmd() *cobra.Command {
 }
 
 func runMigrations(ctx context.Context, dsn string) error {
+	// C5: FACTVAULT_MIGRATE_DATABASE_URL is the primary DSN for migrations
+	// (superuser required for CREATE EXTENSION / DDL); falls back to FACTVAULT_DATABASE_URL.
+	if dsn == "" {
+		dsn = os.Getenv("FACTVAULT_MIGRATE_DATABASE_URL")
+	}
 	if dsn == "" {
 		dsn = os.Getenv("FACTVAULT_DATABASE_URL")
 	}
 	if dsn == "" {
-		return fmt.Errorf("database DSN required: set --dsn flag or FACTVAULT_DATABASE_URL")
+		return fmt.Errorf("database DSN required: set --dsn flag, FACTVAULT_MIGRATE_DATABASE_URL, or FACTVAULT_DATABASE_URL")
 	}
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close db: %v\n", err)
+		}
+	}()
 
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("set dialect: %w", err)

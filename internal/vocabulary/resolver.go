@@ -1,3 +1,4 @@
+// Package vocabulary resolves extracted labels against a controlled property catalog.
 package vocabulary
 
 import (
@@ -5,19 +6,24 @@ import (
 	"unicode"
 )
 
+// Mode controls how unknown properties are handled during normalization.
 type Mode string
 
 const (
-	ModeStrict     Mode = "strict"
+	// ModeStrict returns only properties already present in the catalog.
+	ModeStrict Mode = "strict"
+	// ModePermissive returns a best-effort proposal when no catalog match exists.
 	ModePermissive Mode = "permissive"
 )
 
+// Property defines a resolvable property label and type.
 type Property struct {
 	Slug      string
 	Label     string
 	ValueType string
 }
 
+// ProposedProperty captures a candidate property when strict matching fails.
 type ProposedProperty struct {
 	ProposedSlug      string
 	ProposedValueType string
@@ -25,17 +31,20 @@ type ProposedProperty struct {
 	ExampleExcerpt    string
 }
 
+// Result is the resolver outcome for one label lookup.
 type Result struct {
 	Property        Property
 	Known           bool
 	QueuedProposals []ProposedProperty
 }
 
+// Resolver resolves labels to property metadata for extractor normalization.
 type Resolver struct {
 	Mode    Mode
 	Catalog map[string]Property
 }
 
+// NewResolver returns a resolver configured with the requested mode.
 func NewResolver(mode Mode) Resolver {
 	return Resolver{
 		Mode:    mode,
@@ -43,6 +52,7 @@ func NewResolver(mode Mode) Resolver {
 	}
 }
 
+// Resolve maps a label into a property, including proposal metadata in strict mode.
 func (r Resolver) Resolve(label, valueType, excerpt string) Result {
 	catalog := r.Catalog
 	if catalog == nil {

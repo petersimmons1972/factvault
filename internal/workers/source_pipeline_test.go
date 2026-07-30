@@ -2,6 +2,7 @@ package workers_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -235,4 +236,76 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestCollectOnce_WritesMeta(t *testing.T) {
+	pool := testdb.New(t)
+	p := &workers.SourcePipeline{DB: pool}
+	c := collectors.StaticCollector{
+		CollectorName: "test-meta",
+		Items: []collectors.Item{
+			{
+				URL:  "https://example.com/meta-test",
+				HTML: []byte("<html><body>meta test page</body></html>"),
+				Meta: map[string]any{"trust_tier": "web"},
+			},
+		},
+	}
+	if err := p.CollectOnce(context.Background(), tenantID, c); err != nil {
+		t.Fatalf("CollectOnce: %v", err)
+	}
+
+	var rawMeta []byte
+	err := pool.QueryRow(context.Background(), `
+SELECT meta FROM sources WHERE tenant_id = $1 AND url = 'https://example.com/meta-test'
+`, tenantID).Scan(&rawMeta)
+	if err != nil {
+		t.Fatalf("select meta: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(rawMeta, &meta); err != nil {
+		t.Fatalf("unmarshal meta: %v", err)
+	}
+	if meta["trust_tier"] != "web" {
+		t.Errorf("expected meta.trust_tier=web, got %v", meta["trust_tier"])
+	}
+}
+
+// TestCollectOnce_SavepointAllowsBatchContinueOnItemError (W-19) verifies that
+// CollectOnce processes all items even when an individual item's INSERT would
+// normally abort the transaction.
+//
+// The current INSERT uses ON CONFLICT (tenant_id, url) DO NOTHING, which means
+// duplicate URLs never raise an error.  W-19's savepoint protection guards
+// against future constraints and transient failures.  This test exercises the
+// code path by collecting 3 items (all valid) and verifying all 3 are persisted —
+// proving the savepoint release/continue loop doesn't break normal operation.
+// Failure-injection (e.g., CHECK constraint violation) requires interface-level
+// mocking of pgxpool which is out of scope for this integration test suite.
+func TestCollectOnce_SavepointBatchPreservesAllItems(t *testing.T) {
+	pool := testdb.New(t)
+	p := &workers.SourcePipeline{DB: pool}
+	batchTenantID := "22222222-2222-2222-2222-222222222219"
+
+	c := collectors.StaticCollector{
+		CollectorName: "test-w19",
+		Items: []collectors.Item{
+			{URL: "https://example.com/w19/a", HTML: []byte("<html>item A</html>")},
+			{URL: "https://example.com/w19/b", HTML: []byte("<html>item B</html>")},
+			{URL: "https://example.com/w19/c", HTML: []byte("<html>item C</html>")},
+		},
+	}
+	if err := p.CollectOnce(context.Background(), batchTenantID, c); err != nil {
+		t.Fatalf("CollectOnce: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM sources WHERE tenant_id = $1
+	`, batchTenantID).Scan(&count); err != nil {
+		t.Fatalf("count sources: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("W-19: expected 3 sources inserted, got %d (savepoint batch loop may be broken)", count)
+	}
 }

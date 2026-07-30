@@ -1,17 +1,18 @@
+// Package testdb contains integration tests for container image security requirements.
 package testdb
 
 import "testing"
 
-func TestPostgresImageDefaultsToLatestPgvectorImage(t *testing.T) {
+func TestPostgresImageDefaultsToPinnedPgvectorImage(t *testing.T) {
 	t.Setenv("FACTVAULT_TEST_POSTGRES_IMAGE", "")
 
 	repository, tag := postgresImage()
 
-	if repository != "ankane/pgvector" {
-		t.Fatalf("repository = %q, want ankane/pgvector", repository)
+	if repository != "pgvector/pgvector" {
+		t.Fatalf("repository = %q, want pgvector/pgvector", repository)
 	}
-	if tag != "latest" {
-		t.Fatalf("tag = %q, want latest", tag)
+	if tag != "pg16" {
+		t.Fatalf("tag = %q, want pg16 (pinned for reproducible version-sensitive tests)", tag)
 	}
 }
 

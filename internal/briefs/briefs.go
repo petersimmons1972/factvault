@@ -7,8 +7,11 @@ package briefs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,16 +24,17 @@ import (
 type SourceKind string
 
 const (
+	// SourceKindDossier indicates a brief derived from an entity dossier.
 	SourceKindDossier SourceKind = "dossier"
-	SourceKindStory   SourceKind = "story"
+	// SourceKindStory indicates a brief derived from a story query.
+	SourceKindStory SourceKind = "story"
 )
 
-// GenerateRequest carries all inputs needed to generate and store a brief.
+// GenerateRequest carries the caller-supplied metadata needed to derive a brief.
 type GenerateRequest struct {
-	SourceKind SourceKind        `json:"source_kind"`
-	EntityID   *string           `json:"entity_id,omitempty"`
-	Query      *string           `json:"query,omitempty"`
-	Bundle     *assembler.Bundle `json:"bundle"`
+	SourceKind SourceKind `json:"source_kind"`
+	EntityID   *string    `json:"entity_id,omitempty"`
+	Query      *string    `json:"query,omitempty"`
 }
 
 // ListOptions controls which briefs are returned from List.
@@ -48,10 +52,41 @@ type Brief struct {
 	SourceKind SourceKind
 	EntityID   *string
 	Payload    []byte // raw brief JSON
+	// BundleHash is an optional content-addressed hash of the assembled bundle.
+	// Populated when the brief is derived from a deduplicated bundle run.
+	// NULL means the brief was stored before bundle dedup was introduced (migration 00004).
+	BundleHash *string
 }
 
 // BriefGenerator derives a deterministic JSON brief from a Bundle.
 type BriefGenerator struct{}
+
+var (
+	ErrInvalidGenerateRequest = errors.New("briefs: invalid generate request")
+	ErrBundleLoaderRequired   = errors.New("briefs: bundle loader is required")
+	ErrNilBundle              = errors.New("briefs: bundle is required")
+	ErrBundleTenantMismatch   = errors.New("briefs: bundle tenant does not match caller tenant")
+	ErrBundleEntityMismatch   = errors.New("briefs: bundle entity does not match request entity")
+)
+
+// BundleLoader resolves the canonical bundle that should back a brief request.
+type BundleLoader interface {
+	LoadBriefBundle(ctx context.Context, tenantID string, req GenerateRequest) (*assembler.Bundle, error)
+}
+
+// BundleLoaderFunc adapts a function into a BundleLoader.
+type BundleLoaderFunc func(context.Context, string, GenerateRequest) (*assembler.Bundle, error)
+
+// LoadBriefBundle implements BundleLoader.
+func (f BundleLoaderFunc) LoadBriefBundle(ctx context.Context, tenantID string, req GenerateRequest) (*assembler.Bundle, error) {
+	return f(ctx, tenantID, req)
+}
+
+func rollbackUnlessClosed(ctx context.Context, tx pgx.Tx) {
+	if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		fmt.Fprintf(os.Stderr, "rollback transaction: %v\n", err)
+	}
+}
 
 // briefDoc is the fixed-field struct that becomes the JSON payload.
 // Using a named struct guarantees stable key ordering in encoding/json output.
@@ -97,7 +132,13 @@ type evidenceGap struct {
 
 // Generate builds a deterministic JSON brief from b.
 // The output is stable across repeated calls for the same input.
+// b must not be nil (#268): a nil bundle indicates an assembly failure
+// upstream, and generating claims/citations from it would either panic on
+// nil-pointer field access or silently produce an empty brief.
 func (g BriefGenerator) Generate(b *assembler.Bundle) ([]byte, error) {
+	if b == nil {
+		return nil, ErrNilBundle
+	}
 	doc := briefDoc{
 		KeyClaims:     extractKeyClaims(b),
 		Citations:     extractCitations(b),
@@ -264,7 +305,8 @@ func deriveWriterPrompts(b *assembler.Bundle) []string {
 
 // Service provides tenant-scoped operations on evidence_briefs.
 type Service struct {
-	Pool *pgxpool.Pool
+	Pool         *pgxpool.Pool
+	BundleLoader BundleLoader
 }
 
 // tenantTx begins a transaction with the app.tenant_id session variable set
@@ -275,17 +317,76 @@ func (s Service) tenantTx(ctx context.Context, tenantID string) (pgx.Tx, error) 
 		return nil, fmt.Errorf("briefs: begin tx: %w", err)
 	}
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
-		_ = tx.Rollback(ctx)
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			return nil, errors.Join(fmt.Errorf("briefs: set tenant_id: %w", err), fmt.Errorf("briefs: rollback: %w", rollbackErr))
+		}
 		return nil, fmt.Errorf("briefs: set tenant_id: %w", err)
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE app_user"); err != nil {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			return nil, errors.Join(fmt.Errorf("briefs: set role: %w", err), fmt.Errorf("briefs: rollback: %w", rollbackErr))
+		}
+		return nil, fmt.Errorf("briefs: set role: %w", err)
 	}
 	return tx, nil
 }
 
-// GenerateAndStore generates a brief from req.Bundle and inserts it into evidence_briefs.
-// Returns the stored Brief record with its database-assigned ID.
+func validateGenerateRequest(req GenerateRequest) error {
+	switch req.SourceKind {
+	case SourceKindDossier:
+		if req.EntityID == nil || strings.TrimSpace(*req.EntityID) == "" {
+			return fmt.Errorf("%w: dossier briefs require entity_id", ErrInvalidGenerateRequest)
+		}
+	case SourceKindStory:
+		if req.Query == nil || strings.TrimSpace(*req.Query) == "" {
+			return fmt.Errorf("%w: story briefs require query", ErrInvalidGenerateRequest)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported source_kind %q", ErrInvalidGenerateRequest, req.SourceKind)
+	}
+	return nil
+}
+
+func validateBundle(tenantID string, req GenerateRequest, bundle *assembler.Bundle) error {
+	if bundle == nil {
+		return ErrNilBundle
+	}
+	if bundle.TenantID != tenantID {
+		return fmt.Errorf("%w: bundle tenant %q", ErrBundleTenantMismatch, bundle.TenantID)
+	}
+	if req.EntityID != nil && bundle.EntityID != *req.EntityID {
+		return fmt.Errorf("%w: bundle entity %q", ErrBundleEntityMismatch, bundle.EntityID)
+	}
+	return nil
+}
+
+// GenerateAndStore resolves the canonical bundle for req, then inserts the derived
+// brief into evidence_briefs. Returns the stored Brief record with its database-assigned ID.
 func (s Service) GenerateAndStore(ctx context.Context, tenantID string, req GenerateRequest) (Brief, error) {
+	if err := validateGenerateRequest(req); err != nil {
+		return Brief{}, err
+	}
+	if s.BundleLoader == nil {
+		return Brief{}, ErrBundleLoaderRequired
+	}
+	bundle, err := s.BundleLoader.LoadBriefBundle(ctx, tenantID, req)
+	if err != nil {
+		return Brief{}, fmt.Errorf("briefs: load bundle: %w", err)
+	}
+	return s.generateAndStoreBundle(ctx, tenantID, req, bundle)
+}
+
+// generateAndStoreBundle stores a brief from an already assembled bundle.
+func (s Service) generateAndStoreBundle(ctx context.Context, tenantID string, req GenerateRequest, bundle *assembler.Bundle) (Brief, error) {
+	if err := validateGenerateRequest(req); err != nil {
+		return Brief{}, err
+	}
+	if err := validateBundle(tenantID, req, bundle); err != nil {
+		return Brief{}, err
+	}
+
 	g := BriefGenerator{}
-	payload, err := g.Generate(req.Bundle)
+	payload, err := g.Generate(bundle)
 	if err != nil {
 		return Brief{}, fmt.Errorf("briefs: generate: %w", err)
 	}
@@ -294,7 +395,7 @@ func (s Service) GenerateAndStore(ctx context.Context, tenantID string, req Gene
 	if err != nil {
 		return Brief{}, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer rollbackUnlessClosed(ctx, tx)
 
 	var id string
 	err = tx.QueryRow(ctx, `
@@ -325,7 +426,7 @@ func (s Service) List(ctx context.Context, tenantID string, opts ListOptions) ([
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer rollbackUnlessClosed(ctx, tx)
 
 	query := `
 		SELECT id::text, source_kind, entity_id::text, payload
@@ -394,7 +495,7 @@ func (s Service) Get(ctx context.Context, tenantID, id string) (Brief, error) {
 	if err != nil {
 		return Brief{}, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer rollbackUnlessClosed(ctx, tx)
 
 	var b Brief
 	var entityID *string

@@ -25,7 +25,11 @@ func (s *Server) jwtMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// ClaimsFromContext extracts auth.Claims from request context.
 func ClaimsFromContext(ctx context.Context) auth.Claims {
-	claims, _ := ctx.Value(claimsContextKey{}).(auth.Claims)
+	claims, ok := ctx.Value(claimsContextKey{}).(auth.Claims)
+	if !ok {
+		return auth.Claims{}
+	}
 	return claims
 }
