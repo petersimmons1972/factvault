@@ -63,7 +63,7 @@ go build -o bin/factvault ./cmd/factvault
 ./bin/factvault migrate
 # init (and everything after it) runs as app_user via FACTVAULT_DATABASE_URL —
 # matches production, exercises the GRANTs.
-./bin/factvault init --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault init --skip-migrate --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
 `init` generates JWT keys in `.local/`, runs the doctor health checks, and loads the default example. Keys are written only if they do not exist yet. The awk key-splitting step from older guides is no longer required — `init` writes `private.pem` and `public.pem` directly.
@@ -111,7 +111,9 @@ Precompute dossiers for that tenant:
   --limit 10
 ```
 
-The dossier is empty until the full collect/archive/extract/corroborate pipeline runs. The retrieval path is live and tenant-scoped immediately.
+The initial example dossier is expected to contain no facts until the full
+collect/archive/extract/corroborate pipeline runs. The retrieval path is live and tenant-scoped
+immediately; an empty result at this point is not a setup failure.
 
 ---
 
@@ -121,7 +123,7 @@ Keys are in `.local/` (written by `init` or `make setup`). Issue a tenant-scoped
 
 ```bash
 TOKEN=$(./bin/factvault auth token \
-  --private-key .local/private.pem \
+  --jwt-private-key .local/private.pem \
   --tenant "$FACTVAULT_DEV_TENANT_ID" \
   --sub local-dev)
 ```
@@ -149,17 +151,53 @@ A successful response contains an entity bundle for the loaded example entity.
 
 ## Full Pipeline Next Steps
 
-After the initial dossier works, run the source pipeline against a tenant:
+After the initial dossier works, run the source pipeline against a tenant.
+
+If you opened a new shell for these commands, re-export `FACTVAULT_DATABASE_URL` with the runtime
+`app_user` DSN from step 1, and re-export `FACTVAULT_DEV_TENANT_ID`. Runtime commands read those
+environment variables; do not pass a password-bearing DSN through `--dsn`.
+
+**Source population** -- choose one or combine:
 
 ```bash
+# RSS feeds (recommended for ongoing ingestion). --tenant overrides per-feed tenants:
+./bin/factvault worker rss \
+  --feeds config/feeds.yaml \
+  --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --once
+
+# Active research for a specific entity (LLM + web search):
+./bin/factvault worker research "Your Entity" \
+  --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --searxng-url "$FACTVAULT_SEARXNG_URL" \
+  --llm-base-url http://localhost:11434/v1 \
+  --llm-model llama3.1:8b
+
+# Pipeline smoke test (static stub only -- not real content):
 ./bin/factvault worker collect --tenant "$FACTVAULT_DEV_TENANT_ID"
-./bin/factvault worker archive --tenant "$FACTVAULT_DEV_TENANT_ID"
-./bin/factvault worker extract --tenant "$FACTVAULT_DEV_TENANT_ID"
+```
+
+For RSS, `--tenant` overrides each feed's configured tenant during collection. Each feed still
+needs a YAML `tenant` to enter the current scheduler; tenantless feeds are skipped before the
+override is applied. Keep the YAML tenant even when supplying `--tenant`.
+
+
+**Core pipeline + embedding:**
+
+```bash
+./bin/factvault worker archive     --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker extract     --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --llm-model llama3.1:8b --llm-base-url http://localhost:11434/v1
 ./bin/factvault worker corroborate --tenant "$FACTVAULT_DEV_TENANT_ID"
-./bin/factvault worker dossier --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker embed       --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault worker dossier     --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
 The dossier will remain empty until the full pipeline stages complete.
+
+See [RSS Ingestion](guides/rss-ingestion.md), [Active Acquisition](guides/active-acquisition.md),
+and [Embedding Population](guides/embedding-population.md) for full documentation on the new
+pipeline stages. For the full CLI reference, see [docs/reference/cli.md](reference/cli.md).
 
 ## Troubleshooting
 
@@ -174,3 +212,60 @@ The dossier will remain empty until the full pipeline stages complete.
 | `embedder` shows `FAIL` in doctor            | `docker compose ps embedder`            | Start embedder; first model load can take time.                                   |
 | `entity not found` from dossier API          | Tenant mismatch                         | Use a token whose `tenant_id` matches the tenant used by `example load`.          |
 | Dossier body is empty (no facts)             | Pipeline not run yet                    | Run collect → archive → extract → corroborate → dossier workers in order.        |
+
+## Notes for New Operators
+
+### worker collect is a stub
+
+`worker collect` currently inserts a single static placeholder URL
+(`https://example.com/factvault-seed`). The source's historical reference to
+[Issue #94](https://github.com/petersimmons1972/factvault/issues/94) is stale: that closed issue
+shipped Docker Compose deployment, not collector configurability. The command is useful for
+smoke-testing the pipeline but does not ingest real content. For real source ingestion, use:
+
+- `worker rss` -- poll operator-defined RSS/Atom feeds from `config/feeds.yaml`
+- `worker research <entity>` -- active acquisition via LLM-generated queries and web search
+
+See [RSS Ingestion](guides/rss-ingestion.md) and [Active Acquisition](guides/active-acquisition.md).
+
+### Embedder first-boot delay (~2GB model download)
+
+The embedder sidecar downloads BAAI/bge-m3 (~2 GB) on first startup. Until the model finishes
+loading, the `/healthz` endpoint returns 503 and `worker embed` will fail. Expect a wait of
+several minutes on a fresh deployment. `factvault doctor` shows this as `WARN` or `FAIL` for the
+embedder check. Once the model is loaded, the health check returns 200 and embedding population
+works normally.
+
+### migrate uses a different DSN than everything else
+
+`factvault migrate` requires `CREATE EXTENSION` privileges (for pgvector and pg_trgm) and must
+run as the Postgres superuser. Use `FACTVAULT_MIGRATE_DATABASE_URL` (the superuser DSN) for
+migrations:
+
+```bash
+./bin/factvault migrate
+```
+
+All other workers, the API, and the MCP server connect as `app_user` via `FACTVAULT_DATABASE_URL`.
+Both DSNs are pre-configured in `.env.example`. The `make setup` target handles this split
+automatically.
+
+### worker embed and worker research
+
+After the core pipeline runs (collect/rss/research -> archive -> extract -> corroborate), run
+these two new workers:
+
+```bash
+# Populate embedding columns (enables cosine story-seeding)
+./bin/factvault worker embed \
+  --tenant "$FACTVAULT_DEV_TENANT_ID"
+
+# Actively research a new entity (generates sources via LLM + web search)
+./bin/factvault worker research "Your Entity Name" \
+  --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --llm-base-url http://localhost:11434/v1 \
+  --llm-model llama3.1:8b
+```
+
+See [Embedding Population](guides/embedding-population.md) and
+[Active Acquisition](guides/active-acquisition.md) for full documentation.

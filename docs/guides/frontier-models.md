@@ -9,7 +9,7 @@ Frontier models are opt-in for operators who explicitly want a hosted OpenAI-com
 Use local endpoints and leave API keys empty:
 
 ```bash
-export FACTVAULT_LLM_URL='http://localhost:11434/v1'
+export FACTVAULT_LLM_BASE_URL='http://localhost:11434/v1'
 export FACTVAULT_LLM_MODEL='llama3.1:8b'
 unset FACTVAULT_LLM_API_KEY
 ```
@@ -21,9 +21,10 @@ With this configuration, extraction calls are expected to stay on the local netw
 Set the endpoint, model, and API key deliberately:
 
 ```bash
-export FACTVAULT_LLM_URL='https://api.openai.com/v1'
+export FACTVAULT_LLM_BASE_URL='https://api.openai.com/v1'
 export FACTVAULT_LLM_MODEL='gpt-4o-mini'
 export FACTVAULT_LLM_API_KEY='...'
+# For mounted secrets, prefer FACTVAULT_LLM_API_KEY_FILE=/run/secrets/llm-api-key.
 ```
 
 Then restart the extract worker or API process that owns the LLM client.
@@ -72,8 +73,56 @@ Unset the key and point the URL back to the local endpoint:
 
 ```bash
 unset FACTVAULT_LLM_API_KEY
-export FACTVAULT_LLM_URL='http://localhost:11434/v1'
+export FACTVAULT_LLM_BASE_URL='http://localhost:11434/v1'
 export FACTVAULT_LLM_MODEL='llama3.1:8b'
 ```
 
-Restart workers and rerun `factvault doctor --llm-url "$FACTVAULT_LLM_URL"`.
+Restart workers and rerun `factvault doctor --llm-url "$FACTVAULT_LLM_BASE_URL"`.
+
+## worker extract CLI Flags
+
+The `worker extract` subcommand exposes the LLM configuration as CLI flags. These are equivalent
+to the environment variables above and take precedence over them:
+
+| Flag | Env var equivalent | Description |
+|------|-------------------|-------------|
+| `--llm-provider` | -- | Provider hint: `local` or `openai` |
+| `--llm-model` | `FACTVAULT_LLM_MODEL` | Model name (e.g. `llama3.1:8b`, `gpt-4o-mini`) |
+| `--llm-base-url` | `FACTVAULT_LLM_BASE_URL`, `FACTVAULT_LLM_URL` | OpenAI-compatible base URL; `FACTVAULT_LLM_URL` is the deprecated fallback |
+| API key | `FACTVAULT_LLM_API_KEY`, `FACTVAULT_LLM_API_KEY_FILE` | Environment-only secret; no CLI flag is exposed |
+| `--confirm-cost` | -- | Confirm extraction batches above the guardrail threshold |
+| `--llm-cost-guardrail-threshold` | -- | Paid extractions per run that require confirmation (default: 1000) |
+
+Example with flags:
+
+```bash
+./bin/factvault worker extract \
+  --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --llm-provider openai \
+  --llm-model gpt-4o-mini \
+  --llm-base-url https://api.openai.com/v1 \
+  --confirm-cost \
+  --limit 25
+```
+
+## Local Model Setup
+
+Before running `worker extract` with a local Ollama model, pull the model:
+
+```bash
+ollama pull llama3.1:8b
+# verify it loads:
+ollama run llama3.1:8b "hello"
+```
+
+Then run extraction pointing at the local endpoint:
+
+```bash
+./bin/factvault worker extract \
+  --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --llm-model llama3.1:8b \
+  --llm-base-url http://localhost:11434/v1 \
+  --limit 25
+```
+
+Larger models (e.g. `qwen3:32b`) produce better extraction quality at higher compute cost.

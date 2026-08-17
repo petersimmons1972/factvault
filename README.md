@@ -76,7 +76,7 @@ go build -o bin/factvault ./cmd/factvault
 # init (and everything after it) runs as app_user via FACTVAULT_DATABASE_URL —
 # matches production, exercises the GRANTs. Do not pass password-bearing DSNs
 # via --dsn: the flag rejects embedded passwords by design; use the env var.
-./bin/factvault init --tenant "$FACTVAULT_DEV_TENANT_ID"
+./bin/factvault init --skip-migrate --tenant "$FACTVAULT_DEV_TENANT_ID"
 
 # Load a bundled example and assemble its first dossier.
 ./bin/factvault example load ai-startup-tracking \
@@ -102,18 +102,19 @@ Both share one assembler and one bundle JSON shape. See [docs/superpowers/specs/
 
 ---
 
-## The Six-Stage Pipeline
+## The Seven-Stage Pipeline
 
-![Factvault Six-Stage Ingestion Pipeline](docs/assets/svg/pipeline-stages.svg)
+![Factvault ingestion pipeline](docs/assets/svg/pipeline-stages.svg)
 
 | # | Stage | Key guarantee |
 |---|-------|---------------|
-| 1 | **Collect** | Idempotent on `(tenant_id, url)`. Raw HTML stored at INSERT; never re-fetched downstream. |
+| 1 | **Collect** | Idempotent on `(tenant_id, url)`. Three paths: `worker collect` (stub), `worker rss` (RSS feeds), `worker research` (active acquisition). |
 | 2 | **Archive** | `raw_text` extracted via Go `stripHTML` tag-stripper. Wayback SPN2 snapshot submitted. `raw_html` zlib-compressed. |
 | 3 | **Extract** | Deterministic extractors run first. LLM runs on uncovered text only. Excerpt-offset check rejects hallucinations before INSERT. |
 | 4 | **Corroborate** | Confidence recomputed from scratch on every run. Conflicts surfaced in `v_conflicts`, never silently resolved. |
 | 5 | **Verify** | Daily CronJob. Append-only `source_verifications` log. No source or statement ever deleted. |
-| 6 | **Relate** | `relations` table kept in sync with entity-valued statements. Embedding-near edges for graph traversal. |
+| 6 | **Embed** | `worker embed` populates NULL `vector(1024)` columns via BAAI/bge-m3 sidecar. Enables cosine story-seeding (threshold 0.6). |
+| 7 | **Relate** | `relations` table kept in sync with entity-valued statements. Embedding-near edges for graph traversal. |
 
 ---
 
@@ -227,21 +228,42 @@ The controlled vocabulary is not bureaucracy — it prevents `founded_in`, `foun
 
 | Document | What it covers |
 |----------|---------------|
-| [Design Spec](docs/superpowers/specs/2026-05-22-factvault-design.md) | Complete architecture — all four pillars, all six pipeline stages, full DDL, bundle JSON shape, retrieval API, operational requirements |
+| [Design Spec](docs/superpowers/specs/2026-05-22-factvault-design.md) | Complete architecture -- all four pillars, all seven pipeline stages, full DDL, bundle JSON shape, retrieval API, operational requirements |
 | [Source Existence](docs/concepts/source-existence.md) | Why `raw_text` + `archive_url` + `content_hash` together; the verification lifecycle; what happens when URLs die |
 | [Facts and Sources](docs/concepts/facts-and-sources.md) | The statement model; how a fact differs from a source; what excerpt offsets mean and why they exist |
-| [Dossiers vs. Stories](docs/concepts/dossiers-vs-stories.md) | Full treatment of both modes including all worked examples |
+| [Dossiers vs. Stories](docs/concepts/dossiers-vs-stories.md) | Full treatment of both modes including cosine seeding (shipped) and all worked examples |
 | [Confidence and Corroboration](docs/concepts/confidence-and-corroboration.md) | The deterministic confidence formula; what independence means; how to read `v_conflicts` |
 | [Defining Properties](docs/guides/defining-properties.md) | The one mandatory authoring task before first ingest |
 | [5-Minute Getting Started](docs/getting-started.md) | Clone-to-dossier walkthrough for a fresh local operator |
 | [Operator Guide](docs/operator-guide.md) | Runtime components, configuration, health checks, backups, upgrades, and troubleshooting |
-| [Frontier Models](docs/guides/frontier-models.md) | Explicit opt-in path and guardrails for hosted LLM extraction |
+| [Frontier Models](docs/guides/frontier-models.md) | Explicit opt-in path, guardrails, and CLI flags for hosted LLM extraction |
+| [Active Acquisition](docs/guides/active-acquisition.md) | `worker research`: LLM-driven entity research with the architecture guardrail explained |
+| [Embedding Population](docs/guides/embedding-population.md) | `worker embed`: backfill vector embeddings to enable cosine story-seeding |
+| [RSS Ingestion](docs/guides/rss-ingestion.md) | `worker rss`: feeds.yaml schema, workflow, and comparison to worker collect |
+| [CLI Reference](docs/reference/cli.md) | Complete subcommand and flag reference for the `factvault` binary |
 
 ---
 
 ## Status
 
-**Active Go implementation.** The repository now includes the Go CLI, migrations, workers, REST API, MCP server, doctor checks, example loader, Postgres store interfaces, and deploy scaffolding. Open issues continue to track the remaining backend and Tier 1 compose polish.
+**Active Go implementation.** The repository includes the Go CLI, migrations, workers, REST API,
+MCP server, doctor checks, example loader, Postgres store interfaces, and deploy scaffolding.
+
+**Recently shipped capabilities:**
+
+- **Active acquisition loop** (`worker research`) -- STORM-inspired perspective-guided query
+  generation drives web research for a seed entity. 2 LLM calls produce perspective-angled search
+  queries; a bounded web fetch loop deposits sources into the standard collect pipeline. Sources
+  are tagged `meta.trust_tier="web"`. The acquisition layer is structurally incapable of touching
+  the fact/truth layer. See [Active Acquisition](docs/guides/active-acquisition.md).
+
+- **Embedding population** (`worker embed`) -- backfills NULL `vector(1024)` embedding columns
+  on entities, statements, and sources via the BAAI/bge-m3 sidecar. Idempotent. Prerequisite for
+  cosine story-seeding. See [Embedding Population](docs/guides/embedding-population.md).
+
+- **Cosine story seeding** -- shipped in `internal/retrieval/service.go`. Stories now seed via
+  cosine similarity (threshold 0.6) when embeddings are populated, with ILIKE fallback when the
+  embedder is unavailable. See [Dossiers vs. Stories](docs/concepts/dossiers-vs-stories.md).
 
 ---
 

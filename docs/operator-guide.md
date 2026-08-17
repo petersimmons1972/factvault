@@ -13,7 +13,9 @@ This runbook covers the current operational surface for factvault on the Go impl
 | Workers | One-shot pipeline stages | `factvault worker <stage>` |
 | Doctor | First-boot and health diagnostics | `factvault doctor` |
 
-Issue #94 owns the final single-command Docker Compose deployment polish. Until it lands, prefer explicit host-run API and worker commands for predictable key and tenant setup.
+[Issue #94](https://github.com/petersimmons1972/factvault/issues/94), the single-command
+Docker Compose deployment work, is complete. The explicit host-run commands below remain useful
+for inspecting key and tenant setup step by step.
 
 ## Configuration
 
@@ -49,7 +51,9 @@ Use `.env.example` as the compose-oriented baseline. Use localhost hostnames whe
 2. Start Postgres and embedder: `docker compose up -d postgres embedder`.
 3. Build the binary: `go build -o bin/factvault ./cmd/factvault`.
 4. Run migrations: `./bin/factvault migrate`.
-5. Generate JWT keys with `./bin/factvault auth keys`.
+5. Generate JWT keys and initialize the deployment with `./bin/factvault init --skip-migrate`;
+   unlike `auth keys`,
+   `init` writes `.local/private.pem` and `.local/public.pem` for the later API steps.
 6. Run `./bin/factvault doctor` and resolve every failing check that applies to your deployment.
 7. Load an example with `./bin/factvault example load <name>`.
 8. Run `./bin/factvault worker dossier`.
@@ -82,20 +86,62 @@ Use `doctor --required-only` to exit 0 when only optional checks (LLM, embedder,
 
 ## Worker Order
 
-Run workers in this order for a tenant:
+The full operational sequence for a tenant. Source population (step 1) has three paths -- use
+whichever fits your deployment. Embedding population (step 6) is new and enables cosine
+story-seeding.
+
+### Step 1: Source Population (choose one or combine)
 
 ```bash
-./bin/factvault worker rss --once
+# Option A: RSS feeds (recommended for ongoing ingestion)
+./bin/factvault worker rss --feeds config/feeds.yaml --once
+
+# Option B: Active research (LLM-driven, entity-targeted)
+./bin/factvault worker research "Entity Name" --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --searxng-url "$FACTVAULT_SEARXNG_URL" \
+  --llm-base-url http://localhost:11434/v1 --llm-model llama3.1:8b
+
+# Option C: Pipeline smoke test only (static stub; not for real content)
+./bin/factvault worker collect --tenant "$FACTVAULT_DEV_TENANT_ID"
+```
+
+The source still carries a historical reference to
+[Issue #94](https://github.com/petersimmons1972/factvault/issues/94), but that closed issue shipped
+Docker Compose deployment rather than collector configurability. Treat `worker collect` only as a
+smoke-test stub; use `worker rss` or `worker research` for real acquisition.
+
+### Steps 2-7: Core Pipeline + Embedding
+
+```bash
+# 2. Archive: extract raw_text, submit Wayback snapshot
 ./bin/factvault worker archive --tenant "$FACTVAULT_DEV_TENANT_ID"
-./bin/factvault worker extract --tenant "$FACTVAULT_DEV_TENANT_ID"
+
+# 3. Extract: deterministic + LLM extraction with hallucination rejection
+./bin/factvault worker extract --tenant "$FACTVAULT_DEV_TENANT_ID" \
+  --llm-model llama3.1:8b --llm-base-url http://localhost:11434/v1
+
+# 4. Corroborate: recompute confidence from scratch
 ./bin/factvault worker corroborate --tenant "$FACTVAULT_DEV_TENANT_ID"
+
+# 5. Verify: re-check source liveness (daily; append-only log)
 ./bin/factvault worker verify --tenant "$FACTVAULT_DEV_TENANT_ID"
+
+# 6. Embed: populate NULL embedding columns (activates cosine story-seeding)
+./bin/factvault worker embed --tenant "$FACTVAULT_DEV_TENANT_ID"
+
+# 7. Dossier: precompute entity bundles
 ./bin/factvault worker dossier --tenant "$FACTVAULT_DEV_TENANT_ID"
 ```
 
-Use `--limit` to bound batch size and `--dsn` to override `FACTVAULT_DATABASE_URL`. `verify` also accepts `--age-days`.
+Use `--limit` to bound batch size and `--dsn` to override `FACTVAULT_DATABASE_URL`.
+`verify` also accepts `--age-days`. `embed` also accepts `--embedder-url`.
 
-Operational invariant: all domain data is tenant-scoped. The tenant in the worker command, the token used against the API, and the records in Postgres must match.
+Operational invariant: all domain data is tenant-scoped. The tenant in the worker command, the
+token used against the API, and the records in Postgres must match.
+
+See [RSS Ingestion](guides/rss-ingestion.md), [Active Acquisition](guides/active-acquisition.md),
+and [Embedding Population](guides/embedding-population.md) for full documentation on the new
+pipeline stages.
 
 ## API Operations
 
