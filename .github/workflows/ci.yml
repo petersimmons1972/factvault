@@ -1,8 +1,19 @@
 name: CI
 
 on:
+  # Scoped to main deliberately. With `push: ["**"]` every push to a branch
+  # with an open PR fired a SECOND identical run, which cost double the billed
+  # minutes and, worse, produced a FALSE RED: on a branch's first push
+  # `github.event.before` has no valid base, so golangci-lint-action's
+  # only-new-issues patch fetch 404s ("failed to fetch push patch"), it falls
+  # back to a whole-repo scan, and that fails on pre-existing lint debt the
+  # diff never touched. Observed on PR #306: run 32130514156 (push) failed
+  # while run 32130533868 (pull_request) passed on the SAME commit. That red
+  # is why #303/#304 needed `--admin` overrides. Merge gating reads the PR's
+  # statusCheckRollup, so pull_request runs are what is consumed and scoping
+  # push to main loses no coverage.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: ["**"]
 
