@@ -3,6 +3,7 @@ package assembler
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -69,7 +70,10 @@ func loadOpenAPIBundleSchemas(t *testing.T) map[string]map[string]any {
 }
 
 func schemaPropertyNames(schema map[string]any) map[string]struct{} {
-	props, _ := schema["properties"].(map[string]any)
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return map[string]struct{}{}
+	}
 	names := make(map[string]struct{}, len(props))
 	for k := range props {
 		names[k] = struct{}{}
@@ -359,21 +363,27 @@ func TestBundleOpenAPIContractRejectsSpecDriftWithoutCodeChange(t *testing.T) {
 	}
 
 	schemas := loadOpenAPIBundleSchemas(t)
-	real := schemas["Bundle"]
+	realSchema := schemas["Bundle"]
 
 	// Drift A: invent a required OpenAPI field the JSON will never have.
-	driftExtra := cloneSchema(real)
-	props := driftExtra["properties"].(map[string]any)
+	driftExtra := cloneSchema(realSchema)
+	props, ok := driftExtra["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("cloneSchema: driftExtra properties is not a map")
+	}
 	props["publisher"] = map[string]any{"type": "string"}
-	driftExtra["required"] = append(append([]any{}, schemaRequiredAsAny(real)...), "publisher")
+	driftExtra["required"] = append(append([]any{}, schemaRequiredAsAny(realSchema)...), "publisher")
 	if !contractWouldFail(jsonRoot, driftExtra) {
 		t.Fatal("expected comparator to fail when OpenAPI requires publisher absent from JSON")
 	}
 
 	// Drift B: drop a required OpenAPI property that JSON still emits, and leave
 	// it out of properties entirely — JSON key without schema property must fail.
-	driftMissingProp := cloneSchema(real)
-	propsB := driftMissingProp["properties"].(map[string]any)
+	driftMissingProp := cloneSchema(realSchema)
+	propsB, ok := driftMissingProp["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("cloneSchema: driftMissingProp properties is not a map")
+	}
 	delete(propsB, "tenant_id")
 	if !contractWouldFail(jsonRoot, driftMissingProp) {
 		t.Fatal("expected comparator to fail when JSON has tenant_id but schema properties omit it")
@@ -389,7 +399,10 @@ func TestBundleOpenAPIContractRejectsSpecDriftWithoutCodeChange(t *testing.T) {
 }
 
 func schemaRequiredAsAny(schema map[string]any) []any {
-	raw, _ := schema["required"].([]any)
+	raw, ok := schema["required"].([]any)
+	if !ok {
+		return nil
+	}
 	out := make([]any, len(raw))
 	copy(out, raw)
 	return out
@@ -399,11 +412,12 @@ func cloneSchema(schema map[string]any) map[string]any {
 	out := make(map[string]any, len(schema))
 	for k, v := range schema {
 		if k == "properties" {
-			src, _ := v.(map[string]any)
-			cp := make(map[string]any, len(src))
-			for pk, pv := range src {
-				cp[pk] = pv
+			src, ok := v.(map[string]any)
+			if !ok {
+				src = map[string]any{}
 			}
+			cp := make(map[string]any, len(src))
+			maps.Copy(cp, src)
 			out[k] = cp
 			continue
 		}
