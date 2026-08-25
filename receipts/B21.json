@@ -1,0 +1,5 @@
+{
+  "contract_test": "internal/assembler/bundle_contract_test.go",
+  "pr": 308,
+  "note": "PR #308, branch dispatch/b21-openapi-contract"
+}

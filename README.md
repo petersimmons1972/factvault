@@ -27,7 +27,7 @@ Controlled property vocabulary (`founded_in`, `ceo`, `raised_usd`) prevents the 
 One independent source: ceiling 0.50. Two: 0.85. Three or more: 0.95. Independence determined by publisher domain and trigram similarity — wire copy republished under a different masthead does not count twice. The LLM never sets confidence.
 
 **4. Story Assembly** — one code path for all output.
-`bundle_assembler(entity_ids, depth)` produces both pre-computed entity-keyed **dossiers** (`depth=0`) and on-demand query-keyed **stories** (`depth=2–3`). Every bundle carries full source-existence metadata on every fact.
+`bundle_assembler(entity_ids, depth)` produces both pre-computed entity-keyed **dossiers** (`depth=0`) and on-demand query-keyed **stories** (`depth=2–3`). Every bundle is a flat graph document: entities, statements, and a top-level `sources[]` array cross-referenced by each statement's `source_ids`.
 
 ---
 
@@ -128,29 +128,62 @@ Confidence is computed in `internal/assembler/confidence.go`. The formula is det
 
 ## What a Bundle Looks Like
 
-Every fact returned by `GET /entities/{id}/dossier` or `POST /stories` looks like this:
+`GET /entities/{id}/dossier` and `POST /stories` return the same flat `Bundle` JSON shape from `internal/assembler/bundle.go` (also documented in `docs/api/openapi.yaml`). Statements do not embed sources; they reference entries in the top-level `sources[]` array via `source_ids`. Property and value are flat strings (`property_slug`, `value`), not nested objects.
 
 ```json
 {
-  "property": { "slug": "acquired", "label": "Acquired" },
-  "value": { "entity": { "label": "Acme Corp" } },
-  "confidence": 0.85,
+  "entity_id": "11111111-1111-1111-1111-111111111111",
+  "entities": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "name": "MegaCorp",
+      "canonical_name": "megacorp",
+      "type_uri": "https://schema.org/Organization",
+      "description": "Acquirer"
+    }
+  ],
+  "statements": [
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "entity_id": "11111111-1111-1111-1111-111111111111",
+      "property_slug": "acquired",
+      "value": "Acme Corp",
+      "value_type": "string",
+      "rank": 1,
+      "confidence": 0.85,
+      "source_ids": ["33333333-3333-3333-3333-333333333333"],
+      "qualifier_ids": ["44444444-4444-4444-4444-444444444444"]
+    }
+  ],
   "sources": [
     {
+      "id": "33333333-3333-3333-3333-333333333333",
       "url": "https://www.reuters.com/markets/deals/megacorp-acquires-acme-2025-11-14/",
-      "publisher": "reuters.com",
-      "content_hash": "a3f2c1d4e5b6a7f8...",
       "archive_url": "https://web.archive.org/web/20251114183000/https://www.reuters.com/...",
-      "excerpt": "MegaCorp Inc. announced Tuesday it would acquire Acme Corp for $4.2 billion...",
-      "excerpt_offset_start": 1243,
-      "excerpt_offset_end": 1396,
-      "verification_status": "live"
+      "published_at": "2025-11-14T18:30:00Z",
+      "verification_status": "verified",
+      "raw_text": "MegaCorp Inc. announced Tuesday it would acquire Acme Corp for $4.2 billion...",
+      "excerpt_offset_start": 0,
+      "excerpt_offset_end": 72
     }
-  ]
+  ],
+  "qualifiers": [
+    {
+      "id": "44444444-4444-4444-4444-444444444444",
+      "statement_id": "22222222-2222-2222-2222-222222222222",
+      "property_slug": "as_of",
+      "value": "2025-11-14",
+      "value_type": "string"
+    }
+  ],
+  "assembled_at": "2025-11-15T12:00:00Z",
+  "tenant_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 }
 ```
 
-The `excerpt_offset_start` / `excerpt_offset_end` pair is not advisory metadata. It is a load-bearing guarantee: those character offsets are verified against `raw_text` before the row is written and re-verified on every daily verification run. If an LLM extractor fabricates an excerpt, the offsets will not match any text in the source body, and the statement is rejected.
+`qualifiers` and `relations` are omitted when empty (`omitempty`) — this example has no in-scope relations, so that key is absent. Optional entity fields (`canonical_name`, `description`) and optional source fields (`archive_url`, `published_at`) are likewise omitted when null. Bundle sources expose `raw_text` (the linked excerpt) plus offsets — not separate `excerpt`, `publisher`, or `content_hash` fields; those live on the stored source row, not in this JSON shape.
+
+The `excerpt_offset_start` / `excerpt_offset_end` pair is not advisory metadata. It is a load-bearing guarantee: those character offsets are verified against the source body before the row is written and re-verified on every daily verification run. If an LLM extractor fabricates an excerpt, the offsets will not match, and the statement is rejected.
 
 ---
 

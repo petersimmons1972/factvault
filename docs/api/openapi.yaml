@@ -27,6 +27,10 @@ paths:
       responses:
         "200":
           description: entity dossier bundle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bundle"
         "401":
           description: missing or invalid JWT
         "404":
@@ -44,6 +48,10 @@ paths:
       responses:
         "200":
           description: graph-expanded story bundle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bundle"
   /facts/query:
     post:
       security:
@@ -57,6 +65,10 @@ paths:
       responses:
         "200":
           description: fact query bundle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bundle"
   /briefs/generate:
     post:
       security:
@@ -212,3 +224,153 @@ components:
         created_at:
           type: string
           format: date-time
+    # Bundle schemas match internal/assembler/bundle.go json tags exactly.
+    # omitempty fields are optional; all other fields are required.
+    Bundle:
+      type: object
+      description: Canonical JSON shape produced by assembler.Assemble for dossier/story endpoints.
+      required: [entity_id, entities, statements, sources, assembled_at, tenant_id]
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+          description: Primary seed entity for this assembly.
+        entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/BundleEntity"
+        statements:
+          type: array
+          items:
+            $ref: "#/components/schemas/BundleStatement"
+        sources:
+          type: array
+          description: Top-level source array; statements reference these by source_ids.
+          items:
+            $ref: "#/components/schemas/BundleSource"
+        qualifiers:
+          type: array
+          description: Omitted when empty (omitempty).
+          items:
+            $ref: "#/components/schemas/BundleQualifier"
+        relations:
+          type: array
+          description: Omitted when empty (omitempty).
+          items:
+            $ref: "#/components/schemas/BundleRelation"
+        assembled_at:
+          type: string
+          format: date-time
+        tenant_id:
+          type: string
+          format: uuid
+    BundleEntity:
+      type: object
+      required: [id, name, type_uri]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        canonical_name:
+          type: string
+          description: Omitted when null (omitempty); sourced from entities.ext_id.
+        type_uri:
+          type: string
+        description:
+          type: string
+          description: Omitted when null (omitempty).
+    BundleStatement:
+      type: object
+      required: [id, entity_id, property_slug, value, value_type, rank, confidence, source_ids]
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_id:
+          type: string
+          format: uuid
+        property_slug:
+          type: string
+        value:
+          type: string
+          description: Flattened statement value (entity UUID, text, number, date, or JSON string).
+        value_type:
+          type: string
+        rank:
+          type: integer
+          description: 1=preferred, 2=normal, 3=deprecated.
+        confidence:
+          type: number
+        source_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        qualifier_ids:
+          type: array
+          description: Omitted when empty (omitempty).
+          items:
+            type: string
+            format: uuid
+    BundleSource:
+      type: object
+      required: [id, url, verification_status, raw_text, excerpt_offset_start, excerpt_offset_end]
+      properties:
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        archive_url:
+          type: string
+          description: Omitted when null (omitempty).
+        published_at:
+          type: string
+          format: date-time
+          description: Omitted when null (omitempty); RFC3339.
+        verification_status:
+          type: string
+          description: Source status from the sources table (e.g. collected, archived, verified).
+        raw_text:
+          type: string
+          description: Excerpt text linked via statement_sources (not a separate excerpt field).
+        excerpt_offset_start:
+          type: integer
+        excerpt_offset_end:
+          type: integer
+    BundleQualifier:
+      type: object
+      required: [id, statement_id, property_slug, value, value_type]
+      properties:
+        id:
+          type: string
+          format: uuid
+        statement_id:
+          type: string
+          format: uuid
+        property_slug:
+          type: string
+        value:
+          type: string
+        value_type:
+          type: string
+    BundleRelation:
+      type: object
+      required: [id, source_entity_id, target_entity_id, relation_type_slug, confidence]
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_entity_id:
+          type: string
+          format: uuid
+        target_entity_id:
+          type: string
+          format: uuid
+        relation_type_slug:
+          type: string
+        confidence:
+          type: number
