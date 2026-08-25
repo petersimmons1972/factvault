@@ -28,15 +28,23 @@ Official Go vuln scanner. Reachability-aware, low false-positive.
 
 - Install: `go install golang.org/x/vuln/cmd/govulncheck@latest`
 - Invoke locally:
-  - Runtime gate: `govulncheck -json ./...`
+  - Runtime gate (standing policy): `make vuln-policy` or
+    `./scripts/govulncheck-policy.sh ./...`
   - Test graph inventory: `govulncheck -json -test ./...`
+- Adversarial self-test (fixture must fail, repo root must pass):
+  `make vuln-policy-selftest`
+- Deliberately vulnerable fixture (own module, not in root package graph):
+  `testdata/vuln-fixture/`
 
 ### CI vulnerability policy
 
-CI runs two govulncheck passes with different intent:
+CI runs two govulncheck passes with different intent, and the runtime gate also
+runs on a daily `schedule:` cron so a new OSV advisory is caught the same day
+it is published rather than waiting for the next PR (B19 / #307):
 
-- `runtime, blocking`: scans `./...` without `-test` and fails on actionable findings
-  (package/symbol-level). This is the release safety gate and must stay strict.
+- `runtime, blocking`: `scripts/govulncheck-policy.sh` scans `./...` without
+  `-test` and fails on actionable findings (package/symbol-level). This is the
+  release safety gate and must stay strict.
 - `test graph, non-blocking`: scans with `-test` for visibility into vulnerabilities
   that enter only through test tooling (for example, Docker-related test harness
   dependencies). This output is reported but does not fail CI by itself.
@@ -47,6 +55,8 @@ Tradeoff:
   vulnerabilities.
 - We avoid false stop-the-line churn from known test-only Docker dependency
   findings while keeping them visible for periodic dependency hygiene work.
+- Schedule coverage closes the gap where `main` stayed red between PRs after
+  an OSV publish with no code change.
 
 ### go test -race -count=1 ./...
 Standard test runner with race detector. `-count=1` defeats caching.

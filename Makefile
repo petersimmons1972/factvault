@@ -1,4 +1,4 @@
-.PHONY: build test testdb-leak-gate lint fmt generate migrate setup pr-watch
+.PHONY: build test testdb-leak-gate lint fmt generate migrate setup pr-watch vuln-policy vuln-policy-selftest
 
 BINARY := factvault
 # Migrations need superuser privileges (CREATE EXTENSION); FACTVAULT_MIGRATE_DATABASE_URL is the
@@ -14,6 +14,15 @@ test:
 
 testdb-leak-gate:
 	TESTDB_LEAK_GATE=1 go test ./internal/testdb -run '^TestNoTestDBLeaks$$' -count=1
+
+# Standing govulncheck policy (B19 / #307): actionable runtime findings only.
+# Scans the module whose directory is the current working directory.
+vuln-policy:
+	./scripts/govulncheck-policy.sh ./...
+
+# Adversarial self-test: fixture MUST fail, repo root MUST pass, filter edge cases.
+vuln-policy-selftest:
+	./scripts/govulncheck-policy_test.sh
 
 lint:
 	go vet ./...
