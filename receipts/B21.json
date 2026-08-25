@@ -1,0 +1,5 @@
+{
+  "contract_test": "internal/assembler/bundle_contract_test.go",
+  "pr": null,
+  "note": "PR number filled by dispatcher after open; branch dispatch/b21-openapi-contract"
+}
