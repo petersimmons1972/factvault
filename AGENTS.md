@@ -6,8 +6,8 @@ Follow these conventions for every task in this repo.
 ## Project context
 
 factvault is a self-hostable research database where every fact is grounded in a
-verifiable, durably-archived source. The codebase is in transition from Python
-to Go (see `docs/superpowers/specs/2026-05-22-go-transition.md`).
+verifiable, durably-archived source. The codebase is Go; only the embedder service
+(`services/embedder/`) is Python.
 
 **Active language:** Go 1.22+ for workers, API, MCP server, and CLI.
 **Python only:** the embedder microservice at `services/embedder/` (wraps
@@ -42,17 +42,6 @@ Closes #42
 ```
 
 If your task doesn't correspond to a GitHub Issue, omit the `Closes` line.
-
-## Codex Execution Loop
-
-You are the execution engine. The coordinator (Claude) opens GitHub Issues describing work; you pick them up and ship PRs that close them.
-
-**Queue contract:**
-- Watch for open issues labeled `agent/codex` in this repo
-- Pick one at a time. Do not work multiple issues in parallel.
-- Read the issue body in full before starting. If the brief is ambiguous, comment on the issue with your question and stop — do not guess.
-- Open a PR that closes the issue. The PR's last commit MUST end with `Closes #<N>` on its own line. The PR body should also reference `Closes #<N>` for auto-close on merge.
-- After your PR is merged (or closed), pick the next issue.
 
 ## TDD-first protocol
 
@@ -175,8 +164,7 @@ superusers bypass RLS — production code connects as a non-superuser app role.
 
 - Branch names: `feat/<short-description>` or `fix/<short-description>` or
   `chore/<short-description>`.
-- Work in the worktree assigned by the coordinator (typically
-  `~/projects/factvault-plan<N>/` for plan-bound work).
+- Work in the worktree assigned by the coordinator.
 - DO NOT push to `main` directly. The coordinator pushes via the PR-mediated
   path (feature branch + `gh pr merge`).
 - DO NOT include "AI-generated" trailers in commit messages. Use the
