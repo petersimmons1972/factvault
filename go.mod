@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6 // embeds sqlite-vec for the required mattn SQLite backend
-	github.com/go-chi/chi/v5 v5.3.0
+	github.com/go-chi/chi/v5 v5.4.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/mattn/go-sqlite3 v1.14.44 // required SQLite database/sql driver for the local Store backend
